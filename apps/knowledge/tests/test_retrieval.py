@@ -6,11 +6,15 @@ import unittest
 from app.database import SearchCandidate
 from app.reranker import stable_sigmoid
 from app.retrieval import (
+    NO_MATCH_TOPIC,
     SearchCapacityLimiter,
     SearchValidationError,
     fuse_candidates,
     normalize_filters,
+    normalize_namespace,
+    normalize_secondary_topics,
     normalize_source_types,
+    refuse_unhonourable_scope,
     render_citation,
     render_pdf_citation,
 )
@@ -100,6 +104,84 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
             "[A \\[title\\]](<02.%20Books/My%20%231%20%28%C4%91%29.pdf#page=3>) (pages 3-4)",
         )
 
+    def test_a_citation_never_states_a_location_the_row_does_not_have(self) -> None:
+        # The only reachable NULL line pair is a PDF row whose page pair is also
+        # NULL: markdown ingestion always writes integers
+        # (`markdown_adapter.py:505`/`:542`), `001_initial.sql:124-125` permits the
+        # NULL pair, and `main.py:443-447` falls through to `render_citation` when a
+        # PDF row arrives without pages. This is the row shape that used to render
+        # "(lines None-None)" -- a location in an owner-facing citation that no
+        # record holds.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", None, None),
+            "[My Book](<02.%20Books/My%20Book.pdf>)",
+        )
+        # Half a pair is the same fabrication and must not print one number.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", 4, None),
+            "[My Book](<02.%20Books/My%20Book.pdf>)",
+        )
+        # The present case keeps the pinned format.
+        self.assertEqual(
+            render_citation("My Book", "02. Books/My Book.pdf", 4, 7),
+            "[My Book](<02.%20Books/My%20Book.pdf>) (lines 4-7)",
+        )
+
     def test_sigmoid_is_finite_at_extremes(self) -> None:
         self.assertGreater(stable_sigmoid(1000), 0.999)
         self.assertLess(stable_sigmoid(-1000), 0.001)
+
+    def test_a_namespace_scope_names_a_corpus_topic(self) -> None:
+        """F-116 (R5-E02-01): a scope that is accepted and ignored is a lie.
+
+        The namespace the caller asks for is a scope, so it is resolved
+        against the corpus's own canonical topics. A namespace that names no
+        topic of the corpus matches NOTHING: fail closed, so a scope can
+        never widen into the whole corpus.
+        """
+
+        self.assertIsNone(normalize_namespace(None))
+        self.assertIsNone(normalize_namespace(""))
+        # `core` is the Zink Tools knowledge-tool contract's default
+        # namespace and means the default, unscoped corpus.
+        self.assertIsNone(normalize_namespace("core"))
+        self.assertIsNone(normalize_namespace("CORE"))
+        self.assertEqual(normalize_namespace("supply-chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("supply_chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("Supply Chain"), "Supply Chain")
+        self.assertEqual(normalize_namespace("machine-learning"), "Machine Learning")
+        # A namespace the corpus does not carry matches nothing.
+        self.assertEqual(normalize_namespace("research"), NO_MATCH_TOPIC)
+        self.assertEqual(normalize_namespace("sql"), NO_MATCH_TOPIC)
+
+    def test_secondary_topics_are_canonical_topics(self) -> None:
+        """F-116 (R5-E02-01): the secondary topics are a scope too."""
+
+        self.assertEqual(normalize_secondary_topics(None), ())
+        self.assertEqual(normalize_secondary_topics([]), ())
+        self.assertEqual(normalize_secondary_topics(["data"]), ("Data",))
+        self.assertEqual(
+            normalize_secondary_topics(["supply-chain", "Data"]),
+            ("Supply Chain", "Data"),
+        )
+        # A topic the corpus does not carry matches nothing.
+        self.assertEqual(normalize_secondary_topics(["research"]), (NO_MATCH_TOPIC,))
+        with self.assertRaises(SearchValidationError):
+            normalize_secondary_topics(["  "])
+
+    def test_a_scope_the_service_cannot_honour_is_refused(self) -> None:
+        """F-116 (R5-E02-01): `subtopic` and `capability` have no dimension."""
+
+        refuse_unhonourable_scope(None, None)
+        refuse_unhonourable_scope("", "")
+        with self.assertRaises(SearchValidationError):
+            refuse_unhonourable_scope("literature-and-provenance", None)
+        with self.assertRaises(SearchValidationError):
+            refuse_unhonourable_scope(None, "python")
+
+    def test_the_filters_carry_the_scope(self) -> None:
+        filters = normalize_filters(
+            "Data", ["#Tag"], "foo", "supply-chain", ["logistics"]
+        )
+        self.assertEqual(filters.namespace_topic, "Supply Chain")
+        self.assertEqual(filters.canonical_topics_all, ("Logistics",))

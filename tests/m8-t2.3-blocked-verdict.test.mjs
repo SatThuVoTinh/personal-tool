@@ -238,6 +238,18 @@ describe("Phase C — the owner verdict for BLOCKED", () => {
         { code: "RESULT_MISMATCH" },
         "a verdict naming a different result must be refused",
       );
+      // A reason outside the published vocabulary is refused instead of becoming durable
+      // task state that no attribution rule can explain.
+      assert.throws(
+        () =>
+          recordWorkflowEvent(
+            paths,
+            "WORKFLOW_USER_RESULT_BLOCKED",
+            BLOCK_VERDICT(taskId, "MATRIX_TERMINAL"),
+          ),
+        { code: "SCHEMA_INVALID" },
+        "an undeclared reason_code must be refused",
+      );
       // A task that has not reached review cannot be blocked by a verdict.
       const otherPaths = ledgerPaths(other);
       ensureLedger(otherPaths);
@@ -308,11 +320,16 @@ describe("Phase C — the owner verdict for BLOCKED", () => {
     }
   });
 
-  it("B7/B8. 6d4f96cc replays to BLOCKED / POLICY_DENIED, never laundered", () => {
+  it("B7/B8. 6d4f96cc replays under the sealed r4 reading, never laundered", () => {
     // Reproduces the real task's recorded history, using the live ledger's own
     // origin so deriveTaskId reproduces the known identity. Its opener carries a
     // pre-verdict stamp and its root result the ambiguous stamp, exactly as the
     // deployed writer left them (seq 25 / seq 26).
+    //
+    // M12/T9 F-160 (the owner's ruling, 2026-10-21): the ambiguous
+    // m8-t2.2-r4 stamp is a VERDICT stamp in every path, so this task's
+    // r4-stamped root result is resolved under the verdict model and its
+    // recorded outcome (BLOCKED) is the PENDING outcome, not the task status.
     const TID =
       "6d4f96cc0435503585a28ae20c387173819ce004f119e4bf1aa36ceec946eaad";
     const ORIGIN = {
@@ -364,36 +381,43 @@ describe("Phase C — the owner verdict for BLOCKED", () => {
       const events = [opened, rootResult];
       const projection = writeJournal(paths, events, {
         replayAnchored: true,
-        preVerdictRootResult: true,
+        preVerdictRootResult: false,
       });
-      // The deployed writer's own reduction must reproduce BLOCKED.
-      assert.equal(projection.tasks[TID].workflow_status, "BLOCKED");
+      // The sealed reading must reproduce the review state, with the recorded
+      // outcome carried as the PENDING outcome.
+      assert.equal(
+        projection.tasks[TID].workflow_status,
+        "RESULT_PENDING_REVIEW",
+      );
       assert.equal(projection.tasks[TID].reason_code, "POLICY_DENIED");
-      // B7: the ambiguous legacy stamp still replays to the accepted meaning.
+      assert.equal(
+        projection.tasks[TID].root_result.pending_outcome_status,
+        "BLOCKED",
+      );
+      // B7: the ambiguous legacy stamp still replays, under the sealed reading.
       const read = readSnapshot(paths);
-      assert.equal(read.tasks[TID].workflow_status, "BLOCKED");
+      assert.equal(read.tasks[TID].workflow_status, "RESULT_PENDING_REVIEW");
       assert.equal(read.tasks[TID].reason_code, "POLICY_DENIED");
-      // B8: and it cannot be laundered into the review state.
+      // B8: and the review state cannot be laundered into the recorded outcome.
       const laundered = JSON.parse(readFileSync(paths.snapshot, "utf8"));
-      laundered.tasks[TID].workflow_status = "RESULT_PENDING_REVIEW";
+      laundered.tasks[TID].workflow_status = "BLOCKED";
       writeFileSync(paths.snapshot, `${JSON.stringify(laundered, null, 2)}\n`);
       assert.throws(
         () => readSnapshot(paths),
         (err) => err.code === "EXECUTION_STATE_UNKNOWN",
-        "BLOCKED must not be laundered into RESULT_PENDING_REVIEW",
+        "the review state must not be laundered into the recorded outcome",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("B9/B10. legacy replay and the ambiguous stamp are unchanged", () => {
+  it("B9/B10. legacy replay and the ambiguous stamp are still supported", () => {
     const root = fixture("legacy");
     try {
       const { paths, taskId } = pendingTask(root);
       // Re-seal as the deployed writer stamped its history: a PRE-VERDICT
-      // opener plus the AMBIGUOUS root result, which is what engages the
-      // compatibility path.
+      // opener plus the AMBIGUOUS root result.
       const opened = sealEvent(
         "WORKFLOW_OPENED",
         OPENED(taskId),
@@ -420,16 +444,25 @@ describe("Phase C — the owner verdict for BLOCKED", () => {
         "2026-09-02T00:00:00.000Z",
       );
       const sealed = [opened, rootResult];
+      // M12/T9 F-160 (the owner's ruling, 2026-10-21): the AMBIGUOUS stamp is
+      // a VERDICT stamp, so the r4 root result is projected under the verdict
+      // model even though the journal carries a pre-verdict line. The stamp is
+      // still SUPPORTED and the journal still replays: what the ruling changed
+      // is the resolution, not the acceptance.
       writeJournal(paths, sealed, {
         replayAnchored: true,
-        preVerdictRootResult: true,
+        preVerdictRootResult: false,
       });
       // B10: the ambiguous stamp is still supported and still replays.
       const read = readSnapshot(paths);
       assert.equal(
         read.tasks[taskId].workflow_status,
-        "COMPLETE",
-        "the compatibility path must be unchanged by the new event",
+        "RESULT_PENDING_REVIEW",
+        "the ambiguous stamp is a verdict stamp, in every path",
+      );
+      assert.ok(
+        read.tasks[taskId].root_result,
+        "the legacy opener still replays and still projects the task",
       );
       for (const event of sealed) {
         validateContract("ledger-event", event);

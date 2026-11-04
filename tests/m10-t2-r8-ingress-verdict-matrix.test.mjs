@@ -1,0 +1,456 @@
+// M10/T2-R8 — ingress verdict matrix over the REAL admission seam.
+//
+// Forensic follow-up to two live observations that could not be correlated
+// to gateway traffic (no Discord ingress reached the live runtime in the
+// verification windows):
+//   BUG 1 (claimed): valid @main message gets no reply.
+//   BUG 2 (claimed): untagged message gets a reply.
+//
+// This suite drives enterNativeRun with production-shaped contexts through
+// a real plugin registration and pins the verdict for every input class:
+// valid Main-directed signals ALLOW and open exactly one task; everything
+// else DENIES with zero ledger/queue mutation and zero runtime invocation.
+// Any future change that flips a verdict fails loudly here first.
+//
+// What this suite does NOT prove (documented limits, not gaps):
+// - Discord transport delivery (websocket gaps lose messages upstream).
+// - Model provider success (429/503 failover is environmental).
+// - Outbound Discord posting (host dispatcher; no adapter in fixtures).
+// A visible reply additionally requires all three, which fixtures cannot
+// provide. See the R8 live-verification report for the live evidence.
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { pathToFileURL } from "node:url";
+
+import { enterNativeRun } from "../integrations/openclaw/topology/lib/native-boundary.mjs";
+import {
+  governancePluginFiles,
+  AGENT_IDS,
+  agentInstructions,
+} from "../integrations/openclaw/lib/policy.mjs";
+import {
+  ledgerPaths,
+  readSnapshot,
+} from "../integrations/openclaw/topology/lib/ledger.mjs";
+import { DISCORD_BOT_IDS } from "../integrations/openclaw/lib/authority.mjs";
+
+const OWNER = "123456789012345678";
+const OFFICE = "1545425766161063937";
+const MAIN_BOT = DISCORD_BOT_IDS.main;
+const OTHER_BOT = DISCORD_BOT_IDS.excel;
+let midCounter = 0;
+// Valid Discord snowflakes (19 digits): messageId format is enforced by
+// the lineage gate, so fixtures must use well-formed ids.
+const freshMsg = () =>
+  `154543${String(100000000000 + midCounter++).padStart(12, "0")}`;
+
+async function withPlugin(body) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "zink-r8m-"));
+  const paths = ledgerPaths(root);
+  readSnapshot(paths);
+  const extension = path.join(root, "extensions", "zink-governance");
+  const generated = governancePluginFiles();
+  for (const [rel, contents] of Object.entries({
+    ...generated.assets,
+    "index.mjs": generated.entrypoint,
+    "package.json": generated.package,
+  })) {
+    const target = path.join(extension, rel);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  }
+  for (const agentId of AGENT_IDS) {
+    const dir = path.join(root, "workspaces", agentId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "AGENTS.md"), agentInstructions(agentId));
+  }
+  writeFileSync(paths.identityKey, `${"1".repeat(64)}\n`);
+  const logged = [];
+  const plugin = (
+    await import(pathToFileURL(path.join(extension, "index.mjs")).href)
+  ).default;
+  const dispose = plugin.register({
+    pluginConfig: { ledgerRoot: paths.root, ownerDiscordId: OWNER },
+    on: () => {},
+    logger: {
+      error: (m) => logged.push(`ERROR ${m}`),
+      warn: (m) => logged.push(`WARN ${m}`),
+      info: (m) => logged.push(`INFO ${m}`),
+    },
+  });
+  const native = {
+    plugins: {
+      entries: {
+        "zink-governance": {
+          enabled: true,
+          config: { ledgerRoot: paths.root },
+        },
+      },
+    },
+  };
+  try {
+    return await body({ paths, native, logged });
+  } finally {
+    if (typeof dispose === "function") dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const base = (overrides = {}) => ({
+  agentId: "main",
+  sessionKey: `agent:main:discord:channel:${OFFICE}`,
+  runId: `r8m-${midCounter}`,
+  inputProvenance: undefined,
+  channelId: "discord",
+  senderId: OWNER,
+  currentMessageId: freshMsg(),
+  trigger: "user",
+  transcriptPrompt: undefined,
+  threadId: undefined,
+  ...overrides,
+});
+
+// Each case: [name, context overrides, stash record or null, expected verdict].
+// Stash records mirror exactly what the deployed preflight patch writes.
+const cases = [
+  ["untagged-plain", {}, null, "DENY"],
+  ["mention-main", {}, { mentionedUserIds: ["1545436878835163156"] }, "ALLOW"],
+  [
+    "mention-other-bot",
+    {},
+    { mentionedUserIds: ["1545438637750227104"] },
+    "DENY",
+  ],
+  ["mention-owner-user", {}, { mentionedUserIds: [OWNER] }, "DENY"],
+  [
+    "reply-main",
+    {},
+    {
+      replyReferenceMessageId: "1545430000000000051",
+      replyReferenceAuthorId: MAIN_BOT,
+    },
+    "ALLOW",
+  ],
+  [
+    "reply-other-bot",
+    {},
+    {
+      replyReferenceMessageId: "1545430000000000052",
+      replyReferenceAuthorId: OTHER_BOT,
+    },
+    "DENY",
+  ],
+  [
+    "reply-user",
+    {},
+    {
+      replyReferenceMessageId: "1545430000000000053",
+      replyReferenceAuthorId: OWNER,
+    },
+    "DENY",
+  ],
+  [
+    "thread-owned",
+    { threadId: "1545430000000000001" },
+    { threadOwnerId: MAIN_BOT },
+    "ALLOW",
+  ],
+  [
+    "thread-foreign",
+    { threadId: "1545430000000000001" },
+    { threadOwnerId: OTHER_BOT },
+    "DENY",
+  ],
+  [
+    "specialist-plain",
+    { agentId: "excel", sessionKey: `agent:excel:discord:channel:${OFFICE}` },
+    null,
+    "DENY",
+  ],
+  [
+    "specialist-mention-main",
+    { agentId: "excel", sessionKey: `agent:excel:discord:channel:${OFFICE}` },
+    { mentionedUserIds: [MAIN_BOT] },
+    "DENY",
+  ],
+  [
+    "o1-plain",
+    { agentId: "o1", sessionKey: `agent:o1:discord:channel:${OFFICE}` },
+    null,
+    "DENY",
+  ],
+  [
+    "nonowner-mention",
+    { senderId: "223456789012345678" },
+    { mentionedUserIds: [MAIN_BOT] },
+    "DENY",
+  ],
+  [
+    "bot-author",
+    {},
+    { mentionedUserIds: [MAIN_BOT], authorIsBot: true },
+    "DENY",
+  ],
+  [
+    "heartbeat",
+    {
+      sessionKey: "agent:main:main",
+      channelId: undefined,
+      senderId: undefined,
+      currentMessageId: undefined,
+      trigger: "heartbeat",
+      transcriptPrompt: "[OpenClaw heartbeat poll]",
+    },
+    null,
+    "ALLOW",
+  ],
+  ["missing-msgid", { currentMessageId: undefined }, null, "DENY"],
+  ["bad-msgid", { currentMessageId: "abc" }, null, "DENY"],
+  ["empty-session", { sessionKey: "" }, null, "DENY"],
+  [
+    "webchat-operator",
+    { sessionKey: "agent:main:main", channelId: "webchat", senderId: OWNER },
+    null,
+    "DENY",
+  ],
+  [
+    "cli-operator",
+    { sessionKey: "agent:main:main", channelId: "cli", senderId: OWNER },
+    null,
+    "DENY",
+  ],
+];
+
+// Expected diagnostic log fragment per case (null = silence required).
+// Denials must name their reason; allows must name their signal; the
+// heartbeat exemption must stay silent at the ingress layer.
+const expectedLogs = {
+  "untagged-plain": "ingress denied: reason=MISSING_MENTION",
+  "mention-main": "MAIN_DIRECTED: agent=main via mention",
+  "mention-other-bot": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "mention-owner-user": "ingress denied: reason=MISSING_MENTION",
+  "reply-main": "MAIN_DIRECTED: agent=main via reply",
+  "reply-other-bot": "ingress denied: reason=MISSING_MENTION",
+  "reply-user": "ingress denied: reason=MISSING_MENTION",
+  "thread-owned": "MAIN_CONVERSATION_CONTINUATION",
+  "thread-foreign": "ingress denied: reason=MISSING_MENTION",
+  "specialist-plain": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "specialist-mention-main": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "o1-plain": "ingress denied: reason=NON_MAIN_DIRECT_INGRESS",
+  "nonowner-mention": "ingress denied: reason=POLICY_DENIED",
+  "bot-author": "ingress denied: reason=BOT_INGRESS_DENIED",
+  heartbeat: null,
+  "missing-msgid": "ingress denied: reason=LINEAGE_MISMATCH",
+  "bad-msgid": "ingress denied: reason=LINEAGE_MISMATCH",
+  "empty-session": "ingress denied: reason=MISSING_MENTION",
+  // Non-Discord surfaces never enter authenticateIngress: channel check
+  // fails first, so denial happens downstream (inner guard) and stays
+  // silent at the ingress layer. Verdict still DENY, proven above.
+  "webchat-operator": null,
+  "cli-operator": null,
+};
+
+// The policy reason each DENY case must be refused for, and the refusal code
+// the boundary must raise for it. The matrix used to book ANY thrown error as
+// the specified verdict, so an infrastructure fault (a malformed fixture, a
+// missing governance context, a harness IO error) satisfied every DENY row at
+// once.
+//
+// `reason` is the canonical policy reason the ingress decision carries and the
+// ingress log names; `null` marks a case whose denial is decided below the
+// ingress layer and therefore has no ingress reason code.
+// `code` is the refusal the boundary raises. The boundary re-throws every
+// non-allow outcome under one umbrella contract code, so the designed refusal
+// is the inner cause.
+const expectedDenials = {
+  "untagged-plain": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "mention-other-bot": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "mention-owner-user": {
+    reason: "MISSING_MENTION",
+    code: "GOVERNANCE_DENIED",
+  },
+  "reply-other-bot": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "reply-user": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "thread-foreign": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  "specialist-plain": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "specialist-mention-main": {
+    reason: "NON_MAIN_DIRECT_INGRESS",
+    code: "GOVERNANCE_DENIED",
+  },
+  "o1-plain": { reason: "NON_MAIN_DIRECT_INGRESS", code: "GOVERNANCE_DENIED" },
+  "nonowner-mention": { reason: "POLICY_DENIED", code: "GOVERNANCE_DENIED" },
+  "bot-author": { reason: "BOT_INGRESS_DENIED", code: "GOVERNANCE_DENIED" },
+  "missing-msgid": { reason: "LINEAGE_MISMATCH", code: "GOVERNANCE_DENIED" },
+  "bad-msgid": { reason: "LINEAGE_MISMATCH", code: "GOVERNANCE_DENIED" },
+  "empty-session": { reason: "MISSING_MENTION", code: "GOVERNANCE_DENIED" },
+  // These two never enter authenticateIngress: the channel check fails first,
+  // so the inner guard refuses them for a missing spawn receipt and the
+  // ingress log stays silent.
+  "webchat-operator": { reason: null, code: "EXECUTION_STATE_UNKNOWN" },
+  "cli-operator": { reason: null, code: "EXECUTION_STATE_UNKNOWN" },
+};
+
+// The governance codes that mean "the harness or the runtime failed", never
+// "the policy denied this message". A denial booked from one of these is a
+// false green.
+const INFRASTRUCTURE_CODES = new Set([
+  "GOVERNANCE_CONTEXT_MISSING",
+  "GOVERNANCE_UNAVAILABLE",
+  "GOVERNANCE_REGISTRATION_INVALID",
+  "GOVERNANCE_BATCH_MISSING",
+  "GOVERNANCE_BATCH_INVALID",
+  "GOVERNANCE_DECISION_INVALID",
+  "GOVERNANCE_ABORTED",
+]);
+
+// The umbrella contract code the boundary re-throws every refusal under. It is
+// the host-visible string, so it carries no information about WHICH refusal
+// happened; the inner cause does.
+const REFUSAL_CONTRACT_CODE = "GOVERNANCE_RUN_UNAVAILABLE";
+
+test("R8 matrix: every ingress class reaches its specified verdict", async (t) => {
+  // Each case runs as its own subtest: the matrix used to be one test body
+  // wrapping the whole loop, so the first failing case aborted the run and
+  // every later verdict was reported as untested.
+  for (const [name, shape, stash, expected] of cases) {
+    await t.test(name, async () => {
+      await withPlugin(async ({ paths, native, logged }) => {
+        const ctx = base(shape);
+        if (stash) {
+          const KEY = "__zink_ingress_metadata_r5";
+          if (!globalThis[KEY]) globalThis[KEY] = new Map();
+          globalThis[KEY].set(ctx.currentMessageId, {
+            mentionedUserIds: stash.mentionedUserIds ?? [],
+            mentionedRoleIds: [],
+            replyReferenceMessageId: stash.replyReferenceMessageId ?? null,
+            replyReferenceAuthorId: stash.replyReferenceAuthorId ?? null,
+            threadOwnerId: stash.threadOwnerId ?? null,
+            authorIsBot: stash.authorIsBot ?? false,
+          });
+        }
+        const before = readSnapshot(paths);
+        let verdict;
+        // The refusal is captured, not discarded: a thrown error is only the
+        // specified verdict when it IS the specified refusal.
+        let cause = null;
+        try {
+          await enterNativeRun(native, ctx);
+          verdict = "ALLOW";
+        } catch (error) {
+          verdict = "DENY";
+          cause = error;
+        }
+        assert.equal(verdict, expected, `${name}: expected ${expected}`);
+        if (expected === "DENY") {
+          assert.ok(
+            cause instanceof Error,
+            `${name}: a denial must be a raised refusal`,
+          );
+          // The boundary re-throws every non-allow outcome under one umbrella
+          // contract code; the designed refusal is the inner cause.
+          assert.equal(
+            cause.message,
+            REFUSAL_CONTRACT_CODE,
+            `${name}: the host-visible refusal code must not change`,
+          );
+          const root = cause.cause instanceof Error ? cause.cause : cause;
+          assert.equal(
+            root.message,
+            expectedDenials[name].code,
+            `${name}: must be refused by ${expectedDenials[name].code}, not by ${root.message}`,
+          );
+          assert.equal(
+            INFRASTRUCTURE_CODES.has(root.message),
+            false,
+            `${name}: an infrastructure fault is not a policy denial`,
+          );
+          // The reason the guard refused for is named, so the row states which
+          // policy rule it covers instead of only that something denied.
+          const wantReason = expectedDenials[name].reason;
+          if (wantReason !== null) {
+            assert.ok(
+              logged.some((line) =>
+                line.includes(`ingress denied: reason=${wantReason}`),
+              ),
+              `${name}: expected the policy reason ${wantReason}`,
+            );
+          }
+        } else {
+          assert.equal(
+            cause,
+            null,
+            `${name}: an admitted run must not raise a refusal`,
+          );
+        }
+        // Diagnostic observability: the verdict must be attributable in logs.
+        const wantLog = expectedLogs[name];
+        const joined = logged.join("\n");
+        if (wantLog === null) {
+          assert.equal(
+            joined.includes("ingress denied:") ||
+              joined.includes("MAIN_DIRECTED") ||
+              joined.includes("MAIN_CONVERSATION_CONTINUATION"),
+            false,
+            `${name}: exempt path must stay silent at ingress`,
+          );
+        } else {
+          assert.ok(
+            joined.includes(wantLog),
+            `${name}: expected log fragment ${JSON.stringify(wantLog)}`,
+          );
+        }
+        const after = readSnapshot(paths);
+        if (expected === "DENY") {
+          // A denied message must not invoke the runtime: no task, no ledger
+          // mutation, no queue entry.
+          assert.equal(
+            after.sequence,
+            before.sequence,
+            `${name}: denied run must not mutate the ledger`,
+          );
+          assert.equal(
+            Object.keys(after.tasks).length,
+            Object.keys(before.tasks).length,
+            `${name}: denied run must not open a task`,
+          );
+        } else if (name === "heartbeat") {
+          // Heartbeat exemption admits without opening a task (no ledger
+          // owner by design) and without mutating state.
+          assert.equal(
+            after.sequence,
+            before.sequence,
+            `${name}: heartbeat must not mutate the ledger`,
+          );
+        } else {
+          // An admitted message opens exactly one Main task through the
+          // governed path (model invocation itself is host-side).
+          assert.equal(
+            Object.keys(after.tasks).length,
+            Object.keys(before.tasks).length + 1,
+            `${name}: admitted run must open exactly one task`,
+          );
+          const created = Object.values(after.tasks).at(-1);
+          assert.equal(
+            created.root_agent_id,
+            "main",
+            `${name}: task owned by main`,
+          );
+        }
+        // Stash hygiene: each case uses a unique message id (Discord ids are
+        // unique in production); remove it so cases stay independent.
+        globalThis["__zink_ingress_metadata_r5"]?.delete?.(
+          ctx.currentMessageId,
+        );
+      });
+    });
+  }
+});

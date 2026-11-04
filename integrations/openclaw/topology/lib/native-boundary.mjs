@@ -2,8 +2,25 @@
 // No model tool is registered. Only trusted in-process plugin code registers.
 import { Buffer } from "node:buffer";
 const registryKey = Symbol.for("zink.governance.native.r12");
+// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
+// through this global. Published only while a guard is registered.
+const preflightIngressKey = Symbol.for(
+  "zink.governance.native.preflightIngress",
+);
 const coordinatorIds = new Set(["main", "o1", "o2"]);
 const installedAgents = new WeakSet();
+
+/**
+ * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
+ *
+ * The host maps a block decision's `reason` to `blockReason` and writes that
+ * into the tool-result the model reads, so whatever sits here is model-visible
+ * and, through the model's own answer, owner-visible. It is therefore a plain
+ * refusal sentence and deliberately NOT a governance identifier: repeating it
+ * back to the owner is truthful and harmless. The canonical reason code stays in
+ * the diagnostic channel and in the ledger.
+ */
+export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
 
 function registry() {
   if (!globalThis[registryKey])
@@ -40,6 +57,13 @@ export function registerNativeGuard(scope, guard) {
         : undefined,
     beforeToolCall: guard.beforeToolCall.bind(guard),
     beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+    // preflight seam so a direct specialist mention never creates a host run at
+    // all. Side-effect free: it decides, it never writes the ledger.
+    beforePreflightIngress:
+      typeof guard.beforePreflightIngress === "function"
+        ? guard.beforePreflightIngress.bind(guard)
+        : undefined,
     // T2/T3: quota publication, self receipt and run-scoped model resolution
     // are required governance capabilities. Registration fails closed when the
     // guard cannot enforce them, so there is no "quota but no enforcement" mode.
@@ -48,28 +72,82 @@ export function registerNativeGuard(scope, guard) {
     resolveRunModel: guard.resolveRunModel.bind(guard),
   });
   registry().set(scope, entry);
+  publishPreflightIngress();
   return () => {
-    if (registry().get(scope) === entry) registry().delete(scope);
+    if (registry().get(scope) !== entry) return;
+    registry().delete(scope);
+    // M12/T9 F-506: the published predicate belongs to the registration, so the
+    // last release retracts it. A stale closure must not keep deciding admission
+    // for a root that no longer exists.
+    if (registry().size === 0) delete globalThis[preflightIngressKey];
   };
 }
 
-function resolveGovernance(config) {
+/** The one normalization rule shared by `resolveGovernance` and the seam. */
+function sameScope(registeredScope, scope) {
+  return (
+    registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") ===
+    scope.replace(/\\/g, "/").replace(/\/+$/, "")
+  );
+}
+
+function findGuardEntry(entries, scope) {
+  const exact = entries.get(scope);
+  if (exact) return exact;
+  for (const [registeredScope, registeredGuard] of entries) {
+    if (sameScope(registeredScope, scope)) return registeredGuard;
+  }
+  return undefined;
+}
+
+/**
+ * M10/T2-R8 — the global the Discord preflight injection calls.
+ *
+ * The preflight runs inside the host's channel bundle, which never imports this
+ * module, so the seam is reached through one published global instead of a
+ * duplicated import or a second copy of the policy. The caller passes the SAME
+ * scope string `resolveGovernance` derives from the host config, so there is one
+ * registry and one policy, not two.
+ *
+ * M12/T9 F-506: the published value is a view of the registry, not a capture of
+ * one entry. A scoped call resolves through that scope only — a released root's
+ * traffic is never decided by another root's guard — and an unscoped call is
+ * answered only when exactly one registration exists, because with two roots
+ * there is no truthful way to pick one.
+ *
+ * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
+ * has not loaded, or a build predates this seam — the preflight must not invent
+ * an admission decision. It returns null and the late `enterNativeRun` gate
+ * still governs the run, so enforcement is unchanged and only the timing is lost.
+ */
+function publishPreflightIngress() {
+  if (registry().size === 0) return;
+  globalThis[preflightIngressKey] = (input) => {
+    const entries = registry();
+    const requestedScope =
+      typeof input?.scope === "string" && input.scope.length > 0
+        ? input.scope
+        : null;
+    let entry;
+    if (requestedScope) {
+      entry = findGuardEntry(entries, requestedScope);
+    } else if (entries.size === 1) {
+      entry = entries.values().next().value;
+    }
+    return typeof entry?.beforePreflightIngress === "function"
+      ? entry.beforePreflightIngress(input)
+      : undefined;
+  };
+}
+
+// M10/T2-R12: exported as a test seam so suites can drive the registered
+// guard hooks exactly as production does. Read-only accessor; no behavior.
+export function resolveGovernance(config) {
   const entry = config?.plugins?.entries?.["zink-governance"];
   if (entry?.enabled !== true) return { enabled: false };
   const scope = entry.config?.ledgerRoot;
-  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
-  if (!guard && typeof scope === "string") {
-    // Normalization check in case of path separator / trailing slash differences
-    const normScope = scope.replace(/\\/g, "/").replace(/\/+$/, "");
-    for (const [registeredScope, registeredGuard] of registry().entries()) {
-      if (
-        registeredScope.replace(/\\/g, "/").replace(/\/+$/, "") === normScope
-      ) {
-        guard = registeredGuard;
-        break;
-      }
-    }
-  }
+  let guard =
+    typeof scope === "string" ? findGuardEntry(registry(), scope) : undefined;
   return {
     enabled: true,
     guard,
@@ -102,6 +180,24 @@ async function callGuard(method, event, context, signal) {
 
 export function installNativeToolGate(agent, config, context) {
   if (!resolveGovernance(config).enabled) return;
+  const refuse = (canonical) => {
+    // R8: the host contract turns this return value into the BLOCKED TOOL
+    // RESULT the model reads — `decision.reason` becomes `blockReason`, which
+    // the host puts verbatim into the tool-result text. Proven live: a block
+    // reason reached the model, the model repeated it, and the owner's Discord
+    // reply carried the internal governance code.
+    //
+    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
+    // never a governance identifier. The canonical code and its detail stay in
+    // the diagnostic channel and in the ledger, where a refusal must remain
+    // auditable. This is not a message filter: the code is never handed to the
+    // host in the first place, so it cannot be echoed by the model.
+    console.error(
+      "[zink-native-gate:error] beforeToolCall blocked:",
+      canonical,
+    );
+    return { block: true, reason: POLICY_REFUSAL_TEXT };
+  };
   if (!agent || installedAgents.has(agent))
     throw new Error("GOVERNANCE_GATE_INSTALL_INVALID");
   const trusted = Object.freeze({
@@ -158,7 +254,7 @@ export function installNativeToolGate(agent, config, context) {
         batch.names.includes("sessions_yield") &&
         (batch.names.length !== 1 || !coordinatorIds.has(trusted.agentId))
       )
-        return { block: true, reason: "YIELD_BATCH_DENIED" };
+        return refuse("YIELD_BATCH_DENIED");
       const nativeDecision = await previous?.(event, signal);
       if (nativeDecision?.block) return nativeDecision;
       const decision = await callGuard(
@@ -180,21 +276,27 @@ export function installNativeToolGate(agent, config, context) {
         signal,
       );
       if (decision?.allow !== true) {
-        // A blocked call keeps its canonical reason code when the guard
-        // supplied one. The code is a fixed governance identifier, never
-        // caller data, so surfacing it is safe and makes the refusal
-        // auditable instead of collapsing every denial into one opaque code.
-        const reason =
+        // The canonical reason code is a fixed governance identifier, never
+        // caller data — but it is NOT safe to surface here, because this return
+        // value is model-visible. See `refuse` above. A guard-supplied reason is
+        // recorded as the diagnostic code; the model only ever sees the refusal.
+        const canonical =
           typeof decision?.reason === "string" &&
           /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
             ? decision.reason
             : "GOVERNANCE_DENIED";
-        return { block: true, reason };
+        return refuse(canonical);
       }
       if (decision.spawnLabel !== undefined) {
         if (
           event.toolCall.name !== "sessions_spawn" ||
-          !/^[a-f0-9]{64}$/u.test(decision.spawnLabel)
+          // M12/T9 F-371: the delegation id is a version-4 UUID rendered from
+          // the canonical digest, and the ledger may still carry the legacy
+          // 64-hex rendering. Both are legitimate identities of the same
+          // proposal, so the spawn label accepts both - and nothing else.
+          !/^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u.test(
+            decision.spawnLabel,
+          )
         )
           throw new Error("GOVERNANCE_DECISION_INVALID");
         event.args.label = decision.spawnLabel;
@@ -217,12 +319,10 @@ export function installNativeToolGate(agent, config, context) {
       }
       return nativeDecision;
     } catch (err) {
-      console.error(
-        "[zink-native-gate:error] beforeToolCall blocked:",
-        err?.message || err,
-      );
-      // Never return exception text: a provider/plugin error may contain input.
-      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
+      // Never return exception text: a provider/plugin error may contain input,
+      // and the reason is model-visible. The diagnostic keeps the detail; the
+      // model only ever sees the refusal.
+      return refuse(err?.message || String(err));
     }
   };
   installedAgents.add(agent);
@@ -318,10 +418,96 @@ function takeRunLiveness(runId) {
   return record;
 }
 
+const INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
+const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
+
+const emptyIngressMetadata = () =>
+  Object.freeze({
+    mentionedUserIds: Object.freeze([]),
+    mentionedRoleIds: Object.freeze([]),
+    replyReferenceMessageId: null,
+    replyReferenceAuthorId: null,
+    threadOwnerId: null,
+    authorIsBot: false,
+  });
+
+/**
+ * M10/T2-R5: read the deterministic Discord inbound metadata the preflight
+ * patch recorded for this inbound message id. The write sits on the same
+ * causal inbound path (a turn exists only after its message's preflight
+ * completes), so no ordering assumption is involved. Unknown, malformed or
+ * evicted records normalize to empty (deny preserved). Re-validated here
+ * even though the writer validates too: the registry crosses a bundle
+ * boundary, so neither side trusts the other's bytes.
+ */
+export function readZinkIngressMetadata(messageId) {
+  let record;
+  try {
+    const registry = globalThis[INGRESS_METADATA_KEY];
+    record =
+      typeof messageId === "string" && registry instanceof Map
+        ? registry.get(messageId)
+        : undefined;
+  } catch {
+    return emptyIngressMetadata();
+  }
+  if (!record || typeof record !== "object") return emptyIngressMetadata();
+  const snowflake = (value) =>
+    typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value)
+      ? value
+      : null;
+  const idList = (entries) => {
+    if (!Array.isArray(entries)) return [];
+    const ids = [];
+    for (const entry of entries) {
+      const id = snowflake(typeof entry === "string" ? entry : entry?.id);
+      if (id) ids.push(id);
+    }
+    return ids;
+  };
+  return Object.freeze({
+    mentionedUserIds: Object.freeze(idList(record.mentionedUserIds)),
+    mentionedRoleIds: Object.freeze(idList(record.mentionedRoleIds)),
+    replyReferenceMessageId: snowflake(record.replyReferenceMessageId),
+    replyReferenceAuthorId: snowflake(record.replyReferenceAuthorId),
+    threadOwnerId: snowflake(record.threadOwnerId),
+    authorIsBot: record.authorIsBot === true,
+  });
+}
+
+// B-16: a guard verdict that denies carries a canonical reason code, and this
+// boundary used to drop it, so every policy denial reached the operator as the
+// bare class name. The reason is written to the diagnostic channel only when it
+// matches the closed governance-code grammar the tool-gate seam already applies
+// to the same field, which keeps message text, paths and credentials out of the
+// log. Nothing here moves a host-visible code, verdict, or return shape.
+function logDecisionReason(seam, verdict, decision) {
+  const reason =
+    typeof decision?.reason === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+      ? decision.reason
+      : "REASON_UNDECLARED";
+  console.error(`[zink-native-gate] ${seam} ${verdict}: reason=${reason}`);
+}
+
 export async function enterNativeRun(config, context, signal) {
   const governance = resolveGovernance(config);
   if (!governance.enabled) return;
   try {
+    // M10/T2-R4: the inbound thread identity is typed explicitly. null means
+    // "not a threaded message" (the patch forwards `?? null`); anything else
+    // must be a Discord snowflake, otherwise the context is malformed and the
+    // run fails closed before any guard sees it. The original message is
+    // preserved as the cause and logged, while the host-visible contract
+    // string stays GOVERNANCE_RUN_UNAVAILABLE.
+    const threadId = context.threadId ?? null;
+    if (threadId !== null && !/^[1-9][0-9]{16,19}$/u.test(threadId)) {
+      throw new Error("GOVERNANCE_CONTEXT_MISSING");
+    }
+    // M10/T2-R5: structured Discord inbound metadata, read by inbound
+    // message id from the preflight registry. Unknown/absent degrades to
+    // empty (deny preserved); malformed is normalized by the reader.
+    const ingress = readZinkIngressMetadata(context.currentMessageId);
     const decision = await callGuard(
       governance.guard?.beforeRun,
       {},
@@ -338,6 +524,13 @@ export async function enterNativeRun(config, context, signal) {
         mentionRoles: context.mentionRoles,
         author: context.author,
         isBot: context.isBot,
+        threadId,
+        mentionedUserIds: ingress.mentionedUserIds,
+        mentionedRoleIds: ingress.mentionedRoleIds,
+        replyReferenceMessageId: ingress.replyReferenceMessageId,
+        replyReferenceAuthorId: ingress.replyReferenceAuthorId,
+        threadOwnerId: ingress.threadOwnerId,
+        authorIsBot: context.isBot === true || ingress.authorIsBot,
         // R10: the host-assigned run discriminator and the canonical host
         // heartbeat representation. Both are plain strings the host already
         // holds at the injection anchor; neither is user content, a message
@@ -350,7 +543,10 @@ export async function enterNativeRun(config, context, signal) {
       }),
       signal,
     );
-    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
+    if (decision?.allow !== true) {
+      logDecisionReason("enterNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }
     // R18: record the discriminator only for a run admission ACCEPTED, so the
     // record means precisely "admission recognised this run". A denied or failed
     // admission leaves no record and its run-end therefore keeps full governance.
@@ -386,17 +582,27 @@ export async function gateNativeAnnounce(config, event, signal) {
       }),
       signal,
     );
-    if (decision?.action === "discard")
+    if (decision?.action === "discard") {
+      logDecisionReason("gateNativeAnnounce", "discarded", decision);
       return { governed: true, action: "discard" };
+    }
     if (
       decision?.action !== "deliver" ||
       typeof decision.receipt !== "string" ||
       !decision.receipt ||
       Buffer.byteLength(decision.receipt, "utf8") > 65536
-    )
+    ) {
+      logDecisionReason("gateNativeAnnounce", "refused", decision);
       throw new Error("GOVERNANCE_RECEIPT_INVALID");
+    }
     return { governed: true, action: "deliver", receipt: decision.receipt };
-  } catch {
+  } catch (error) {
+    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
+    // diagnostic was unattributable. Message only — never stack or content.
+    console.error(
+      "[zink-native-gate] gateNativeAnnounce:",
+      error?.message ?? error,
+    );
     return { governed: true, action: "block" };
   }
 }
@@ -421,9 +627,19 @@ export async function finishNativeRun(config, event, context) {
           context.transcriptPrompt ?? liveness?.transcriptPrompt,
       }),
     );
-    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");
-  } catch {
-    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
+    if (decision?.allow !== true) {
+      logDecisionReason("finishNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }
+  } catch (error) {
+    // M11/T3 A3: same standard as `enterNativeRun` — the host-visible contract
+    // string is unchanged, but the guard fault is preserved as the cause so a
+    // policy denial, an unregistered guard and a disk fault stay separable.
+    console.error(
+      "[zink-native-gate] finishNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
   }
 }
 
@@ -441,10 +657,17 @@ export async function sanitizeNativePrompt(config, prompt) {
     if (
       typeof decision?.prompt !== "string" ||
       Buffer.byteLength(decision.prompt, "utf8") > 32768
-    )
+    ) {
+      logDecisionReason("sanitizeNativePrompt", "refused", decision);
       throw new Error("SCHEMA_INVALID");
+    }
     return decision.prompt;
-  } catch {
-    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
+  } catch (error) {
+    // M11/T3 A3: cause-preserving sibling of `enterNativeRun` at this seam.
+    console.error(
+      "[zink-native-gate] sanitizeNativePrompt:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
   }
 }

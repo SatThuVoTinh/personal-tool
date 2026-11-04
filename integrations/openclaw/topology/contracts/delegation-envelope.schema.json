@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "zink://contracts/delegation-envelope-v1",
   "title": "DelegationEnvelopeV1",
+  "x-zink-contract-version": "1.1.0",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,12 +29,15 @@
     "governance_version": {
       "enum": ["m7-t2-r12", "m7-t5-r13", "m8-t2-r9", "m8-t2.1-r3", "m8-t2.2-r4", "m8-t2.3-r5"]
     },
-    "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "task_id": { "type": "string", "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$" },
     "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
     "node_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
-    "delegation_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "delegation_id": {
+      "type": "string",
+      "pattern": "^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+    },
     "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
-    "parent_agent_id": { "enum": ["main", "o1", "o2"] },
+    "parent_agent_id": { "$ref": "ledger-event.schema.json#/$defs/parent_agent_id" },
     "target_agent_id": {
       "enum": ["o1", "o2", "excel", "power-bi", "sql", "python"]
     },

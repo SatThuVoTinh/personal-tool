@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
+import fs, {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,11 +17,11 @@ import { runInNewContext } from "node:vm";
 
 import {
   AGENT_DEFINITIONS,
-  AGENT_GOOGLE_PROFILES,
+  ROUTER_PROVIDER_ID,
+  ROUTER_PROVIDER_MODEL_IDS,
   AGENT_IDS,
   AGENT_MENTION_PATTERNS,
   DISCORD_SURFACE_IDENTIFIERS,
-  GOOGLE_PROFILE_IDS,
   MODEL_ALLOWLIST,
   OPENCLAW_RELEASE,
   PASS_ENTRY_IDS,
@@ -39,15 +39,37 @@ import {
   validateConfig,
 } from "../integrations/openclaw/lib/policy.mjs";
 import {
+  HOTFIX_BOOT_ACTION,
   OPENCLAW_HOTFIX_ARTIFACTS,
   OPENCLAW_HOTFIX_RELEASE,
   assertPatchedInvariants,
+  classifyState,
+  hotfixBootAction,
   patchContents,
   requireKnownHash,
   requireSupportedRelease,
   revertContents,
+  sha256,
+  writeTransaction,
 } from "../integrations/openclaw/templates/openclaw-gemini-stream-hotfix.mjs";
 import { isExpectedDiscordCapability } from "../integrations/openclaw/verify.mjs";
+import {
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+  applyRouterTestEnv,
+} from "./helpers/router-env.mjs";
+// M12/T9 F-111: the builder's apply is reachable ONLY through the apply
+// orchestration, which takes the transaction snapshot first and hands the
+// builder its attempt id. A lane that drives the builder directly takes the
+// same transaction and passes the same id; the helper is the operator driver's
+// own two-step (snapshot, then persist), so the record the builder reads is the
+// production one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const identifiers = Object.freeze({
   discordGuildId: "12345678901234567",
@@ -436,7 +458,9 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     load: { paths: [path.join(stateDir, "extensions", "zink-governance")] },
     slots: { memory: "none" },
     entries: {
-      google: { enabled: true },
+      // M10/T2-R9: `google` is no longer in PLUGIN_ALLOWLIST. It existed only
+      // to serve the retired provider, and keeping it enabled would keep a
+      // second, unused model provider reachable.
       discord: { enabled: true },
       "zink-governance": {
         enabled: true,
@@ -458,49 +482,81 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     },
     bundledDiscovery: "allowlist",
   });
-  assert.equal(Object.keys(config.auth.profiles).length, 21);
-  assert.deepEqual(Object.keys(config.auth.profiles), GOOGLE_PROFILE_IDS);
-  for (const profileId of GOOGLE_PROFILE_IDS) {
-    assert.deepEqual(config.auth.profiles[profileId], {
-      provider: "google",
-      mode: "api_key",
-    });
-  }
-  assert.deepEqual(config.auth.order.google, GOOGLE_PROFILE_IDS);
-  assert.deepEqual(config.auth.cooldowns, {
-    overloadedProfileRotations: 2,
-    rateLimitedProfileRotations: 2,
+  // M10/T2-R9: the 21 google auth profiles, the per-agent auth order and the
+  // profile cooldowns are retired. One router credential serves every agent and
+  // the router rotates upstream itself, so an OpenClaw-side profile order would
+  // be a second rotation policy that cannot take effect.
+  assert.equal(Object.hasOwn(config, "auth"), false);
+  const router = config.models.providers[ROUTER_PROVIDER_ID];
+  assert.deepEqual(router, {
+    baseUrl: `http://${ROUTER_TEST_HOST}:${ROUTER_TEST_PORT}/v1`,
+    api: "openai-completions",
+    auth: "api-key",
+    apiKey: SECRET_REFS.router,
+    // M10/T2-R13 (owner decision 2026-10-09): the per-attempt ceiling. Proven
+    // live: without it one request waited 9,374,777 ms and the owner received
+    // nothing. `timeoutSeconds` on the PROVIDER is the only layer the installed
+    // schema admits — `requestTimeoutMs` fails validation at provider level and
+    // at model-entry level alike (both verified `valid:false`).
+    timeoutSeconds: 100,
+    // OpenClaw requires an ARRAY here; an object shape is rejected by the
+    // installed runtime's validator, so this shape is load-bearing, not cosmetic.
+    //
+    // M10/T2-R12 (owner decision 2026-10-08): the governed entries are direct
+    // model ids, so NO entry carries an output budget. The old 64000 budget
+    // existed for `execute` alone (reasoning=true, empty content at
+    // finish=length) and `execute` is no longer governed. The four gemini ids
+    // the router lists advertise no reasoning and their own
+    // max_completion_tokens=65536.
+    // NOTE: do NOT add requestTimeoutMs here — the entry schema is STRICT and
+    // the gateway refuses to start (`Unrecognized key`, proven 2026-10-07).
+    // The attempt ceiling lives on the PROVIDER entry as `timeoutSeconds`.
+    models: ROUTER_PROVIDER_MODEL_IDS.map((modelId) => ({
+      id: modelId,
+      name: modelId,
+    })),
   });
-  const secretPlan = buildSecretsPlan();
+  // M10/T2-R13: the provider carries a per-attempt deadline. Proven live
+  // 2026-10-09: without it one model request waited 9,374,777 ms (2h36m) and
+  // the owner got nothing. The schema admits `timeoutSeconds` on the provider
+  // and rejects `requestTimeoutMs` at BOTH the provider and entry level, so
+  // this key name and this layer are both load-bearing.
+  assert.equal(router.timeoutSeconds, 100);
+  // The chain is the owner's exact order, addressed directly, with no combo.
+  assert.deepEqual(ROUTER_PROVIDER_MODEL_IDS, [
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-3.7-flash",
+    "muse-spark-1.3-contributor-free",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-3.5-flash-lite",
+  ]);
+  for (const entry of router.models) {
+    assert.equal(
+      entry.params,
+      undefined,
+      `no governed entry may declare a budget: ${entry.id}`,
+    );
+  }
+  assert.equal(
+    config.models.providers[ROUTER_PROVIDER_ID].models.some(
+      (m) => m.id === "execute",
+    ),
+    false,
+    "the combo must not be a governed provider entry",
+  );
+  // The router owns rotation, so OpenClaw must not also carry a rotation order.
   assert.deepEqual(buildAuthOrderPlan(), {
     version: 1,
-    provider: "google",
-    agents: Object.fromEntries(
-      AGENT_IDS.map((agentId) => [
-        agentId,
-        [...AGENT_GOOGLE_PROFILES[agentId]],
-      ]),
-    ),
+    provider: ROUTER_PROVIDER_ID,
+    agents: {},
   });
-  assert.equal(secretPlan.targets.length, 21);
-  assert.deepEqual(
-    secretPlan.targets.map((target) => target.ref),
-    SECRET_REFS.gemini,
-  );
-  assert.equal(
-    new Set(secretPlan.targets.map((target) => target.ref.id)).size,
-    21,
-  );
-  for (const agentId of AGENT_IDS) {
-    const targets = secretPlan.targets.filter(
-      (target) => target.agentId === agentId,
-    );
-    assert.equal(targets.length, 3);
-    assert.deepEqual(
-      targets.map((target) => target.pathSegments[1]),
-      AGENT_GOOGLE_PROFILES[agentId],
-    );
-  }
+  // No auth-profile key targets remain: the profiles are gone, so the secret
+  // plan is empty by design rather than by omission.
+  assert.deepEqual(buildSecretsPlan(), {
+    version: 1,
+    protocolVersion: 1,
+    targets: [],
+  });
   assert.deepEqual(config.secrets.providers[PASS_PROVIDER_ID], {
     source: "exec",
     command: path.join(stateDir, "bin", "openclaw-pass-resolver"),
@@ -508,10 +564,6 @@ test("M7/T1 builds the exact minimal-tool, zero-command foundation", () => {
     jsonOnly: true,
     trustedDirs: [path.join(stateDir, "bin")],
   });
-  assert.deepEqual(
-    SECRET_REFS.gemini.map((ref) => ref.id),
-    PASS_ENTRY_IDS.gemini,
-  );
   assert.equal(Object.hasOwn(config.channels.discord, "token"), false);
   assert.equal(config.channels.discord.defaultAccount, "main");
   assert.deepEqual(config.channels.discord.streaming, { mode: "off" });
@@ -619,17 +671,22 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
     () => validateConfig(runtimeMetadata, { stateDir, identifiers }),
     /OpenClaw runtime metadata drift/u,
   );
-  const authOrderDrift = buildConfig({ stateDir, identifiers });
-  authOrderDrift.auth.order.google = [...GOOGLE_PROFILE_IDS].reverse();
+  // M10/T2-R9: the auth-order and cooldown drift gates were repointed at the
+  // router provider, which is the governed model configuration now. The intent
+  // is unchanged — prove validateConfig rejects drift in a governed section.
+  const routerEndpointDrift = buildConfig({ stateDir, identifiers });
+  routerEndpointDrift.models.providers[ROUTER_PROVIDER_ID].baseUrl =
+    "http://router.invalid:1/v2";
   assert.throws(
-    () => validateConfig(authOrderDrift, { stateDir, identifiers }),
-    /Policy drift at auth/u,
+    () => validateConfig(routerEndpointDrift, { stateDir, identifiers }),
+    /Policy drift at models/u,
   );
-  const rotationDrift = buildConfig({ stateDir, identifiers });
-  rotationDrift.auth.cooldowns.rateLimitedProfileRotations = 20;
+  const routerAdapterDrift = buildConfig({ stateDir, identifiers });
+  routerAdapterDrift.models.providers[ROUTER_PROVIDER_ID].api =
+    "openai-responses";
   assert.throws(
-    () => validateConfig(rotationDrift, { stateDir, identifiers }),
-    /Policy drift at auth/u,
+    () => validateConfig(routerAdapterDrift, { stateDir, identifiers }),
+    /Policy drift at models/u,
   );
   const rosterDrift = buildConfig({ stateDir, identifiers });
   rosterDrift.agents.list.pop();
@@ -716,18 +773,24 @@ test("M7/T1 rejects configuration drift on restricted surfaces", () => {
   );
 });
 
-test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
+test("M7/T1 password-store resolver is a fail-closed 9-entry boundary", () => {
   const root = temporaryDirectory();
   try {
     const resolver = path.join(root, "openclaw-pass-resolver");
     const resolverSource = passResolverContents();
+    // M10/T2-R9: the 21 GEMINI_API_KEY_NN ids are removed. The resolver is a
+    // strict allowlist, so leaving them would keep 21 now-unreferenced pass ids
+    // resolvable. What remains is 7 Discord bot tokens plus the gateway token.
+    // M12/T9 F-036 (owner decision 2026-10-21, `H6`): the router credential
+    // joins them, so the generated config carries a REFERENCE and the key can
+    // be rotated without a re-apply of the whole tree.
     const allowedIds = [
-      ...PASS_ENTRY_IDS.gemini,
       ...Object.values(PASS_ENTRY_IDS.discord),
       PASS_ENTRY_IDS.gateway,
+      PASS_ENTRY_IDS.router,
     ];
-    assert.equal(allowedIds.length, 29);
-    assert.equal(new Set(allowedIds).size, 29);
+    assert.equal(allowedIds.length, 9);
+    assert.equal(new Set(allowedIds).size, 9);
     assert.doesNotMatch(resolverSource, /__ZINK_ALLOWED_IDS__/u);
     assert.doesNotMatch(resolverSource, /spawnSync/u);
     assert.match(resolverSource, /Promise\.all/u);
@@ -752,14 +815,14 @@ test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
       input: JSON.stringify({
         protocolVersion: 1,
         provider: PASS_PROVIDER_ID,
-        ids: [PASS_ENTRY_IDS.gemini[0]],
+        ids: [Object.values(PASS_ENTRY_IDS.discord)[0]],
       }),
     });
     assert.equal(boundedLookup.status, 0);
     const response = JSON.parse(boundedLookup.stdout);
     assert.deepEqual(Object.keys(response.values), []);
     assert.deepEqual(response.errors, {
-      [PASS_ENTRY_IDS.gemini[0]]: { code: "NOT_FOUND" },
+      [Object.values(PASS_ENTRY_IDS.discord)[0]]: { code: "NOT_FOUND" },
     });
 
     const mockPass = path.join(root, "mock-pass.mjs");
@@ -787,14 +850,14 @@ test("M7/T1 password-store resolver is a fail-closed 29-entry boundary", () => {
       input: JSON.stringify({
         protocolVersion: 1,
         provider: PASS_PROVIDER_ID,
-        ids: PASS_ENTRY_IDS.gemini,
+        ids: Object.values(PASS_ENTRY_IDS.discord),
       }),
       timeout: 10_000,
     });
     assert.equal(parallelLookup.status, 0);
     assert.equal(parallelLookup.signal, null);
     const parallelResponse = JSON.parse(parallelLookup.stdout);
-    assert.equal(Object.keys(parallelResponse.values).length, 21);
+    assert.equal(Object.keys(parallelResponse.values).length, 7);
     assert.deepEqual(parallelResponse.errors, {});
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -807,6 +870,7 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
     const environment = environmentForTemporaryHome(root);
     const stateDir = path.join(root, ".openclaw-zink");
     const systemdUserDir = path.join(root, ".config", "systemd", "user");
+    const runtimeRoot = path.join(root, "runtime");
     const script = path.join(
       process.cwd(),
       "integrations",
@@ -826,10 +890,24 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       stdio: "pipe",
     });
     assert.equal(existsSync(stateDir), false);
-    execFileSync(process.execPath, ["--", ...baseArgs, "--apply"], {
-      env: environment,
-      stdio: "pipe",
-    });
+    execFileSync(
+      process.execPath,
+      [
+        "--",
+        ...baseArgs,
+        "--apply",
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot,
+          systemdRoot: systemdUserDir,
+        }),
+      ],
+      {
+        env: environment,
+        stdio: "pipe",
+      },
+    );
     const configText = readFileSync(
       path.join(stateDir, "openclaw.json"),
       "utf8",
@@ -843,10 +921,15 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       "utf8",
     );
     assert.doesNotMatch(configText, /AIza|DISCORD_BOT_TOKEN=/u);
-    assert.deepEqual(
-      JSON.parse(authPlanText).targets.map((target) => target.ref),
-      SECRET_REFS.gemini,
-    );
+    // M10/T2-R9: the apply materializes no auth-profile secret targets, because
+    // the 21 google profiles are gone. The router credential is supplied through
+    // the environment at apply time and is never a pass_store target, so this
+    // assertion also pins that no profile key material reappears.
+    assert.deepEqual(JSON.parse(authPlanText), {
+      version: 1,
+      protocolVersion: 1,
+      targets: [],
+    });
     assert.deepEqual(JSON.parse(authOrderPlanText), buildAuthOrderPlan());
     const resolverPath = path.join(stateDir, "bin", "openclaw-pass-resolver");
     assert.equal(existsSync(resolverPath), true);
@@ -870,9 +953,13 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
       readFileSync(dropInPath, "utf8"),
       renderSystemdDropIn(stateDir),
     );
+    // M12/T9 F-179: the boot gate is `--ensure`, not `--check`. A `--check`
+    // gate exits non-zero until an operator runs the hotfix by hand, and the
+    // apply ceremony never establishes that state, so apply-then-start failed
+    // the unit five times in 60 s and left the assistant down.
     assert.match(
       readFileSync(dropInPath, "utf8"),
-      /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --check/u,
+      /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --ensure/u,
     );
     assert.equal(
       existsSync(path.join(stateDir, "secrets", "password-store")),
@@ -892,6 +979,109 @@ test("M7/T1 builder is dry-run safe and apply materializes no secrets", () => {
         true,
       );
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// M12/T9 F-179: a freshly applied, unpatched profile must survive
+// apply-then-start. The live systemd lane is NOT RUN here (it needs a WSL
+// host and a real unit), so this pins the two decisions that lane depends on:
+// the drop-in carries the establishing gate, and that gate repairs instead of
+// failing the unit.
+test("F-179: a fresh apply-then-start survives the hotfix boot gate", () => {
+  const stateDir = path.join(temporaryDirectory(), ".openclaw-zink");
+  const dropIn = renderSystemdDropIn(stateDir);
+  assert.match(
+    dropIn,
+    /ExecStartPre=.*openclaw-gemini-stream-hotfix\.mjs --ensure/u,
+    "the boot gate must establish the state it depends on",
+  );
+  assert.doesNotMatch(
+    dropIn,
+    /openclaw-gemini-stream-hotfix\.mjs --check/u,
+    "a --check gate cannot pass on a profile the apply ceremony never patched",
+  );
+
+  assert.equal(
+    hotfixBootAction({ state: "original" }),
+    HOTFIX_BOOT_ACTION.REPAIR,
+    "an unpatched but applicable runtime must be repaired, not refused",
+  );
+  assert.equal(
+    hotfixBootAction({ state: "r18-predecessor" }),
+    HOTFIX_BOOT_ACTION.REPAIR,
+    "the R18 predecessor state must be upgraded, not refused",
+  );
+  assert.equal(
+    hotfixBootAction({ state: "patched" }),
+    HOTFIX_BOOT_ACTION.ALREADY_PATCHED,
+  );
+  assert.equal(
+    hotfixBootAction({ state: "original", releaseSupported: false }),
+    HOTFIX_BOOT_ACTION.NOT_APPLICABLE,
+    "an openclaw package update must not deadlock the unit",
+  );
+  assert.throws(
+    () => hotfixBootAction({ state: "half-written" }),
+    /unsupported partial state/u,
+    "a runtime that cannot be repaired still fails the boot",
+  );
+});
+
+test("F-OC-008: writeTransaction failure after rename rolls back all modified artifacts to accepted state", () => {
+  const root = temporaryDirectory();
+  try {
+    const records = OPENCLAW_HOTFIX_ARTIFACTS.map((baseSpec) => {
+      const orig = ORIGINAL_HOTFIX_FIXTURES[baseSpec.id];
+      const patched = patchContents(baseSpec.id, orig);
+      const spec = {
+        ...baseSpec,
+        originalSha256: sha256(orig),
+        patchedSha256: sha256(patched),
+      };
+      const filePath = path.join(root, spec.fileName);
+      writeFileSync(filePath, orig, "utf8");
+      return {
+        spec,
+        filePath,
+        fileMode: 0o644,
+        contents: orig,
+      };
+    });
+
+    let writeCount = 0;
+    const injectedWriter = (filePath, contents) => {
+      writeCount += 1;
+      writeFileSync(filePath, contents, "utf8");
+      if (writeCount === 2) {
+        const err = new Error("EIO: simulated directory fsync failure after rename");
+        err.code = "EIO";
+        throw err;
+      }
+    };
+
+    assert.throws(
+      () => writeTransaction(records, "patched", injectedWriter),
+      /EIO: simulated directory fsync failure after rename/u,
+      "writeTransaction must surface the fsync failure",
+    );
+
+    const currentRecords = records.map((r) => ({
+      ...r,
+      contents: readFileSync(r.filePath, "utf8"),
+    }));
+    const state = classifyState(currentRecords);
+    assert.equal(
+      state,
+      "original",
+      "failure after rename must roll back modified artifacts to original so classifyState accepts the state",
+    );
+    assert.equal(
+      hotfixBootAction({ state }),
+      HOTFIX_BOOT_ACTION.REPAIR,
+      "gateway boot action on rolled-back state must be REPAIR, not fatal failure",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -926,6 +1116,15 @@ test("M7/T1 builder upgrades only the exact R16 drop-in and rejects owned drift"
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1021,6 +1220,15 @@ test("M7/T1 builder converges a pre-R4 mention grammar and stays fail-closed oth
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1104,6 +1312,15 @@ test("M7/T1 builder recognizes the superseded WSL plugin build and still refuses
           systemdUserDir,
           ...discordIdentifierArguments,
           "--apply",
+          // F-111: every apply carries the transaction the orchestration took.
+          // A fresh one per call, because the builder marks the transaction it
+          // is given as SPENT.
+          "--apply-transaction",
+          takeApplyTransaction({
+            stateDir,
+            runtimeRoot: path.join(root, "runtime"),
+            systemdRoot: systemdUserDir,
+          }),
         ],
         { env: environment, stdio: "pipe" },
       );
@@ -1305,7 +1522,7 @@ test("M7/T1 builder refuses workspace drift without deleting it", () => {
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1313,14 +1530,24 @@ test("M7/T1 builder refuses workspace drift without deleting it", () => {
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation. The builder marks the
+      // transaction it is given as SPENT, so a second invocation must not
+      // reuse the first one - and the refusal this case proves must be the
+      // DRIFT refusal, not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const unexpected = path.join(stateDir, "workspaces", "main", "drift.txt");
     writeFileSync(unexpected, "owner content\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });
@@ -1358,6 +1585,13 @@ test("M7/T1 preflights workspace drift before writing owned files", () => {
         "--systemd-user-dir",
         systemdUserDir,
         ...discordIdentifierArguments,
+        // F-111: the apply carries the transaction the orchestration took.
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
       ],
       { encoding: "utf8", env: environment },
     );
@@ -1405,6 +1639,13 @@ test("M7/T1 rejects a symlinked workspace parent before writing config", (t) => 
         "--systemd-user-dir",
         systemdUserDir,
         ...discordIdentifierArguments,
+        // F-111: the apply carries the transaction the orchestration took.
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
       ],
       { encoding: "utf8", env: environment },
     );
@@ -1428,7 +1669,7 @@ test("M7/T1 builder refuses owned secret-plan drift without overwriting it", () 
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1436,14 +1677,22 @@ test("M7/T1 builder refuses owned secret-plan drift without overwriting it", () 
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation, so the refusal this case
+      // proves is the DRIFT refusal and not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const planPath = path.join(stateDir, "zink-auth-secret-plan.json");
     writeFileSync(planPath, "not the owner plan\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });
@@ -1467,7 +1716,7 @@ test("M7/T1 builder refuses owned auth-order drift without overwriting it", () =
       "openclaw",
       "configure.mjs",
     );
-    const args = [
+    const applyArgs = () => [
       script,
       "--apply",
       "--state-dir",
@@ -1475,14 +1724,22 @@ test("M7/T1 builder refuses owned auth-order drift without overwriting it", () =
       "--systemd-user-dir",
       systemdUserDir,
       ...discordIdentifierArguments,
+      // F-111: a fresh transaction per invocation, so the refusal this case
+      // proves is the DRIFT refusal and not the spent-transaction refusal.
+      "--apply-transaction",
+      takeApplyTransaction({
+        stateDir,
+        runtimeRoot: path.join(root, "runtime"),
+        systemdRoot: systemdUserDir,
+      }),
     ];
-    execFileSync(process.execPath, ["--", ...args], {
+    execFileSync(process.execPath, ["--", ...applyArgs()], {
       env: environment,
       stdio: "pipe",
     });
     const orderPlanPath = path.join(stateDir, "zink-auth-order-plan.json");
     writeFileSync(orderPlanPath, "not the owner order plan\n", "utf8");
-    const result = spawnSync(process.execPath, ["--", ...args], {
+    const result = spawnSync(process.execPath, ["--", ...applyArgs()], {
       encoding: "utf8",
       env: environment,
     });

@@ -25,6 +25,7 @@ Mọi truy vấn gửi tới `zink_sql` đều phải tuân thủ nghiêm ngặt
 4. **Không gom nhóm hay hàm:** Cấm `GROUP BY`, `HAVING`, `WINDOW`, `OVER`, `CASE WHEN`.
 5. **Không dùng chú thích hoặc dấu chấm phẩy:** Cấm `--`, `/* */` và `;`.
 6. **Tham số đặt tên (Named Parameters):** Phải gắn kết chính xác theo tên dạng `:param_name` (injective binding).
+7. **`NOT` chỉ hợp lệ trong `IS NOT NULL`:** `NOT` đứng một mình bị cả `validateSqlQuery` và `assertReadOnlyStatement` từ chối với `SQL_UNSUPPORTED_SYNTAX`; dạng `IS NOT NULL` vẫn được chấp nhận.
 
 ---
 
@@ -47,6 +48,8 @@ Mọi nỗ lực truy vấn ra ngoài danh sách trên đều bị ném lỗi `D
 const query =
   "SELECT id, name, category, value FROM analytics_read WHERE category = :cat";
 const parameters = [{ name: "cat", type: "string", value: "silver" }];
+// `type` is required by the published contract and is discarded by the
+// binder: the value's JavaScript type decides how it is rendered.
 ```
 
 ### Bước 2: Gọi Cầu nối DuckDB có kiểm soát
@@ -77,10 +80,10 @@ console.table(result.rows);
 
 ## 5. Các Lỗi Thường gặp & Mã lỗi
 
-| Mã lỗi                            | Nguyên nhân                                  | Cách xử lý                                    |
-| --------------------------------- | -------------------------------------------- | --------------------------------------------- |
-| `DUCKDB_UNAUTHORIZED_CALLER`      | Agent gọi khác `sql` (ví dụ `main`, `excel`) | Giao việc cho đúng agent `sql`                |
-| `DUCKDB_UNAUTHORIZED_RESOURCE`    | `target_database` không thuộc allowlist      | Chỉ định `knowledge` hoặc `analytics_read`    |
-| `DUCKDB_FILESYSTEM_ACCESS_DENIED` | Chứa `ATTACH`, `COPY`, `read_csv`, hoặc `..` | Truy vấn trực tiếp bảng có sẵn trong database |
-| `DUCKDB_HOST_EXECUTION_DENIED`    | Chứa `powershell`, `cmd`, `wsl`, `PRAGMA`    | Loại bỏ các lệnh hệ thống khỏi truy vấn       |
-| `DUCKDB_MUTATION_NOT_PERMITTED`   | Truy vấn cố ý sửa đổi dữ liệu                | Chuyển sang câu lệnh `SELECT` thuần túy       |
+| Mã lỗi                            | Nguyên nhân                                               | Cách xử lý                                    |
+| --------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+| `DUCKDB_UNAUTHORIZED_CALLER`      | Agent gọi khác `sql` (ví dụ `main`, `excel`)              | Giao việc cho đúng agent `sql`                |
+| `DUCKDB_UNAUTHORIZED_RESOURCE`    | `target_database` không thuộc allowlist                   | Chỉ định `knowledge` hoặc `analytics_read`    |
+| `DUCKDB_FILESYSTEM_ACCESS_DENIED` | Chứa `ATTACH`, `COPY`, `read_csv`, hoặc đọc tệp trực tiếp | Truy vấn trực tiếp bảng có sẵn trong database |
+| `DUCKDB_HOST_EXECUTION_DENIED`    | Chứa `powershell`, `cmd`, `wsl`, `PRAGMA`                 | Loại bỏ các lệnh hệ thống khỏi truy vấn       |
+| `DUCKDB_MUTATION_NOT_PERMITTED`   | Truy vấn cố ý sửa đổi dữ liệu                             | Chuyển sang câu lệnh `SELECT` thuần túy       |

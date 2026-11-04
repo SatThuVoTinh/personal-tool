@@ -48,6 +48,10 @@ import {
   ROLLBACK_SAFETY_UNAVAILABLE,
   TRANSACTION_STATUS,
 } from "../../lib/transaction-snapshot.mjs";
+import {
+  KNOWN_REFUSAL_REASONS,
+  classifyRefusal,
+} from "./refusal-classifier.mjs";
 
 /**
  * Reported when the apply returned success but the live runtime does not reflect
@@ -61,6 +65,12 @@ export const APPLY_STAGES = [
   "builder-preflight",
   "orphan-check",
   "transaction-snapshot",
+  // M12/T9 F-561 (R10-T07-7): the derived ledger projection is recomputed from
+  // its journal INSIDE the ceremony. It used to run at the driver's module
+  // scope, before the first stage, so a run that reported
+  // `mutationStarted: false` had already written the live state root and no
+  // preimage could hold the tree it wrote.
+  "ledger-projection",
   "builder-apply",
   "quarantine-prune",
   "native-backup-prune",
@@ -71,13 +81,29 @@ export const APPLY_STAGES = [
 ];
 
 /**
- * The first stage that writes to the live runtime. `configure.mjs` returns for
- * mode `preflight` before its first mutating call, and the transaction snapshot
- * is read-only, so every stage before this one is provably zero-mutation.
+ * The first stage that writes anything in the live tree.
+ *
+ * It is the ledger projection, not `builder-apply`: the ledger's derived
+ * snapshot lives under the state directory, which is governed live state, so a
+ * stage that rewrites it is a mutation even though it touches no OpenClaw
+ * runtime file. Everything before it - the identifiers read, the builder's own
+ * zero-mutation preflight, the orphan check and the transaction preimage - is
+ * read-only, so `PRE-FLIGHT FAILURE = ZERO RUNTIME MUTATION` still holds
+ * exactly.
+ *
+ * The ledger tree is deliberately NOT a transaction target, and the reason is
+ * stated here because this is the list that would otherwise hide it: the journal
+ * is the record and no stage writes it, the recompute is atomic
+ * (`writeSnapshotAtomic`) and convergent (the same journal derives the same
+ * bytes), and the checkpoint it discards is a cache the next read rebuilds. A
+ * rollback therefore restores the tracked surface and leaves the re-derived
+ * cache agreeing with the journal it was derived from. Adding the tree to
+ * `SNAPSHOT_TARGETS.state` would snapshot a cache, not a record.
  */
-export const FIRST_MUTATING_STAGE = "builder-apply";
+export const FIRST_MUTATING_STAGE = "ledger-projection";
 
 const MUTATING_STAGES = new Set([
+  "ledger-projection",
   "builder-apply",
   "quarantine-prune",
   "native-backup-prune",
@@ -174,15 +200,39 @@ export async function applyRuntime(deps) {
       };
     }
 
+    stage = "ledger-projection";
+    // M12/T9 F-561 (R10-T07-7): the derived ledger projection is recomputed
+    // here - after the rollback target is durable and before the builder writes
+    // - instead of at the driver's module scope. `mutationStarted` flips BEFORE
+    // the dep runs, so a run that reports `mutationStarted: false` has provably
+    // written nothing, including the ledger's derived cache.
+    //
+    // The seam is optional so the in-process harnesses that model no ledger
+    // stage keep their exact call sequences: a harness that does not supply the
+    // dependency has no ledger surface to migrate.
+    if (typeof deps.recomputeLedgerProjection === "function") {
+      mutationStarted = true;
+      deps.recomputeLedgerProjection();
+    }
+
     stage = "builder-apply";
     mutationStarted = true;
-    deps.runBuilder("--apply", identifiers);
+    // F-111: the builder is bound to the transaction this orchestration took,
+    // so the apply cannot run without its rollback target and it cannot run
+    // twice against the same transaction.
+    deps.runBuilder("--apply", identifiers, transaction?.attemptId ?? null);
 
     stage = "quarantine-prune";
-    deps.pruneQuarantine();
+    // M12/T9 F-106: the prune is handed the transaction preimage, because a
+    // stage that deletes must be able to tell what the transaction can
+    // recreate. What it cannot recreate is retained, never deleted.
+    deps.pruneQuarantine(snapshot);
 
     stage = "native-backup-prune";
-    deps.pruneStaleNativeBackup();
+    // The native backup is the native patch's OWN recovery target: the patch
+    // stage that follows rebuilds it from the live baseline in this same
+    // apply, so the preimage is not what restores it.
+    deps.pruneStaleNativeBackup(snapshot);
 
     stage = "native-patch";
     deps.applyNativePatch();
@@ -197,7 +247,14 @@ export async function applyRuntime(deps) {
     // transaction complete — an unverified apply must not be able to close its
     // own transaction and erase the evidence that it was in flight.
     stage = "runtime-verify";
-    const finalVerdict = deps.verifyLiveRestore(snapshot, { postApply: true });
+    // M10/T2-R8: the expectation is what the runtime must look like AFTER this
+    // apply, not a diff of what happened to change. `verifyLiveRestore` now
+    // fails closed when no expectation is declared, so a self-reported apply
+    // can never license itself.
+    const finalVerdict = deps.verifyLiveRestore(snapshot, {
+      postApply: true,
+      expected: deps.expectedNativePostImage(),
+    });
     if (!finalVerdict?.applied) {
       // The apply returned success but the runtime does not reflect it. Treat
       // this as a failure at or after mutation: roll back and report honestly.
@@ -240,6 +297,19 @@ export async function applyRuntime(deps) {
       transactionStatus: TRANSACTION_STATUS.COMPLETE,
     };
   } catch (error) {
+    const reason = deps.classifyReason(error);
+    if (reason === "APPLY_REJECTED") {
+      // M12/T9 F-383: the classifier names every refusal it knows, and an
+      // UNCLASSIFIED refusal is the one case the operator cannot act on: the
+      // report says "APPLY_REJECTED" and nothing else. The detail goes to the
+      // operator's stderr — the trusted channel — and never into the report,
+      // which is the record that may be read anywhere.
+      process.stderr.write(
+        `[zink-operator] the refusal was not classified; the builder said: ${String(
+          error?.stderr ?? error?.message ?? "",
+        ).slice(0, 600)}\n`,
+      );
+    }
     // Only a failure at or after the mutation boundary may restore anything.
     const rollbackRequired = mutationStarted;
     const report = {
@@ -249,7 +319,7 @@ export async function applyRuntime(deps) {
       rollbackRequired,
       rollbackAttempted: false,
       rollbackSucceeded: false,
-      reason: deps.classifyReason(error),
+      reason,
       orphanedTransactionIds: null,
       // R11: a restore failure and a restore-VALIDATION failure are distinct
       // facts and are never collapsed into one another.
@@ -323,24 +393,15 @@ function attemptRollback(deps, snapshot, report) {
  * Identifier values, config bodies, secrets and raw child-process stderr must
  * never reach model-visible output, so only known static diagnostics are
  * named and everything else collapses to PREFLIGHT_REJECTED.
+ *
+ * M12/T9 F-159: the list and the matching rule are SHARED with the preflight
+ * driver (`refusal-classifier.mjs`), because both drivers exec the same
+ * builder child and the identical refusal used to resolve to a different code
+ * depending on which driver reported it. Only the fallback differs: this mode
+ * reports `APPLY_REJECTED`, the preflight mode reports `PREFLIGHT_REJECTED`.
  */
-export const KNOWN_REASONS = [
-  "governance instructions drift",
-  "Governance plugin asset",
-  "Governance plugin entrypoint",
-  "Governance plugin manifest",
-  "Policy drift",
-  "EXECUTION_STATE_UNKNOWN",
-  "INVALID_IDENTIFIER_FILE",
-  "GATEWAY_NOT_ACTIVE",
-  "permission",
-  "EACCES",
-  "ENOENT",
-];
+export const KNOWN_REASONS = KNOWN_REFUSAL_REASONS;
 
 export function classifyApplyReason(error) {
-  const output = `${error?.stderr ?? ""}${error?.message ?? ""}${error?.code ?? ""}`;
-  return (
-    KNOWN_REASONS.find((reason) => output.includes(reason)) ?? "APPLY_REJECTED"
-  );
+  return classifyRefusal(error, "APPLY_REJECTED");
 }

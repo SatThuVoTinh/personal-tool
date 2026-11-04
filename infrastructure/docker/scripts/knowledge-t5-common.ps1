@@ -71,26 +71,67 @@ namespace PersonalTool {
 '@
 }
 
+# F-292 (R7-C4-05): every repository probe names the directory it reads.
+# The script's own tree is the tree the driver packages, so its revision is
+# read from that tree and not from whichever repository the invocation
+# directory happens to be inside.
 function Assert-T5CleanRepository {
-  $changes = @(git status --porcelain)
+  $changes = @(git -C $script:T5RepositoryRoot status --porcelain)
   if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
     throw "M3/T5 acceptance requires a clean working tree."
   }
 }
 
 function Get-T5RepositorySha {
-  $sha = (git rev-parse HEAD).Trim()
+  $sha = (git -C $script:T5RepositoryRoot rev-parse HEAD).Trim()
   if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
     throw "Unable to resolve the current repository SHA."
   }
   return $sha
 }
 
+function ConvertTo-T5ComparablePath {
+  param([string]$Path)
+
+  if (-not $Path) { return "" }
+  return $Path.Replace("\", "/").TrimEnd("/")
+}
+
+# The decision that turns a foreign tree into a failure, separated from the
+# probes so it can be exercised on its own: the script's own tree at the same
+# revision is accepted, and anything else names both revisions.
+function New-T5RepositoryIdentityError {
+  param([string]$ScriptRoot, [string]$ScriptSha, [string]$InvocationRoot, [string]$InvocationSha)
+
+  if (-not $InvocationRoot) { return $null }
+  $sameRoot = (ConvertTo-T5ComparablePath $InvocationRoot) -ieq (ConvertTo-T5ComparablePath $ScriptRoot)
+  if ($sameRoot -and $ScriptSha -ceq $InvocationSha) { return $null }
+  return "Acceptance must run from the script's own working tree. The script tree '$ScriptRoot' is at revision $ScriptSha; the invocation tree '$InvocationRoot' is at revision $InvocationSha."
+}
+
+function Assert-T5RepositoryIdentity {
+  $scriptSha = Get-T5RepositorySha
+  $invocationDirectory = (Get-Location).Path
+  $invocationRoot = $null
+  $invocationSha = $null
+  $rootOutput = & git -C $invocationDirectory rev-parse --show-toplevel 2>$null
+  if ($LASTEXITCODE -eq 0 -and $rootOutput) {
+    $invocationRoot = (@($rootOutput) | Select-Object -First 1).ToString().Trim()
+    $shaOutput = & git -C $invocationDirectory rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $shaOutput) {
+      $invocationSha = (@($shaOutput) | Select-Object -First 1).ToString().Trim()
+    }
+  }
+  $identityError = New-T5RepositoryIdentityError -ScriptRoot $script:T5RepositoryRoot -ScriptSha $scriptSha -InvocationRoot $invocationRoot -InvocationSha $invocationSha
+  if ($identityError) { throw $identityError }
+  return $scriptSha
+}
+
 function Get-T5CandidatePathManifest {
   param([string]$Treeish = "HEAD")
 
   if ($Treeish -notmatch '^(HEAD|[0-9a-f]{40,64}|[A-Za-z0-9_.]+/[A-Za-z0-9_.-]+)$') { throw "Candidate Git tree identity is invalid." }
-  [string[]]$paths = @(git ls-tree -r --name-only $Treeish |
+  [string[]]$paths = @(git -C $script:T5RepositoryRoot ls-tree -r --name-only $Treeish |
     ForEach-Object { $_.Replace("\", "/") } |
     Where-Object { Test-T5CandidateAffectingPath $_ })
   [Array]::Sort($paths, [PersonalTool.T5Utf8ByteComparer]::new())
@@ -102,7 +143,7 @@ function Get-T5CandidatePathManifest {
   $manifestBytes = [Collections.Generic.List[byte]]::new()
   $entries = foreach ($relativePath in $paths) {
     if ($relativePath.Contains("\")) { throw "Candidate path is not POSIX-normalized: $relativePath" }
-    $oid = (& git rev-parse "${Treeish}:$relativePath").Trim()
+    $oid = (& git -C $script:T5RepositoryRoot rev-parse "${Treeish}:$relativePath").Trim()
     if ($LASTEXITCODE -ne 0 -or $oid -notmatch '^[0-9a-f]{40,64}$') {
       throw "Unable to resolve candidate Git blob OID: $relativePath"
     }
@@ -311,9 +352,9 @@ function Get-T5MigrationIdentity {
   $migrations = @(foreach ($file in Get-ChildItem -LiteralPath $migrationDirectory -Filter *.sql | Sort-Object Name) {
     [ordered]@{ name = $file.Name; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
   })
-  $expected = @("001_initial.sql", "002_pdf_ingestion_foundation.sql")
+  $expected = @("001_initial.sql", "002_pdf_ingestion_foundation.sql", "004_pdf_build_failure_cause.sql", "005_schema_migration_digest.sql")
   if (($migrations.name -join "`n") -cne ($expected -join "`n")) {
-    throw "M4/T5 expects the exact approved migration 001/002 ledger."
+    throw "M4/T5 expects the exact approved migration 001/002/004/005 ledger."
   }
   return @($migrations)
 }
@@ -323,6 +364,11 @@ function Get-T5ModelIdentity {
 
   $model = @((Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get).models | Where-Object { $_.name -eq $ModelName }) | Select-Object -First 1
   if (-not $model -or -not $model.digest) { throw "Embedding model $ModelName is unavailable." }
+  # F-293 (R7-C4-06): the provider's response is untrusted data, so the digest
+  # must have the shape the column's CHECK constraint accepts before it is
+  # used anywhere -- including in the acceptance statements, where it reaches
+  # the database as a psql variable rather than as an interpolated literal.
+  if ($model.digest -notmatch '^[0-9a-f]{64}$') { throw "Embedding model $ModelName digest does not have the documented shape." }
   $embedding = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/embed" -Method Post -ContentType "application/json" -Body "{`"model`":`"$ModelName`",`"input`":`"knowledge-t5-identity`"}"
   if (-not $embedding.embeddings -or $embedding.embeddings[0].Length -ne 1024) { throw "Embedding model identity has the wrong dimension." }
   return [ordered]@{ name = $ModelName; digest = $model.digest; dimension = 1024 }
@@ -348,7 +394,7 @@ function Get-T5Candidate {
   param([string]$ModelName = "bge-m3:latest")
 
   Assert-T5CleanRepository
-  $repositorySha = Get-T5RepositorySha
+  $repositorySha = Assert-T5RepositoryIdentity
   $image = Get-T5ImageIdentity
   if ($image.revision -ne $repositorySha) {
     throw "Knowledge image provenance does not match the clean repository HEAD."
@@ -521,6 +567,27 @@ function Assert-T5NetworkBoundary {
   }
 }
 
+function Assert-T5ModelEgressAllowlist {
+  param([string]$KnowledgeContainerId)
+
+  # F-288 (R7-C4-01): the model-egress proof is shape-agnostic, so it runs
+  # against the DEPLOYED composition and not only against the acceptance
+  # overlay. The Knowledge container's model route must be the allowlisted
+  # gateway, and the gateway must refuse every model API the allowlist does
+  # not name - a generic forward proxy is not an allowlist.
+  $knowledge = @(& docker inspect $KnowledgeContainerId | ConvertFrom-Json)[0]
+  $modelRoute = @($knowledge.Config.Env | Where-Object { $_ -like "KNOWLEDGE_OLLAMA_URL=*" })[0]
+  if ($modelRoute -ne "KNOWLEDGE_OLLAMA_URL=http://nginx:8080/ollama") {
+    throw "Knowledge model egress must use the allowlisted gateway route."
+  }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen; r=urlopen('http://nginx:8080/ollama/api/tags',timeout=5); raise SystemExit(0 if r.status==200 else 1)"
+  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach the model service through the allowlisted gateway." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen;`ntry: urlopen('http://nginx:8080/https://example.com/', timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "The model gateway behaved like a generic forward proxy." }
+  & docker exec $KnowledgeContainerId python -c "from urllib.request import Request,urlopen;`ntry: urlopen(Request('http://nginx:8080/ollama/api/pull',data=b'{}',method='POST'),timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
+  if ($LASTEXITCODE -ne 0) { throw "The model gateway exposed a non-allowlisted Ollama API." }
+}
+
 function Assert-T5RuntimeIsolation {
   param([string]$KnowledgeContainerId, [string]$NginxContainerId)
 
@@ -539,12 +606,7 @@ function Assert-T5RuntimeIsolation {
   if ($LASTEXITCODE -ne 0) { throw "Knowledge external DNS transport was not denied." }
   & docker exec $KnowledgeContainerId python -c "import socket; s=socket.create_connection(('postgres',5432),3); s.close()"
   if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local PostgreSQL." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen; r=urlopen('http://nginx:8080/ollama/api/tags',timeout=5); raise SystemExit(0 if r.status==200 else 1)"
-  if ($LASTEXITCODE -ne 0) { throw "Knowledge could not reach approved local Ollama through the allowlisted gateway." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import urlopen;`ntry: urlopen('http://nginx:8080/https://example.com/', timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
-  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway behaved like a generic forward proxy." }
-  & docker exec $KnowledgeContainerId python -c "from urllib.request import Request,urlopen;`ntry: urlopen(Request('http://nginx:8080/ollama/api/pull',data=b'{}',method='POST'),timeout=3)`nexcept Exception: raise SystemExit(0)`nraise SystemExit(1)"
-  if ($LASTEXITCODE -ne 0) { throw "Acceptance gateway exposed a non-allowlisted Ollama API." }
+  Assert-T5ModelEgressAllowlist $KnowledgeContainerId
 
   $nginx = @(& docker inspect $NginxContainerId | ConvertFrom-Json)[0]
   if (@($nginx.NetworkSettings.Networks.PSObject.Properties).Count -ne 2) {

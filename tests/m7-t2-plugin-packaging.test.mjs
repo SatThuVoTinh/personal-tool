@@ -11,6 +11,7 @@
 // imported from there. A repository-layout test would pass both before and after
 // the fix and would prove nothing.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
 import {
   existsSync,
@@ -387,6 +388,11 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
           "native-boundary",
         ].map((n) => repoFile(`integrations/openclaw/topology/lib/${n}.mjs`)),
         "lib/policy.mjs": [repoFile("integrations/openclaw/lib/policy.mjs")],
+        // F-459: the artifact scanner imports the canonical SQL mask from the
+        // packaged `zink-tools/` subtree.
+        "lib/artifact-validator.mjs": [
+          repoFile("integrations/openclaw/lib/artifact-validator.mjs"),
+        ],
         entrypoint: [
           repoFile("integrations/openclaw/plugins/zink-governance/index.mjs"),
         ],
@@ -396,7 +402,12 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
       assert.ok(targets.length > 0, "the rewrite table must not be empty");
       // Mechanical coverage: every target the packager can rewrite is declared,
       // so a future inline replaceAll cannot bypass the table unnoticed.
-      for (const expected of ["topology/lib", "lib/policy.mjs", "entrypoint"])
+      for (const expected of [
+        "topology/lib",
+        "lib/policy.mjs",
+        "lib/artifact-validator.mjs",
+        "entrypoint",
+      ])
         assert.ok(
           targets.includes(expected),
           `${expected} must be governed by the rewrite table`,
@@ -429,5 +440,356 @@ describe("V16 — the packaging rewriter cannot rewrite its own specification", 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-004 - a config key the plugin reads must be DECLARABLE
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-004: the config keys the plugin reads are declared", () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/openclaw.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const declared = manifest.configSchema.properties;
+
+  it("declares the skill-approval decision ref and the guild id", () => {
+    // Without these two the plugin's own reads are unreachable: the manifest
+    // sets additionalProperties:false, so a key it does not declare can never
+    // be configured, and the read always sees undefined.
+    for (const key of ["skillApprovalDecisionRef", "discordGuildId"]) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(declared, key),
+        `${key} is read by the plugin and must be declared in configSchema`,
+      );
+    }
+    assert.equal(
+      manifest.configSchema.additionalProperties,
+      false,
+      "the schema is closed, so an undeclared key is unreachable",
+    );
+  });
+
+  it("keeps the declared keys in step with the keys the plugin reads", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/plugins/zink-governance/index.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const read = new Set();
+    for (const match of source.matchAll(/\bconfig\.([A-Za-z_][A-Za-z0-9_]*)/gu))
+      read.add(match[1]);
+    for (const match of source.matchAll(
+      /\bconfig\?\.\s*([A-Za-z_][A-Za-z0-9_]*)/gu,
+    ))
+      read.add(match[1]);
+    // The legacy single-channel aliases are read as FALLBACKS for the forum ids
+    // the build emits; they are deliberately not configurable, so they are the
+    // only reads a closed schema may not declare.
+    const LEGACY_ALIASES = new Set([
+      "approvalsChannelId",
+      "incidentsChannelId",
+      "officeChannelId",
+      "resultsChannelId",
+    ]);
+    const undeclared = [...read]
+      .filter((key) => !declared[key] && !LEGACY_ALIASES.has(key))
+      .sort();
+    assert.deepEqual(
+      undeclared,
+      [],
+      `every config key the plugin reads must be declared: ${undeclared.join(", ")}`,
+    );
+  });
+});
+
+// M12/T9 F-201: the packaging whitelist and its rewrite engine had no
+// completeness gate, and the deployed entrypoint's module graph was never
+// imported by any test. Adding one module imported by index.mjs shipped green
+// through CI and then died at gateway start with ERR_MODULE_NOT_FOUND.
+describe("M12/T9 F-201 - the deployed entrypoint's module graph resolves", () => {
+  const relativeSpecifiers = (source) =>
+    [...source.matchAll(/(?:from|import)\s+"(\.[^"]+)"/gu)].map(
+      (match) => match[1],
+    );
+
+  it("resolves every relative specifier of the deployed entrypoint", async () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    const root = deployShape(assets);
+    try {
+      const entryPath = path.join(root, "index.mjs");
+      writeFileSync(entryPath, entrypoint);
+      const specifiers = relativeSpecifiers(entrypoint);
+      assert.ok(
+        specifiers.length > 0,
+        "the entrypoint must import something for this gate to mean anything",
+      );
+      for (const specifier of specifiers) {
+        assert.ok(
+          existsSync(path.join(root, specifier)),
+          `the deployed entrypoint imports ${specifier}, which is not a packaged asset`,
+        );
+      }
+      // The graph must actually load: this is the ERR_MODULE_NOT_FOUND the
+      // gateway used to die with.
+      await import(pathToFileURL(entryPath).href);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects an entrypoint that imports a module the package does not carry", async () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    const root = deployShape(assets);
+    try {
+      const broken = `${entrypoint}\nimport "./lib/not-packaged.mjs";\n`;
+      const specifiers = relativeSpecifiers(broken);
+      assert.ok(
+        specifiers.includes("./lib/not-packaged.mjs"),
+        "the gate must see the added specifier",
+      );
+      assert.equal(
+        existsSync(path.join(root, "./lib/not-packaged.mjs")),
+        false,
+        "the broken specifier must not be a packaged asset",
+      );
+      // And the import step must fail on it, exactly as the gateway did.
+      const brokenPath = path.join(root, "index-broken.mjs");
+      writeFileSync(brokenPath, broken);
+      await assert.rejects(
+        () => import(pathToFileURL(brokenPath).href),
+        /ERR_MODULE_NOT_FOUND|Cannot find module/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M12/T9 F-022 / F-162 - the deployed plugin resolves its modules from its own
+// digest-gated tree, never from a machine-specific absolute path
+// ---------------------------------------------------------------------------
+
+describe("M12/T9 F-022 - no governance-resolution source carries a machine-specific path", () => {
+  // A Windows home mounted into WSL, a Windows home, a Linux home.
+  const MACHINE_PATH_PATTERNS = [
+    /\/mnt\/[a-z]\/Users\//iu,
+    /[A-Za-z]:\\+Users\\+/u,
+    /\/home\/[a-z_][a-z0-9_-]*\//iu,
+  ];
+
+  const trackedRuntimeSources = () =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        `safe.directory=${REPO_ROOT}`,
+        "ls-files",
+        "-z",
+        "integrations/openclaw",
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        maxBuffer: 32 * 1024 * 1024,
+        windowsHide: true,
+      },
+    )
+      .split("\0")
+      .filter(Boolean)
+      .filter((relative) => relative.endsWith(".mjs"))
+      // The operator fixtures under topology/fixtures run ON the live host and
+      // name it on purpose; they are not runtime resolution sources.
+      .filter((relative) => !relative.includes("/fixtures/"));
+
+  /** The lines of a source that carry a machine-specific path. */
+  const machinePathLines = (content) => {
+    const offenders = [];
+    content.split(/\r?\n/u).forEach((line, index) => {
+      const trimmed = line.trim();
+      // A comment that NAMES the live path is documentation, not a resolution.
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return;
+      }
+      for (const pattern of MACHINE_PATH_PATTERNS) {
+        if (pattern.test(line)) offenders.push(index + 1);
+      }
+    });
+    return offenders;
+  };
+
+  /**
+   * The lines that RESOLVE a module through a machine-specific path.
+   *
+   * M12/T9: the control this lane proves is F-022's - the deployed plugin must
+   * load its modules from its own digest-gated tree and never from a
+   * machine-specific absolute path, because a machine path bypasses the
+   * packaged assets and their digests. The predicate used to be "any
+   * non-comment line that carries a home-shaped path", which is a proxy for
+   * that claim and covers much more than it: a CONSTANT that names the
+   * governed state tree (F-203's `GOVERNED_STATE_TREE`, in `configure.mjs` and
+   * `verify.mjs`) is a policy fact about the live deployment, not a module
+   * resolution, and a source that carries one still resolves every module it
+   * loads from its own tree.
+   *
+   * So the predicate now names the RESOLUTION POSITIONS - an import
+   * specifier, a dynamic import, a require, a path built from an absolute
+   * root - and only those. The claim is unchanged, and the capability of the
+   * narrowed predicate is proved by the case below, which feeds it the F-022
+   * class itself.
+   */
+  const RESOLUTION_PATTERNS = [
+    /\bfrom\s*["'](?<spec>[^"']+)["']/gu,
+    /\bimport\s+["'](?<spec>[^"']+)["']/gu,
+    /\bimport\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/gu,
+    /\brequire\s*\(\s*["'](?<spec>[^"']+)["']\s*\)/gu,
+    /\b(?:path\.)?(?:join|resolve)\s*\(\s*["'](?<spec>[^"']+)["']/gu,
+  ];
+
+  const moduleResolutionLines = (content) => {
+    const offenders = [];
+    content.split(/\r?\n/u).forEach((line, index) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return;
+      }
+      for (const pattern of RESOLUTION_PATTERNS) {
+        for (const match of line.matchAll(pattern)) {
+          const specifier = match.groups?.spec ?? "";
+          if (
+            MACHINE_PATH_PATTERNS.some((machine) => machine.test(specifier))
+          ) {
+            offenders.push(index + 1);
+          }
+        }
+      }
+    });
+    return offenders;
+  };
+
+  it("no tracked runtime source resolves a module through a machine-specific path", () => {
+    const files = trackedRuntimeSources();
+    assert.ok(
+      files.length > 10,
+      `the tracked tree must actually be walked, got ${files.length} files`,
+    );
+    const offenders = [];
+    for (const relative of files) {
+      const content = readFileSync(path.join(REPO_ROOT, relative), "utf8");
+      for (const line of moduleResolutionLines(content)) {
+        offenders.push(`${relative}:${line}`);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `a tracked runtime source resolves a module through a machine-specific path: ${offenders.join(", ")}`,
+    );
+  });
+
+  it("the module-resolution predicate still refuses the F-022 class", () => {
+    // The capability of the narrowed predicate, proved on the shapes it must
+    // refuse. Without this, "no source resolves a module through a
+    // machine-specific path" could be a statement about the predicate rather
+    // than about the tree.
+    const cases = [
+      [
+        "a static import from a Windows mount",
+        'import mod from "/mnt/c/Users/hoang_vinh/repo/mod.mjs";',
+      ],
+      [
+        "a static import from a Linux home",
+        'export { mod } from "/home/hoang_vinh/repo/mod.mjs";',
+      ],
+      [
+        "a dynamic import from a Windows home",
+        'const mod = await import("C:\\\\Users\\\\hoang_vinh\\\\repo\\\\mod.mjs");',
+      ],
+      [
+        "a require from a Linux home",
+        'const mod = require("/home/hoang_vinh/repo/mod.mjs");',
+      ],
+      [
+        "a path built from a machine root",
+        'const target = path.join("/home/hoang_vinh/repo", "mod.mjs");',
+      ],
+    ];
+    for (const [label, source] of cases) {
+      assert.deepEqual(
+        moduleResolutionLines(source),
+        [1],
+        `${label} must be refused as a machine-specific module resolution`,
+      );
+    }
+    // And the shape the band introduced is NOT a module resolution: a constant
+    // that names the governed state tree is a policy fact, and a source that
+    // carries one still loads every module from its own tree.
+    assert.deepEqual(
+      moduleResolutionLines(
+        'const GOVERNED_STATE_TREE = "/home/hoang_vinh/.openclaw-zink";',
+      ),
+      [],
+      "a governed-tree constant is not a module resolution",
+    );
+  });
+
+  it("the deployed entrypoint carries no machine-specific path", () => {
+    const { entrypoint } = governancePluginFiles();
+    assert.deepEqual(
+      machinePathLines(entrypoint),
+      [],
+      "the deployed entrypoint must not resolve through a machine-specific path",
+    );
+  });
+});
+
+describe("M12/T9 F-162 - the excel writer that executes is the one whose digest was admitted", () => {
+  it("the deployed entrypoint loads the excel writer from its own packaged asset", () => {
+    const { assets, entrypoint } = governancePluginFiles();
+    assert.ok(
+      assets["lib/excel-writer.mjs"],
+      "the excel writer must travel with the packaged build",
+    );
+    const specifiers = [
+      ...entrypoint.matchAll(/["']([^"']*excel-writer\.mjs)["']/gu),
+    ].map((match) => match[1]);
+    assert.ok(
+      specifiers.length > 0,
+      "the entrypoint must load the excel writer at all",
+    );
+    for (const specifier of specifiers) {
+      assert.ok(
+        specifier.startsWith("./lib/"),
+        `the excel writer must come from the packaged tree, got ${specifier}`,
+      );
+    }
+  });
+
+  it("no working-tree override of the excel writer remains", () => {
+    const source = repoFile(
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    );
+    assert.equal(
+      source.includes("integrations/openclaw/lib/excel-writer.mjs"),
+      false,
+      "the excel writer must not be loaded from an arbitrary working-tree path",
+    );
   });
 });

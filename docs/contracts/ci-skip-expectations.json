@@ -1,0 +1,79 @@
+{
+  "purpose": "M12/T9 F-197 (R5-E09-03) / H3 - the per-family skip expectation. CI printed green while whole families of tests were skipped: the SQL statement gate and every WSL-dependent control never executed, and the job's conclusion was SUCCESS. AGENTS.md section 11 requires an unavailable required gate to stay NOT RUN; here it was folded into \"fail 0\". The owner's answer is to SET AN EXPECTATION, and the measurement says it must be a PER-FAMILY expectation: one global number would fire on ~40 legitimate host-capability skips.",
+  "runner": "the CI quality-gate job (ubuntu-24.04). The numbers below are that runner's expectations; the gate enforces them where it runs on CI, and on any other host it enforces only the fail-closed half (an unexplained skip) and reports the counts.",
+  "note": "The families are CAPABILITIES, never test names. A lane declares the family it belongs to with a `// SKIP-FAMILY: <id>` marker, so the family-to-lane map is DERIVED from the repository's own lane list and this table never becomes a second, hand-written copy of the test names. An expectation changes only in the same commit that explains why.",
+  "families": [
+    {
+      "id": "live-runtime",
+      "expectation": "may-skip",
+      "maxSkips": 2,
+      "reason": "the live WSL runtime root is not reachable on the CI runner, so the cases that compare the repository against the live build report NOT RUN instead of a pass"
+    },
+    {
+      "id": "live-backup",
+      "expectation": "may-skip",
+      "maxSkips": 24,
+      "reason": "the operator's backup of the live runtime is not reachable on the CI runner, so the native-lineage cases that read it report NOT RUN instead of a pass"
+    },
+    {
+      "id": "live-ledger",
+      "expectation": "may-skip",
+      "maxSkips": 2,
+      "reason": "the production ledger is not reachable on the CI runner, so the cases that read it report NOT RUN instead of a pass"
+    },
+    {
+      "id": "live-channel",
+      "expectation": "may-skip",
+      "maxSkips": 1,
+      "reason": "the retired runtime-root copy of the live channel is not reachable on the CI runner, so the lineage case that reads it reports NOT RUN instead of a pass"
+    },
+    {
+      "id": "live-tree",
+      "expectation": "may-skip",
+      "maxSkips": 1,
+      "reason": "the live extension tree is not mountable on the CI runner, so the reachability case that reads it reports NOT RUN instead of a pass"
+    },
+    {
+      "id": "wsl-rehearsal",
+      "expectation": "may-skip",
+      "maxSkips": 16,
+      "reason": "the R16 apply rehearsal runs only inside the private mount namespace the rehearsal driver creates, and the CI runner has no WSL mount namespace, so the rehearsal cases report NOT RUN instead of a pass"
+    },
+    {
+      "id": "symlink",
+      "expectation": "must-run",
+      "maxSkips": 0,
+      "reason": "these cases refuse a symlinked path, and the CI runner can create symlinks, so the family must execute there; a skip means the case stopped protecting the refusal"
+    },
+    {
+      "id": "postgres",
+      "expectation": "may-skip",
+      "maxSkips": 3,
+      "reason": "the SQL statement gate needs the PostgreSQL container, and the CI runner has no Docker daemon, so at most three of its four cases may report NOT RUN; a fourth skip would cover the whole family and leave the ceiling unable to discriminate"
+    },
+    {
+      "id": "docker",
+      "expectation": "must-run",
+      "maxSkips": 0,
+      "reason": "the Docker contract lanes are readFileSync and regex scans that never need a daemon, so they must execute on every host; a skip means the lane stopped protecting the contract"
+    },
+    {
+      "id": "powershell-helpers",
+      "expectation": "may-skip",
+      "maxSkips": 12,
+      "reason": "the setup lanes drive their inspection helpers through PowerShell, and the CI runner has no PowerShell, so those cases report NOT RUN instead of a pass"
+    },
+    {
+      "id": "uv-toolchain",
+      "expectation": "may-skip",
+      "maxSkips": 1,
+      "reason": "the export-equivalence case runs the Python toolchain through uv, and the quality-gate runner installs no Python toolchain, so the case reports NOT RUN instead of a pass"
+    },
+    {
+      "id": "duckdb",
+      "expectation": "may-skip",
+      "maxSkips": 10,
+      "reason": "the DuckDB gates are REAL execution gates that need the DuckDB engine, and the CI runner installs no engine, so their cases report NOT RUN instead of a pass"
+    }
+  ]
+}

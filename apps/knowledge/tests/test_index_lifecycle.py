@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.database import AcceptedIndexRun, ActiveIndex
 from app.index_lifecycle import IndexLifecycle, LifecycleDependencies
@@ -51,7 +53,12 @@ class FakeProbe:
         self.resolve_calls = 0
         self.embed_calls = 0
 
-    async def resolve(self, _: str) -> ResolvedEmbeddingModel:
+    async def resolve(
+        self, _: str, expected_dimensions: int | None = None
+    ) -> ResolvedEmbeddingModel:
+        # F-263 (R7-D10B-01): the production probe takes the known vector
+        # width so it does not have to embed a probe string to learn it. The
+        # fake mirrors that signature.
         identity = self.identities[min(self.resolve_calls, len(self.identities) - 1)]
         self.resolve_calls += 1
         return identity
@@ -70,6 +77,7 @@ class FakeDatabase:
         self.completed = False
         self.completed_args: tuple[object, ...] = ()
         self.published = False
+        self.fail_cleanup = False
 
     async def get_index(self, _: str) -> ActiveIndex:
         return EXPECTED
@@ -93,9 +101,10 @@ class FakeDatabase:
             raise RuntimeError("database detail must not escape")
         self.replaced.append(item.source_path)
 
-    async def complete_incremental(self, *args: object) -> None:
+    async def complete_incremental(self, *args: object) -> list[str]:
         self.completed = True
         self.completed_args = args
+        return ["old-index"]
 
     async def publish_full_rebuild(self, *_: object) -> list[str]:
         self.published = True
@@ -105,6 +114,8 @@ class FakeDatabase:
         self.failures.append((args, kwargs))
 
     async def cleanup_superseded(self, _: list[str]) -> None:
+        if self.fail_cleanup:
+            raise RuntimeError("cleanup detail must not escape")
         return None
 
 
@@ -122,16 +133,102 @@ def lifecycle(database: FakeDatabase, probe: FakeProbe, scanner: FakeScanner) ->
 
 
 class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_cancelled_run_is_marked_terminal(self) -> None:
+        """F-253 (R7-D10A-01): a cancelled run left a permanent RUNNING row.
+
+        The owner-connection termination handler cancels the run task, and
+        `asyncio.CancelledError` derives from `BaseException`, so the
+        lifecycle's `except Exception` arm never ran. The partial unique
+        index then refused every later run and the violation surfaced as a
+        503 "database unavailable" until the process restarted.
+        """
+
+        item = source("cancel", "digest")
+        database = FakeDatabase()
+        probe = FakeProbe([MATCHING])
+        started = asyncio.Event()
+
+        async def slow_embed(*_args: object, **_kwargs: object) -> list[list[float]]:
+            started.set()
+            await asyncio.sleep(30)
+            return [[0.0] * 1024]
+
+        probe.embed = slow_embed  # type: ignore[method-assign]
+        instance = lifecycle(database, probe, FakeScanner(item))
+        task = asyncio.create_task(
+            instance.execute(
+                AcceptedIndexRun("run-1", "index-1", "INCREMENTAL", "RUNNING")
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(database.failures, "a cancelled run must be recorded")
+        self.assertEqual(database.failures[0][0][1], "INDEX_RUN_INTERRUPTED")
+
+    async def test_a_failed_cleanup_leaves_an_attributable_record(self) -> None:
+        """F-101 (R5-E01-05): the module had no logging facility at all.
+
+        A failed cleanup was swallowed, so the owner saw silent Postgres
+        growth and an unattributable 500 with nothing to read afterwards.
+        """
+
+        database = FakeDatabase()
+        database.fail_cleanup = True
+        instance = lifecycle(database, FakeProbe([MATCHING]), FakeScanner())
+
+        with self.assertLogs("app.index_lifecycle", level="ERROR") as captured:
+            await instance.cleanup(["old-index"])
+
+        joined = "\n".join(captured.output)
+        self.assertIn("CLEANUP_FAILED", joined)
+        self.assertIn("old-index", joined)
+
+    async def test_a_directory_scoped_failure_keeps_its_location(self) -> None:
+        """F-307 (R7-E1-02): the class that needs locating lost its location.
+
+        A directory-scoped read failure had its path nulled, so two of them
+        collapsed into one reported error and the operator was told a
+        directory failed without being told which one.
+        """
+
+        database = FakeDatabase()
+        scan_error = MarkdownValidationError(
+            "01. Knowledge/AI", "SOURCE_READ_FAILED", "directory"
+        )
+
+        class FailingScanner:
+            def scan_vault(
+                self, _: Path, *, include_valid_sources_on_error: bool = False
+            ) -> MarkdownScanResult:
+                return MarkdownScanResult(False, 1, 0, (), (scan_error,))
+
+        instance = lifecycle(database, FakeProbe([MATCHING]), FailingScanner())
+
+        await instance.execute(
+            AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
+        )
+
+        recorded = database.failures[0][0][2]
+        self.assertEqual(recorded[0].source_path, "01. Knowledge/AI")
+        self.assertEqual(recorded[0].code, "SOURCE_READ_FAILED")
+
     async def test_incremental_model_drift_after_embedding_stops_the_run(self) -> None:
         item = source("drift", "new")
         database = FakeDatabase()
-        probe = FakeProbe([MATCHING, DRIFTED])
+        # M11/T1-R1 3.4: the per-source identity probe is sampled once, after
+        # embedding and before publication, so the first script entry is the
+        # drift the run must catch.
+        probe = FakeProbe([DRIFTED])
 
         result = await lifecycle(database, probe, FakeScanner(item)).execute(
             AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
         )
 
         self.assertEqual(result, [])
+        self.assertEqual(database.replaced, [])
         self.assertFalse(database.completed)
         self.assertEqual(database.failures[0][0][1], "EMBEDDING_MODEL_DRIFT")
         self.assertEqual(database.failures[0][0][5], 0)
@@ -181,6 +278,76 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
             {"MARKDOWN": (1, 1, 0), "PDF": (0, 0, 0)},
         )
 
+    async def test_incremental_success_returns_superseded_ids_for_cleanup(self) -> None:
+        item = source("newdoc", "new")
+        database = FakeDatabase({"01. Knowledge/AI/removed.md": "old"})
+
+        result = await lifecycle(database, FakeProbe([MATCHING]), FakeScanner(item)).execute(
+            AcceptedIndexRun("run-1", "shadow-index", "INCREMENTAL", "RUNNING")
+        )
+
+        self.assertEqual(result, ["old-index"])
+        self.assertTrue(database.completed)
+        stale_paths = database.completed_args[3]
+        self.assertEqual(stale_paths, {"01. Knowledge/AI/removed.md"})
+
+    async def test_oversized_pdf_sidecar_cannot_delete_its_indexed_pdf(self) -> None:
+        item = source("unchanged", "same")
+        pdf_path = "02. Books/supply/book.pdf"
+        sidecar_path = "02. Books/supply/book.md"
+        database = FakeDatabase({item.source_path: item.sha256, pdf_path: "old-pdf-digest"})
+        scanner = FakeScanner(item)
+        probe = FakeProbe([MATCHING])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary)
+            (vault / "01. Knowledge").mkdir()
+            (vault / "02. Books" / "supply").mkdir(parents=True)
+            (vault / pdf_path).write_bytes(b"%PDF-intact")
+            (vault / sidecar_path).write_text("oversized sidecar", encoding="utf-8")
+            instance = IndexLifecycle(
+                LifecycleDependencies(
+                    database=database,  # type: ignore[arg-type]
+                    model_probe=probe,  # type: ignore[arg-type]
+                    scanner=scanner,  # type: ignore[arg-type]
+                    vault_root=vault,
+                    embedding_model="bge-m3:latest",
+                    embedding_dimensions=1024,
+                    pdf_builder=object(),  # type: ignore[arg-type]
+                    pdf_processing_identity=lambda _: "processing-identity",
+                )
+            )
+
+            with patch("app.pdf_foundation.MAX_SIDECAR_BYTES", 8):
+                await instance.execute(
+                    AcceptedIndexRun("run-1", EXPECTED.id, "INCREMENTAL", "RUNNING")
+                )
+
+            self.assertTrue((vault / pdf_path).is_file(), "the source PDF remains intact")
+
+        self.assertFalse(
+            database.completed,
+            "an incomplete PDF manifest must never be used to delete indexed PDFs",
+        )
+        self.assertTrue(database.failures)
+        failure = database.failures[0][0]
+        self.assertEqual(failure[1], "SCAN_FAILED")
+        self.assertEqual(failure[2][0].code, "PDF_SIDECAR_TOO_LARGE")
+        self.assertEqual(failure[2][0].source_path, sidecar_path)
+
+    async def test_incremental_failure_fails_the_shadow_index(self) -> None:
+        item = source("drift", "new")
+        database = FakeDatabase()
+        probe = FakeProbe([DRIFTED])
+
+        result = await lifecycle(database, probe, FakeScanner(item)).execute(
+            AcceptedIndexRun("run-1", "shadow-index", "INCREMENTAL", "RUNNING")
+        )
+
+        self.assertEqual(result, [])
+        self.assertFalse(database.completed)
+        self.assertTrue(database.failures[0][1]["fail_index"])
+
     async def test_incremental_commits_valid_sources_but_defers_deletion_on_parse_error(self) -> None:
         healthy = source("healthy", "new")
         scanner = FakeScanner(healthy)
@@ -225,10 +392,11 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_identity_drift_blocks_full_rebuild_publication(self) -> None:
         item = source("valid", "new")
         database = FakeDatabase()
+        probe = FakeProbe([MATCHING, DRIFTED])
 
         await lifecycle(
             database,
-            FakeProbe([MATCHING, MATCHING, DRIFTED]),
+            probe,
             FakeScanner(item),
         ).execute(AcceptedIndexRun("run-1", EXPECTED.id, "FULL_REBUILD", "RUNNING"))
 
@@ -236,6 +404,11 @@ class IndexLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(database.published)
         self.assertEqual(database.failures[0][0][1], "EMBEDDING_MODEL_DRIFT")
         self.assertTrue(database.failures[0][1]["fail_index"])
+        # M11/T1-R1 3.4: one sample brackets each document (post-embed, before
+        # publication) plus the run-level final gate. Two documents used to cost
+        # three probes here because a pre-embed sample duplicated the previous
+        # source's post-embed check.
+        self.assertEqual(probe.resolve_calls, 2)
 
     async def test_empty_full_rebuild_still_runs_final_identity_gate(self) -> None:
         database = FakeDatabase()

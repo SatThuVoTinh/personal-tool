@@ -4,11 +4,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import governancePlugin from "../integrations/openclaw/plugins/zink-governance/index.mjs";
-import { installNativeToolGate } from "../integrations/openclaw/topology/lib/native-boundary.mjs";
+import {
+  installNativeToolGate,
+  POLICY_REFUSAL_TEXT,
+} from "../integrations/openclaw/topology/lib/native-boundary.mjs";
 import {
   resolveN8nInvocation,
   bindInvocationApproval,
   whenGovernanceDependenciesReady,
+  computeGovernanceReadiness,
+  resolveSharedGovernanceModulePath,
 } from "../integrations/openclaw/topology/lib/guard.mjs";
 import {
   ensureLedger,
@@ -34,6 +39,26 @@ const nextMessageId = () => String(snowflake++);
 
 function fixture() {
   return mkdtempSync(path.join(os.tmpdir(), "lane-n8n-"));
+}
+
+/**
+ * M12/T9 F-320: the native gate hands the host ONE operator-facing sentence
+ * (`POLICY_REFUSAL_TEXT`) for every refusal, and sends the canonical reason
+ * code to the diagnostic channel. A case that only asserts the sentence
+ * therefore proves that SOMETHING refused the call, never WHICH rule fired, so
+ * this helper captures the diagnostic channel for the assertion that names the
+ * rule the case is titled after.
+ */
+async function withDiagnostics(fn) {
+  const original = console.error;
+  const lines = [];
+  console.error = (...args) => lines.push(args.join(" "));
+  try {
+    await fn();
+  } finally {
+    console.error = original;
+  }
+  return lines.join("\n");
 }
 
 function briefNode(agentId) {
@@ -306,15 +331,23 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
     try {
       n8nLiveDelegation(root);
       const agent = await liveGate(root, "o2", "o2-session-1", "o2-run-1");
-      const decision = await agent.beforeToolCall(
-        liveCall("totally-unknown-flow"),
-        SIGNAL,
-      );
+      let decision;
+      const diagnostics = await withDiagnostics(async () => {
+        decision = await agent.beforeToolCall(
+          liveCall("totally-unknown-flow"),
+          SIGNAL,
+        );
+      });
       assert.equal(decision.block, true);
       assert.equal(
         decision.reason,
-        "RUNTIME_CAPABILITY_MISMATCH",
+        POLICY_REFUSAL_TEXT,
         "an unregistered workflow id must be a capability mismatch",
+      );
+      assert.match(
+        diagnostics,
+        /RUNTIME_CAPABILITY_MISMATCH/u,
+        "the titled rule must be the one that fired, not merely some refusal",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -327,12 +360,20 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
       n8nLiveDelegation(root);
       const agent = await liveGate(root, "o2", "o2-session-1", "o2-run-1");
       for (const id of Object.keys(N8N_WORKFLOW_REGISTRY)) {
-        const decision = await agent.beforeToolCall(liveCall(id), SIGNAL);
+        let decision;
+        const diagnostics = await withDiagnostics(async () => {
+          decision = await agent.beforeToolCall(liveCall(id), SIGNAL);
+        });
         assert.equal(decision.block, true, `${id} must be refused`);
         assert.equal(
           decision.reason,
-          "AUTH_APPROVAL_REQUIRED",
+          POLICY_REFUSAL_TEXT,
           `${id} must require a bound approval`,
+        );
+        assert.match(
+          diagnostics,
+          /AUTH_APPROVAL_REQUIRED/u,
+          `${id} must be refused for the missing approval, not by another rule`,
         );
       }
     } finally {
@@ -350,12 +391,20 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
         "1234",
         "11111111-1111-4111-8111-111111111111",
       ]) {
-        const decision = await agent.beforeToolCall(
-          liveCall("data_plant_ingest", { approval_id: approvalId }),
-          SIGNAL,
-        );
+        let decision;
+        const diagnostics = await withDiagnostics(async () => {
+          decision = await agent.beforeToolCall(
+            liveCall("data_plant_ingest", { approval_id: approvalId }),
+            SIGNAL,
+          );
+        });
         assert.equal(decision.block, true, approvalId);
-        assert.equal(decision.reason, "AUTH_APPROVAL_INVALID", approvalId);
+        assert.equal(decision.reason, POLICY_REFUSAL_TEXT, approvalId);
+        assert.match(
+          diagnostics,
+          /AUTH_APPROVAL_INVALID/u,
+          `${approvalId} must be refused as an invalid approval, not by another rule`,
+        );
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -375,12 +424,24 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
         "python-session-1",
         "python-run-1",
       );
-      const decision = await agent.beforeToolCall(
-        liveCall("data_plant_ingest"),
-        SIGNAL,
-      );
+      let decision;
+      const diagnostics = await withDiagnostics(async () => {
+        decision = await agent.beforeToolCall(
+          liveCall("data_plant_ingest"),
+          SIGNAL,
+        );
+      });
+      // The refusal is unchanged; the reason the host receives is NOT. M10/T2-R8:
+      // the host writes a block reason into the tool result the MODEL reads, so
+      // the model-visible reason is a plain refusal and the canonical
+      // AUTH_DELEGATION_NOT_FOUND code stays in the diagnostic channel.
       assert.equal(decision.block, true);
-      assert.equal(decision.reason, "AUTH_DELEGATION_NOT_FOUND");
+      assert.equal(decision.reason, POLICY_REFUSAL_TEXT);
+      assert.match(
+        diagnostics,
+        /AUTH_DELEGATION_NOT_FOUND/u,
+        "the delegation rule must be the one that fired",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -391,11 +452,19 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
     try {
       n8nLiveDelegation(root);
       const agent = await liveGate(root, "main", "main-session", "main-run");
-      const decision = await agent.beforeToolCall(
-        liveCall("data_plant_ingest"),
-        SIGNAL,
-      );
+      let decision;
+      const diagnostics = await withDiagnostics(async () => {
+        decision = await agent.beforeToolCall(
+          liveCall("data_plant_ingest"),
+          SIGNAL,
+        );
+      });
       assert.equal(decision.block, true);
+      assert.match(
+        diagnostics,
+        /DELEGATION_REQUIRED/u,
+        "a root session has no delegation, and that is the rule that must fire",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -410,12 +479,20 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
         ["o2-session-1", "not-a-run"],
       ]) {
         const agent = await liveGate(root, "o2", sessionKey, runId);
-        const decision = await agent.beforeToolCall(
-          liveCall("data_plant_ingest"),
-          SIGNAL,
-        );
+        let decision;
+        const diagnostics = await withDiagnostics(async () => {
+          decision = await agent.beforeToolCall(
+            liveCall("data_plant_ingest"),
+            SIGNAL,
+          );
+        });
         assert.equal(decision.block, true, `${sessionKey}/${runId}`);
-        assert.equal(decision.reason, "AUTH_DELEGATION_NOT_FOUND");
+        assert.equal(decision.reason, POLICY_REFUSAL_TEXT);
+        assert.match(
+          diagnostics,
+          /AUTH_DELEGATION_NOT_FOUND/u,
+          `${sessionKey}/${runId} must be refused by the delegation rule`,
+        );
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -456,5 +533,64 @@ describe("M7-006 — the live n8n path enforces the canonical controls", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-024 — two resolvers for the same governance dependencies
+// disagreed, and the live one pointed at an incomplete hand-seeded tree.
+//
+// The readiness flag used to be set UNCONDITIONALLY, so `ready: true` was
+// reported while the SQL validator was still null and the guard-gated tools
+// failed closed as GOVERNANCE_DEPENDENCY_MISSING.
+// =========================================================================
+describe("M12/T9 F-024 — one resolver, and a readiness flag that means something", () => {
+  it("F-024: ready is exactly the conjunction of the three loaded modules", async () => {
+    const status = await whenGovernanceDependenciesReady();
+    assert.equal(
+      status.ready,
+      status.pathSafetyLoaded === true &&
+        status.sqlLoaded === true &&
+        status.n8nLoaded === true,
+      "ready must be the conjunction of the three loaded flags",
+    );
+    // The rule itself, provable without a broken installation.
+    assert.equal(
+      computeGovernanceReadiness({
+        pathSafetyLoaded: true,
+        sqlLoaded: true,
+        n8nLoaded: true,
+      }),
+      true,
+    );
+    for (const missing of ["pathSafetyLoaded", "sqlLoaded", "n8nLoaded"]) {
+      const flags = {
+        pathSafetyLoaded: true,
+        sqlLoaded: true,
+        n8nLoaded: true,
+        [missing]: false,
+      };
+      assert.equal(
+        computeGovernanceReadiness(flags),
+        false,
+        `a missing ${missing} must NOT be reported as ready`,
+      );
+    }
+  });
+
+  it("F-024: the shared module resolves to ONE file, not a second copy", () => {
+    const resolved = resolveSharedGovernanceModulePath(
+      "zink-tools/sql/validator.mjs",
+    );
+    assert.ok(resolved, "the shared SQL validator must resolve");
+    assert.match(resolved, /zink-tools[\\/]sql[\\/]validator\.mjs$/u);
+    // The same resolver, asked with the repository root, must land on the
+    // SAME file — one mechanism, one copy.
+    assert.equal(
+      resolveSharedGovernanceModulePath("zink-tools/sql/validator.mjs", {
+        roots: [process.cwd()],
+      }),
+      resolved,
+    );
   });
 });

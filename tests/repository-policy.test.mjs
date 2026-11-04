@@ -1,19 +1,41 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   checkCommandDefinitions,
+  checkDocumentedScriptsAreCovered,
+  checkFindingsRegister,
+  checkFormatGlobQuoting,
+  checkGateRegistry,
   checkGitWhitespace,
+  checkNestedGeneratedTreesIgnored,
+  checkNoEmptyScriptCategory,
+  checkRegisterCitations,
   checkRequiredFiles,
+  checkSecretScanAllowlist,
+  checkTestListReconciliation,
   checkTrackedFilePolicies,
   checkWorkflowDefinitions,
   checkWorkingTreeTextPolicy,
+  collectRepositoryFailures,
   listTrackedFiles,
 } from "../scripts/repository-policy.mjs";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function withTemporaryRepository(callback) {
   const repositoryRoot = mkdtempSync(
@@ -81,6 +103,37 @@ jobs:
           test "$(npm --version)" = "12.0.2"
       - run: npm ci
       - run: npm run verify
+  python-quality:
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - run: pip install --disable-pip-version-check "uv==0.12.5"
+      - run: python -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - working-directory: \${{ runner.temp }}
+        run: npm install --global npm@12.0.2
+      - run: |
+          test "$(node --version)" = "v24.15.0"
+          test "$(npm --version)" = "12.0.2"
+      - name: Fetch pinned tokenizer
+        run: |
+          mkdir -p "\${{ runner.temp }}/knowledge-artifacts"
+          curl --fail --location --silent --show-error \
+            --output "\${{ runner.temp }}/knowledge-artifacts/tokenizer.json" \
+            "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json"
+          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  \${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict
+      - working-directory: apps/knowledge
+        run: uv sync --locked
+      - env:
+          KNOWLEDGE_TOKENIZER_PATH: \${{ runner.temp }}/knowledge-artifacts/tokenizer.json
+        run: npm run test:knowledge
 `;
 
 const VALID_SECURITY_WORKFLOW = `name: Security
@@ -89,7 +142,6 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
@@ -124,13 +176,22 @@ jobs:
         env:
           GITHUB_TOKEN: \${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
 `;
 
 function writeValidWorkflows(repositoryRoot) {
   writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
   writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
 }
+
+// The two Knowledgebase steps the golden fixture carries, named so the
+// mutation cases below cannot drift away from the fixture they mutate.
+const KNOWLEDGE_SUITE_STEP =
+  "      - env:\n" +
+  "          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json\n" +
+  "        run: npm run test:knowledge\n";
+const UV_SYNC_STEP =
+  "      - working-directory: apps/knowledge\n        run: uv sync --locked\n";
 
 test("rejects a tracked .env file", () => {
   withTemporaryRepository((repositoryRoot) => {
@@ -140,6 +201,47 @@ test("rejects a tracked .env file", () => {
       "Tracked sensitive file is not allowlisted: .env",
     ]);
   });
+});
+
+// F-521 (legacy `R10-L09-5`): `.gitignore:2-5` declares the whole `.env.*`
+// family "Secrets and machine-specific environment files", but `isSensitivePath`
+// compared the basename against `.env` exactly, so a force-added
+// `.env.production` passed `repo:check` by name.
+test("F-521: refuses the .env.* family while the declared templates stay allowed", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    for (const name of [
+      ".env.production",
+      ".env.local",
+      "infrastructure/docker/env/.env.staging",
+    ]) {
+      writeTrackedFile(
+        repositoryRoot,
+        name,
+        "POSTGRES_PASSWORD=not-a-real-secret\n",
+      );
+    }
+    const failures = checkTrackedFilePolicies(listTrackedFiles(repositoryRoot));
+    for (const name of [
+      ".env.production",
+      ".env.local",
+      "infrastructure/docker/env/.env.staging",
+    ]) {
+      assert.ok(
+        failures.includes(`Tracked sensitive file is not allowlisted: ${name}`),
+        `the .env.* family must be refused by name: ${JSON.stringify(failures)}`,
+      );
+    }
+  });
+  // The templates the allowlist already names must not become refused: the
+  // family clause may only widen the guard, never silence a declared template.
+  assert.deepEqual(
+    checkTrackedFilePolicies([
+      ".env.example",
+      ".env.template",
+      "infrastructure/docker/env/.env.example",
+    ]),
+    [],
+  );
 });
 
 test("rejects a tracked runtime license artifact", () => {
@@ -229,6 +331,8 @@ test("rejects placeholder-like npm scripts and Make targets", () => {
         "format:check": "true",
         lint: "TODO",
         test: "node --test",
+        "test:knowledge":
+          "uv run --directory apps/knowledge --locked python -m pytest tests -q",
         "repo:check": "node scripts/repository-check.mjs",
         verify: "npm run verify",
       },
@@ -244,6 +348,302 @@ test("rejects placeholder-like npm scripts and Make targets", () => {
   assert.ok(
     failures.some((failure) =>
       failure.includes("Make target install must run npm ci."),
+    ),
+  );
+});
+
+const gateRegistryTable = (names) =>
+  [
+    "| Script | What it checks | Where it runs | NOT RUN condition |",
+    "| --- | --- | --- | --- |",
+    ...names.map((name) => `| \`${name}\` | d | w | n |`),
+  ].join("\n");
+
+test("the gate registry and the npm scripts must be the same set", () => {
+  const scripts = { format: "prettier --write x", test: "node --test" };
+  const packageJson = { scripts };
+
+  assert.deepEqual(
+    checkGateRegistry(packageJson, gateRegistryTable(["format", "test"])),
+    [],
+  );
+
+  const missingRow = checkGateRegistry(
+    packageJson,
+    gateRegistryTable(["test"]),
+  );
+  assert.equal(missingRow.length, 1);
+  assert.match(missingRow[0], /format/);
+
+  const inventedRow = checkGateRegistry(
+    packageJson,
+    gateRegistryTable(["format", "test", "release"]),
+  );
+  assert.equal(inventedRow.length, 1);
+  assert.match(inventedRow[0], /release/);
+});
+
+test("the shipped gate registry enumerates every shipped npm script", () => {
+  const registry = readFileSync(
+    path.join(REPO_ROOT, "docs", "development", "conventions.md"),
+    "utf8",
+  );
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  // Rows may enumerate a blocking CI surface (an action or a script the
+  // workflow invokes) instead of an npm script, so the pass needs the
+  // workflows as its operand; without them every such row reads as invented.
+  const workflowTexts = {
+    ci: readFileSync(
+      path.join(REPO_ROOT, ".github", "workflows", "ci.yml"),
+      "utf8",
+    ),
+    security: readFileSync(
+      path.join(REPO_ROOT, ".github", "workflows", "security.yml"),
+      "utf8",
+    ),
+    gitleaksConfig: existsSync(path.join(REPO_ROOT, ".gitleaks.toml")),
+  };
+  assert.deepEqual(checkGateRegistry(packageJson, registry, workflowTexts), []);
+});
+
+test("test:m8 and rehearse:r16 are required scripts, not undocumented ones", () => {
+  const failures = checkCommandDefinitions(
+    {
+      scripts: {
+        format: "prettier --write README.md",
+        "format:check": "prettier --check README.md",
+        lint: "eslint . && markdownlint-cli2",
+        test: "node --test tests/a.test.mjs",
+        "test:knowledge": "uv run pytest",
+        "repo:check": "node scripts/repository-check.mjs",
+        verify: "npm run format:check && npm run lint && npm test",
+      },
+    },
+    "install:\n\tnpm ci\n",
+  );
+  assert.ok(
+    failures.some((failure) => failure.includes("test:m8")),
+    `expected a required-script failure for test:m8, got: ${failures.join(" | ")}`,
+  );
+  assert.ok(
+    failures.some((failure) => failure.includes("rehearse:r16")),
+    `expected a required-script failure for rehearse:r16, got: ${failures.join(" | ")}`,
+  );
+});
+
+test("requires a blocking Knowledgebase Python job in CI", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(/^ {2}python-quality:[\s\S]*$/mu, ""),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("missing job python-quality"),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "  python-quality:\n",
+        "  python-quality:\n    continue-on-error: true\n",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must block on failure"),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        KNOWLEDGE_SUITE_STEP,
+        KNOWLEDGE_SUITE_STEP.replace(
+          "        run: npm run test:knowledge\n",
+          "        run: npm run test:knowledge\n        continue-on-error: true\n",
+        ),
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) => failure.includes("must block on failure")),
+    );
+  });
+});
+
+test("rejects a CI job that drops or reorders the Knowledgebase suite", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(KNOWLEDGE_SUITE_STEP, ""),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must contain executable command `npm run test:knowledge`",
+        ),
+      ),
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        UV_SYNC_STEP,
+        KNOWLEDGE_SUITE_STEP + UV_SYNC_STEP,
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must appear in the required order"),
+      ),
+    );
+  });
+});
+
+test("rejects pulling the pdf-runtime closure into the Python CI job", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeWorkflow(
+      repositoryRoot,
+      "ci.yml",
+      VALID_CI_WORKFLOW.replace(
+        "        run: uv sync --locked",
+        "        run: uv sync --locked --directory pdf-runtime",
+      ),
+    );
+    writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes("must not install the pdf-runtime closure"),
+      ),
+    );
+  });
+});
+
+test("rejects a verify gate that deviates from the documented Node stage order", () => {
+  const validScripts = {
+    format: "prettier --write README.md",
+    "format:check": "prettier --check README.md",
+    lint: "eslint scripts",
+    test: "node --test tests",
+    "test:knowledge":
+      "uv run --directory apps/knowledge --locked python -m pytest tests -q",
+    "repo:check": "node scripts/repository-check.mjs",
+  };
+  const verifyFailures = (verify) =>
+    checkCommandDefinitions(
+      { scripts: { ...validScripts, verify } },
+      "install:\n\tnpm ci\n",
+    ).filter((failure) => failure.includes("verify must run the documented"));
+
+  assert.deepEqual(
+    verifyFailures(
+      "npm run format:check && npm run lint && npm test && npm run repo:check",
+    ),
+    [],
+  );
+
+  for (const verify of [
+    // A missing stage silently shrinks the gate.
+    "npm run format:check && npm run lint && npm test",
+    "npm run lint && npm test && npm run repo:check",
+    // Reordering defeats the fail-fast ordering.
+    "npm run format:check && npm run repo:check && npm run lint && npm test",
+    // The Python tier has one named executor per environment; folding it back in
+    // would make every `verify` job depend on the Python toolchain.
+    "npm run format:check && npm run lint && npm test && npm run test:knowledge && npm run repo:check",
+  ]) {
+    assert.equal(verifyFailures(verify).length, 1, verify);
+  }
+});
+
+test("requires exactly one CI executor for the Knowledgebase Python suite", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    assert.deepEqual(checkWorkflowDefinitions(repositoryRoot), []);
+  });
+
+  // Duplicating the suite (the shape that made `CI / quality-gate` unrunnable:
+  // `verify` reached `uv run` in a job that provisions only Node).
+  const duplicated = VALID_CI_WORKFLOW.replace(
+    "      - run: npm ci\n      - run: npm run verify",
+    "      - run: npm ci\n      - run: npm run test:knowledge\n      - run: npm run verify",
+  );
+  assert.notEqual(duplicated, VALID_CI_WORKFLOW);
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    writeWorkflow(repositoryRoot, "ci.yml", duplicated);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must be executed exactly once, by job python-quality",
+        ),
+      ),
+    );
+  });
+
+  // Moving the suite to a job that is not the designated owner.
+  const misplaced = VALID_CI_WORKFLOW.replace(KNOWLEDGE_SUITE_STEP, "").replace(
+    "      - run: npm run verify",
+    "      - run: npm run test:knowledge\n      - run: npm run verify",
+  );
+  withTemporaryDirectory((repositoryRoot) => {
+    writeValidWorkflows(repositoryRoot);
+    writeWorkflow(repositoryRoot, "ci.yml", misplaced);
+    assert.ok(
+      checkWorkflowDefinitions(repositoryRoot).some((failure) =>
+        failure.includes(
+          "must be executed exactly once, by job python-quality",
+        ),
+      ),
+    );
+  });
+});
+
+test("requires a Knowledgebase Python test script and Make target", () => {
+  const failures = checkCommandDefinitions(
+    {
+      scripts: {
+        format: "prettier --write README.md",
+        "format:check": "prettier --check README.md",
+        lint: "eslint scripts",
+        test: "node --test tests",
+        "repo:check": "node scripts/repository-check.mjs",
+        verify:
+          "npm run format:check && npm run lint && npm test && npm run repo:check",
+      },
+    },
+    "install:\n\tnpm ci\n",
+  );
+
+  assert.ok(
+    failures.includes(
+      "npm script is missing or placeholder-like: test:knowledge",
+    ),
+  );
+  assert.ok(
+    failures.includes(
+      "Make target test-knowledge must run npm run test:knowledge.",
     ),
   );
 });
@@ -390,5 +790,1661 @@ test("rejects Gitleaks without full-history checkout or required flags", () => {
     assert.ok(
       failures.some((failure) => failure.includes("permissions.pull-requests")),
     );
+  });
+});
+
+test("accepts an npm test list that matches the test files on disk", () => {
+  assert.deepEqual(
+    checkTestListReconciliation(
+      { scripts: { test: "node --test tests/a.test.mjs tests/b.test.mjs" } },
+      ["tests/a.test.mjs", "tests/b.test.mjs"],
+    ),
+    [],
+  );
+});
+
+test("parses only test-file arguments out of the npm test command", () => {
+  assert.deepEqual(
+    checkTestListReconciliation(
+      {
+        scripts: {
+          test: "node --test --test-concurrency=1 tests/a.test.mjs",
+        },
+      },
+      ["tests/a.test.mjs"],
+    ),
+    [],
+  );
+});
+
+test("reports a test file that exists on disk but is not enumerated in npm test", () => {
+  const failures = checkTestListReconciliation(
+    { scripts: { test: "node --test tests/a.test.mjs" } },
+    ["tests/a.test.mjs", "tests/orphan.test.mjs"],
+  );
+  assert.equal(failures.length, 1, failures.join("; "));
+  assert.match(failures[0], /tests\/orphan\.test\.mjs/u);
+  assert.ok(!failures[0].includes("tests/a.test.mjs"));
+});
+
+test("reports an npm test entry that has no matching file on disk", () => {
+  const failures = checkTestListReconciliation(
+    { scripts: { test: "node --test tests/a.test.mjs tests/gone.test.mjs" } },
+    ["tests/a.test.mjs"],
+  );
+  assert.equal(failures.length, 1, failures.join("; "));
+  assert.match(failures[0], /tests\/gone\.test\.mjs/u);
+});
+
+test("the real npm test list matches the real tests directory", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  const testFiles = readdirSync(path.join(REPO_ROOT, "tests"))
+    .filter((name) => name.endsWith(".test.mjs"))
+    .map((name) => `tests/${name}`);
+  assert.deepEqual(
+    checkTestListReconciliation(packageJson, testFiles),
+    [],
+    "every test file on disk must be enumerated in the npm test script, and every " +
+      "enumerated entry must exist on disk",
+  );
+});
+
+test("repo:check itself refuses a test file the npm test script never names", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "package.json",
+      JSON.stringify({
+        scripts: { test: "node --test tests/listed.test.mjs" },
+      }),
+    );
+    writeTrackedFile(repositoryRoot, "Makefile", "# no targets under test\n");
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/listed.test.mjs",
+      'import test from "node:test";\ntest("listed", () => {});\n',
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/orphan.test.mjs",
+      'import test from "node:test";\ntest("orphan", () => {});\n',
+    );
+    const failures = collectRepositoryFailures(repositoryRoot);
+    assert.ok(
+      failures.some((failure) => failure.includes("tests/orphan.test.mjs")),
+      `repo:check must report the unlisted file; got: ${failures.join(" | ")}`,
+    );
+  });
+});
+
+test("reports a prettier glob the shell would expand before prettier sees it", () => {
+  const failures = checkFormatGlobQuoting({
+    scripts: { "format:check": "prettier --check tests/**/*.mjs docs/*.md" },
+  });
+  assert.equal(failures.length, 2, failures.join(" | "));
+  assert.match(failures[0], /tests\/\*\*\/\*\.mjs/u);
+  assert.match(failures[1], /docs\/\*\.md/u);
+});
+
+test("reports a single-quoted glob, because cmd.exe does not honour single quotes", () => {
+  const failures = checkFormatGlobQuoting({
+    scripts: { format: "prettier --write 'tests/**/*.mjs'" },
+  });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /double quotes/u);
+});
+
+test("accepts double-quoted globs and brace expansions", () => {
+  assert.deepEqual(
+    checkFormatGlobQuoting({
+      scripts: {
+        "format:check":
+          'prettier --check README.md "docs/**/*.md" ".github/workflows/*.{yml,yaml}"',
+        format: 'prettier --write "tests/**/*.mjs"',
+      },
+    }),
+    [],
+  );
+});
+
+test("the real format scripts quote every glob so CI expands them the same way Windows does", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  assert.deepEqual(
+    checkFormatGlobQuoting(packageJson),
+    [],
+    "an unquoted glob makes /bin/sh expand tests/**/*.mjs as tests/*/*.mjs, so the " +
+      "CI format gate checks one directory level and never sees the test files",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The secret scan: every branch, and a retained report
+// ---------------------------------------------------------------------------
+
+test("the secret scan must run on a push to any branch and publish its report", () => {
+  withTemporaryDirectory((repositoryRoot) => {
+    // A push trigger narrowed to a branch list leaves every task branch
+    // unscanned, so a credential committed to a branch reaches main through a
+    // merge without any lane ever having looked at the branch.
+    writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
+    writeWorkflow(
+      repositoryRoot,
+      "security.yml",
+      VALID_SECURITY_WORKFLOW.replace(
+        "  push:\n",
+        "  push:\n    branches: [main]\n",
+      ),
+    );
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("must run on a push to any branch"),
+      ),
+      `expected the narrowed push trigger to fail; got: ${failures.join(" | ")}`,
+    );
+  });
+
+  withTemporaryDirectory((repositoryRoot) => {
+    // Without the report artifact a "zero leaks" claim is a sentence in a
+    // plan file, not something anybody can look at.
+    writeWorkflow(repositoryRoot, "ci.yml", VALID_CI_WORKFLOW);
+    writeWorkflow(
+      repositoryRoot,
+      "security.yml",
+      VALID_SECURITY_WORKFLOW.replace(
+        '          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"',
+        '          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"',
+      ),
+    );
+    const failures = checkWorkflowDefinitions(repositoryRoot);
+    assert.ok(
+      failures.some((failure) =>
+        failure.includes("GITLEAKS_ENABLE_UPLOAD_ARTIFACT"),
+      ),
+      `expected the missing report artifact to fail; got: ${failures.join(" | ")}`,
+    );
+  });
+});
+
+test("the shipped security workflow scans every branch push and retains its report", () => {
+  const shipped = readFileSync(
+    path.join(REPO_ROOT, ".github", "workflows", "security.yml"),
+    "utf8",
+  );
+  assert.match(
+    shipped,
+    /^ {2}push:\n(?! {4}branches:)/mu,
+    "the secret scan must trigger on a push to any branch",
+  );
+  assert.match(
+    shipped,
+    /GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"/u,
+    "the secret scan must publish a retained report artifact",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The Knowledgebase Python job: the toolchain and the pinned tokenizer
+// ---------------------------------------------------------------------------
+
+test("the python-quality job must keep the toolchain and the pinned tokenizer", () => {
+  const pythonQualityBlock = VALID_CI_WORKFLOW.slice(
+    VALID_CI_WORKFLOW.indexOf("  python-quality:"),
+  );
+  const mutations = [
+    [
+      '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n        with:\n          node-version: "24.15.0"\n          package-manager-cache: false\n',
+      "",
+      "actions/setup-node",
+    ],
+    [
+      "      - working-directory: ${{ runner.temp }}\n        run: npm install --global npm@12.0.2\n",
+      "",
+      "npm@12.0.2 bootstrap",
+    ],
+    [
+      '      - run: |\n          test "$(node --version)" = "v24.15.0"\n          test "$(npm --version)" = "12.0.2"\n',
+      "",
+      "Node and npm versions",
+    ],
+    [
+      '          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  ${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict\n',
+      "",
+      "pinned tokenizer",
+    ],
+    [
+      "      - working-directory: apps/knowledge\n        run: uv sync --locked\n",
+      "      - run: uv sync --locked\n",
+      "working-directory apps/knowledge",
+    ],
+    [
+      "          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json\n",
+      "",
+      "KNOWLEDGE_TOKENIZER_PATH",
+    ],
+  ];
+
+  for (const [from, to, expected] of mutations) {
+    assert.ok(
+      pythonQualityBlock.includes(from),
+      `the golden fixture must carry: ${expected}`,
+    );
+    const mutatedBlock = pythonQualityBlock.replace(from, to);
+    assert.notEqual(mutatedBlock, pythonQualityBlock, expected);
+    const mutated = VALID_CI_WORKFLOW.replace(pythonQualityBlock, mutatedBlock);
+    withTemporaryDirectory((repositoryRoot) => {
+      writeWorkflow(repositoryRoot, "ci.yml", mutated);
+      writeWorkflow(repositoryRoot, "security.yml", VALID_SECURITY_WORKFLOW);
+      const failures = checkWorkflowDefinitions(repositoryRoot);
+      assert.ok(
+        failures.some((failure) => failure.includes(expected)),
+        `dropping ${expected} must fail the policy check; got: ${failures.join(" | ")}`,
+      );
+    });
+  }
+});
+
+test("the shipped CI workflow keeps the python-quality toolchain and tokenizer", () => {
+  const shipped = readFileSync(
+    path.join(REPO_ROOT, ".github", "workflows", "ci.yml"),
+    "utf8",
+  );
+  assert.match(shipped, /actions\/setup-node@249/u);
+  assert.match(shipped, /npm install --global npm@12\.0\.2/u);
+  assert.match(shipped, /sha256sum --check --strict/u);
+  assert.match(shipped, /KNOWLEDGE_TOKENIZER_PATH/u);
+  assert.match(shipped, /working-directory: apps\/knowledge/u);
+});
+
+// ---------------------------------------------------------------------------
+// The findings register: tracked, well-shaped, and never cited by a dead path
+// ---------------------------------------------------------------------------
+
+const REGISTER_ROW = [
+  "### F-001 — a row",
+  "",
+  "- Category: F1 — Logic & Functional Bugs",
+  "- Legacy register id: `R1-A01-01`",
+  "- Affected modules: something",
+  "- Severity: Medium",
+  "- Status: OPEN",
+  "- Root cause: because.",
+  "- Evidence: where.",
+  "- Reproduction: how.",
+  "- Acceptance criteria: what.",
+  "- Related findings: none.",
+  "",
+].join("\n");
+
+test("the findings register must carry the ten fields and a known status", () => {
+  assert.deepEqual(checkFindingsRegister(REGISTER_ROW), []);
+
+  const missingField = REGISTER_ROW.replace("- Root cause: because.\n", "");
+  assert.ok(
+    checkFindingsRegister(missingField).some((failure) =>
+      failure.includes('"Root cause:"'),
+    ),
+  );
+
+  const emptyField = REGISTER_ROW.replace("- Evidence: where.", "- Evidence:");
+  assert.ok(
+    checkFindingsRegister(emptyField).some((failure) =>
+      failure.includes('empty "Evidence:"'),
+    ),
+  );
+
+  const unknownStatus = REGISTER_ROW.replace(
+    "- Status: OPEN",
+    "- Status: DONE",
+  );
+  assert.ok(
+    checkFindingsRegister(unknownStatus).some((failure) =>
+      failure.includes("outside the register vocabulary"),
+    ),
+  );
+
+  const eleventhField = REGISTER_ROW.replace(
+    "- Related findings: none.",
+    "- Related findings: none.\n- Writer: somebody",
+  );
+  assert.ok(
+    checkFindingsRegister(eleventhField).some((failure) =>
+      failure.includes("a field the register does not define"),
+    ),
+    "an eleventh field is a row that drifted from the register shape",
+  );
+});
+
+test("the shipped findings register is well-shaped", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  assert.deepEqual(
+    checkFindingsRegister(register),
+    [],
+    "every register row must carry the ten fields and a status from the register vocabulary",
+  );
+});
+
+test("the findings register is tracked, so every row edit carries a commit", () => {
+  assert.ok(
+    listTrackedFiles(REPO_ROOT).includes("docs/execution/findings.md"),
+    "an untracked register gives every row edit no commit, no author and no diff",
+  );
+});
+
+test("a tracked document must not point at the retired register path alone", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/plan.md",
+      "The queue lives in .agents/states/findings.md.\n",
+    );
+    const failures = checkRegisterCitations(repositoryRoot, ["docs/plan.md"]);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /docs\/plan\.md/u);
+  });
+
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/plan.md",
+      "The queue moved: .agents/states/findings.md is now docs/execution/findings.md.\n",
+    );
+    assert.deepEqual(
+      checkRegisterCitations(repositoryRoot, ["docs/plan.md"]),
+      [],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The secret-scan allowlist scope, and the generated trees under a module
+// ---------------------------------------------------------------------------
+
+test("the secret-scan allowlist may only suppress the recorded scopes", () => {
+  const failures = checkSecretScanAllowlist(
+    REPO_ROOT,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
+});
+
+test("a tracked path outside every recorded scope must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''secretive/.*''' ]\n",
+    );
+    writeTrackedFile(repositoryRoot, "secretive/token.txt", "value\n");
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "secretive/token.txt",
+    ]);
+    // F-339: the allowlist is now read and bounded, so an unanchored pattern
+    // is reported for what it is (it matches paths its scope does not name),
+    // for being a scope no record names, and for every recorded scope it
+    // leaves without a pattern. The scope failure itself is still required.
+    assert.ok(
+      failures.some((failure) => /outside every recorded scope/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /is not anchored/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /no record names/u.test(failure)),
+      failures.join(" | "),
+    );
+    assert.ok(
+      failures.some((failure) => /has no allowlist pattern/u.test(failure)),
+      failures.join(" | "),
+    );
+  });
+});
+
+test("F-339: an anchored pattern that no record names must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''^secretive/.*''' ]\n",
+    );
+    writeTrackedFile(repositoryRoot, "secretive/token.txt", "value\n");
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "secretive/token.txt",
+    ]);
+    assert.ok(
+      failures.some((failure) => /no record names/u.test(failure)),
+      `an anchored pattern is still a scope nobody recorded: ${failures.join(" | ")}`,
+    );
+    assert.equal(
+      failures.some((failure) => /is not anchored/u.test(failure)),
+      false,
+      "an anchored pattern must not be reported as unanchored",
+    );
+  });
+});
+
+test("F-339: a fingerprint that names an untracked file must fail the policy check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      "[extend]\nuseDefault = true\n\n[allowlist]\npaths = [ '''^tests/.*''' ]\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      "d73f20cc5fd5fd14533b34e2840517c49b9989b1:gone/file.md:generic-api-key:142\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/keep.mjs",
+      "export const keep = 1;\n",
+    );
+    const failures = checkSecretScanAllowlist(repositoryRoot, [
+      "tests/keep.mjs",
+    ]);
+    assert.ok(
+      failures.some((failure) =>
+        /names a file the repository does not track/u.test(failure),
+      ),
+      `a recorded fingerprint must name a file the repository still tracks: ${failures.join(" | ")}`,
+    );
+  });
+});
+
+test("F-519: a fingerprint outside every recorded scope must be recorded in full", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaks.toml",
+      readFileSync(path.join(REPO_ROOT, ".gitleaks.toml"), "utf8"),
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/scope.test.mjs",
+      "export const scope = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "scripts/operator.mjs",
+      "export const operator = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+      "export const shipped = 1;\n",
+    );
+    const tracked = [
+      ".gitleaks.toml",
+      "tests/scope.test.mjs",
+      "scripts/operator.mjs",
+      "integrations/openclaw/plugins/zink-governance/index.mjs",
+    ];
+    const inScope =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tests/scope.test.mjs:discord-client-id:1";
+    const recorded =
+      "0e5a899b4b29482a4d927480a47175a5fd3b5616:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3647";
+    const unrecorded =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:scripts/operator.mjs:generic-api-key:9";
+
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      `${inScope}\n${recorded}\n${unrecorded}\n`,
+    );
+    const failures = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /scripts\/operator\.mjs/u);
+    assert.match(failures[0], /outside every recorded scope/u);
+
+    // All four coordinates: the recorded file at a different line is a
+    // different finding and must not pass on its file column alone.
+    writeTrackedFile(
+      repositoryRoot,
+      ".gitleaksignore",
+      `${recorded.replace(/:3647$/u, ":3648")}\n`,
+    );
+    const mismatched = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(mismatched.length, 1, mismatched.join(" | "));
+    assert.match(mismatched[0], /outside every recorded scope/u);
+
+    // The entry count is capped: a file that keeps growing is a suppressed set
+    // nobody reviews, even when every entry is inside a recorded scope.
+    const crowded = Array.from(
+      { length: 17 },
+      (_, index) =>
+        `cccccccccccccccccccccccccccccccccccccccc:tests/scope.test.mjs:discord-client-id:${index + 1}`,
+    ).join("\n");
+    writeTrackedFile(repositoryRoot, ".gitleaksignore", `${crowded}\n`);
+    const capped = checkSecretScanAllowlist(repositoryRoot, tracked);
+    assert.equal(capped.length, 1, capped.join(" | "));
+    assert.match(capped[0], /above the recorded ceiling/u);
+  });
+});
+
+test("F-339: the shipped allowlist is anchored and its scopes are recorded", () => {
+  const config = readFileSync(path.join(REPO_ROOT, ".gitleaks.toml"), "utf8");
+  const block = /\[allowlist\]([\s\S]*?)(?=\n\[|$)/u.exec(config);
+  assert.ok(block, "the shipped allowlist must have an [allowlist] block");
+  const patterns = [...block[1].matchAll(/'''([^']*)'''/gu)].map(
+    (match) => match[1],
+  );
+  assert.ok(patterns.length > 0, "the shipped allowlist must declare patterns");
+  for (const pattern of patterns) {
+    assert.ok(
+      pattern.startsWith("^"),
+      `the shipped allowlist pattern must be anchored: ${pattern}`,
+    );
+  }
+  // The suppressed set is exactly the recorded scopes: no tracked path is
+  // suppressed by a pattern that a record does not name, and every recorded
+  // scope is exercised.
+  const failures = checkSecretScanAllowlist(
+    REPO_ROOT,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
+});
+
+test("a generated tree under a module path must not be stageable", () => {
+  assert.deepEqual(
+    checkNestedGeneratedTreesIgnored(REPO_ROOT),
+    [],
+    "a nested capture is a live-state snapshot that can carry credential-derived material",
+  );
+});
+
+test("the trailing-whitespace gate defers to the editor-facing .editorconfig", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      ".editorconfig",
+      "root = true\n\n[*.md]\ntrim_trailing_whitespace = false\n",
+    );
+    writeTrackedFile(repositoryRoot, "note.md", "a hard break  \n");
+    assert.deepEqual(
+      checkWorkingTreeTextPolicy(repositoryRoot, ["note.md"]),
+      [],
+      "Markdown hard breaks are legal per .editorconfig, and the gate must defer to it",
+    );
+
+    writeTrackedFile(repositoryRoot, "code.mjs", "const x = 1;   \n");
+    assert.ok(
+      checkWorkingTreeTextPolicy(repositoryRoot, ["code.mjs"]).some((failure) =>
+        failure.includes("trailing whitespace"),
+      ),
+      "a file class the editorconfig does not exempt is still checked",
+    );
+  });
+});
+
+// =========================================================================
+// M12/T9 F-223 — the operator scripts the runbook tells the owner to run
+// lived outside every verify stage, and the repository advertised four script
+// categories it does not ship.
+//
+// The coverage rule is that a script a doc or a runbook cites is READ by at
+// least one file the `npm test` gate runs, and that the cited path exists.
+// The second rule is that a `scripts/` category directory carries tracked
+// content, so an empty advertised category cannot survive.
+// =========================================================================
+test("F-223: every script a document tells the operator to run is covered", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  const failures = checkDocumentedScriptsAreCovered(
+    REPO_ROOT,
+    packageJson,
+    listTrackedFiles(REPO_ROOT),
+  );
+  assert.deepEqual(failures, [], failures.join(" | "));
+});
+
+test("F-223: a cited script that no verify stage reads must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "infrastructure/docker/scripts/backup.ps1",
+      "Write-Output 'backup'\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/knowledge-platform.md",
+      "Run `infrastructure/docker/scripts/backup.ps1` first.\n",
+    );
+    const failures = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      [
+        "infrastructure/docker/scripts/backup.ps1",
+        "docs/runbooks/knowledge-platform.md",
+      ],
+    );
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /no verify stage reads/u);
+  });
+});
+
+test("F-223: a cited script that is not tracked must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/knowledge-platform.md",
+      "Run `powershell -File infrastructure/docker/scripts/phantom.ps1` first.\n",
+    );
+    const failures = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      ["docs/runbooks/knowledge-platform.md"],
+    );
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /not tracked/u);
+  });
+});
+
+test("F-223: an empty scripts category directory must fail the check", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    mkdirSync(path.join(repositoryRoot, "scripts", "verification"), {
+      recursive: true,
+    });
+    const failures = checkNoEmptyScriptCategory(repositoryRoot, [
+      "scripts/repository-check.mjs",
+    ]);
+    assert.equal(failures.length, 1, failures.join(" | "));
+    assert.match(failures[0], /carries no tracked file/u);
+  });
+});
+
+test("F-223: the shipped scripts tree carries no empty category", () => {
+  assert.deepEqual(
+    checkNoEmptyScriptCategory(REPO_ROOT, listTrackedFiles(REPO_ROOT)),
+    [],
+    "every advertised scripts/ category must carry tracked content",
+  );
+});
+
+// =========================================================================
+// M12/T9 F-138 — the Zink Tools provider adapters exceeded the declared
+// tool-ownership set, and nothing compared the two.
+//
+// The canonical boundary document lists the adapters the package exports; this
+// gate makes that list load-bearing, so an adapter that ships without being
+// declared is caught here instead of in a review.
+// =========================================================================
+test("F-138: every shipped Zink Tools adapter is declared in the boundary document", () => {
+  const boundaryPath = path.join(
+    REPO_ROOT,
+    "docs",
+    "architecture",
+    "zink-tools-boundaries.md",
+  );
+  const boundary = readFileSync(boundaryPath, "utf8").toLowerCase();
+  const adaptersDir = path.join(REPO_ROOT, "zink-tools", "adapters");
+  const declared = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith("-adapter.mjs")) {
+        declared.push(entry.name.replace(/-adapter\.mjs$/u, ""));
+      }
+    }
+  };
+  walk(adaptersDir);
+  assert.ok(declared.length > 0, "the package must export adapters");
+  for (const name of declared) {
+    assert.ok(
+      boundary.includes(name.toLowerCase()),
+      `the adapter "${name}" must be declared in docs/architecture/zink-tools-boundaries.md`,
+    );
+  }
+});
+
+// =========================================================================
+// M12/T9 — the governance layer and the working tree.
+//
+// The cases below are controls the findings asked for and that no lane
+// enforced yet. They read tracked files and the working tree, they never
+// write, and a case that flags a file reports the PATH and never the bytes
+// it found there.
+// =========================================================================
+
+// ---------------------------------------------------------------------------
+// F-038 — a credential literal in a repository-adjacent file
+//
+// A credential pasted into a script is a credential in source position: it
+// reaches every reader of the file, every `git add -A` of a directory that
+// happens to be ignored today, and every clone of a tree the script was
+// copied into. The shapes below are the Discord token and webhook forms.
+// ---------------------------------------------------------------------------
+const CREDENTIAL_LITERAL_SHAPES = [
+  {
+    name: "discord bot token",
+    pattern: /[0-9]{17,20}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{25,}/u,
+  },
+  {
+    name: "discord webhook url",
+    pattern: /discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]{25,}/u,
+  },
+];
+
+// Directories that carry no authored source: a credential literal cannot live
+// in a compiled artefact, and walking a virtualenv on every gate run costs
+// minutes for nothing.
+const CREDENTIAL_SCAN_SKIP_DIRECTORIES = new Set([
+  ".git",
+  ".venv",
+  "__pycache__",
+  "node_modules",
+]);
+
+const CREDENTIAL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
+
+function credentialLiteralScan(rootDirectory, { paths } = {}) {
+  if (paths === undefined) {
+    if (!existsSync(rootDirectory)) {
+      return {
+        status: "not-run",
+        reason: `the scan root ${path.basename(rootDirectory)}/ is absent on this host`,
+        enumerated: 0,
+        scanned: 0,
+        dropped: [],
+        hits: [],
+      };
+    }
+    paths = collectScannedFiles(rootDirectory);
+  }
+  const hits = [];
+  const dropped = [];
+  for (const filePath of paths) {
+    const relative = path.relative(rootDirectory, filePath) || filePath;
+    let stats;
+    try {
+      stats = statSync(filePath);
+    } catch {
+      dropped.push({ path: relative, reason: "the path could not be read" });
+      continue;
+    }
+    if (!stats.isFile()) {
+      dropped.push({
+        path: relative,
+        reason: "the path is not a regular file",
+      });
+      continue;
+    }
+    if (stats.size > CREDENTIAL_SCAN_MAX_BYTES) {
+      dropped.push({
+        path: relative,
+        reason: `the file is larger than ${CREDENTIAL_SCAN_MAX_BYTES} bytes`,
+      });
+      continue;
+    }
+    let contents;
+    try {
+      contents = readFileSync(filePath);
+    } catch {
+      dropped.push({ path: relative, reason: "the bytes could not be read" });
+      continue;
+    }
+    // A NUL byte means the file is not text, so the shapes cannot appear in
+    // it. The bytes were read all the same, so the file counts as scanned.
+    if (contents.includes(0)) continue;
+    const text = contents.toString("utf8");
+    for (const shape of CREDENTIAL_LITERAL_SHAPES) {
+      if (shape.pattern.test(text)) {
+        hits.push(`${relative} (${shape.name})`);
+        break;
+      }
+    }
+  }
+  return {
+    status: "scanned",
+    enumerated: paths.length,
+    scanned: paths.length - dropped.length,
+    dropped,
+    hits,
+  };
+}
+
+function collectScannedFiles(rootDirectory) {
+  const files = [];
+  const walk = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (CREDENTIAL_SCAN_SKIP_DIRECTORIES.has(entry.name)) continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(full);
+    }
+  };
+  walk(rootDirectory);
+  return files;
+}
+
+test("F-038: no credential literal exists in any tracked file", (t) => {
+  const tracked = listTrackedFiles(REPO_ROOT).map((relativePath) =>
+    path.join(REPO_ROOT, relativePath),
+  );
+  const result = credentialLiteralScan(REPO_ROOT, { paths: tracked });
+  t.diagnostic(
+    `credential scan denominator: enumerated ${result.enumerated}, scanned ${result.scanned}, dropped ${result.dropped.length}, hits ${result.hits.length}`,
+  );
+  assert.equal(result.status, "scanned");
+  assert.ok(result.enumerated > 0, "the tracked scan enumerated no file");
+  assert.equal(
+    result.scanned,
+    result.enumerated,
+    `the scan dropped files it never examined, so its green is a statement about intent: ${result.dropped
+      .map((entry) => `${entry.path} (${entry.reason})`)
+      .join(", ")}`,
+  );
+  assert.deepEqual(
+    result.hits,
+    [],
+    `a credential literal in source position is reachable by every reader of the file; remove it and rotate the credential: ${result.hits.join(", ")}`,
+  );
+});
+
+test("F-038: no credential literal exists in the local scratch directory", (t) => {
+  const scratch = path.join(REPO_ROOT, "scratch");
+  const result = credentialLiteralScan(scratch);
+  t.diagnostic(
+    `scratch credential scan: status ${result.status}, enumerated ${result.enumerated}, scanned ${result.scanned}, dropped ${result.dropped.length}`,
+  );
+  if (result.status === "not-run") {
+    // NOT RUN, recorded: the host state, not a completed scan, is the reason
+    // this case examined nothing. The reason is what makes the branch
+    // falsifiable - a bare return would leave no record at all.
+    assert.match(result.reason, /absent/u);
+    return;
+  }
+  assert.equal(
+    result.scanned,
+    result.enumerated,
+    `the scratch scan dropped files it never examined: ${result.dropped
+      .map((entry) => `${entry.path} (${entry.reason})`)
+      .join(", ")}`,
+  );
+  assert.deepEqual(
+    result.hits,
+    [],
+    `the scratch directory is repository-adjacent: a credential literal there is one ` +
+      `forced add away from history. Remove it and rotate the credential: ${result.hits.join(", ")}`,
+  );
+});
+
+test("F-482: the credential-literal scan publishes its denominator and records an absent root", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(repositoryRoot, "clean.txt", "no literal here\n");
+    const oversized = path.join(repositoryRoot, "oversized.txt");
+    writeFileSync(oversized, Buffer.alloc(CREDENTIAL_SCAN_MAX_BYTES + 1, 0x61));
+
+    const absent = credentialLiteralScan(path.join(repositoryRoot, "scratch"));
+    assert.equal(
+      absent.status,
+      "not-run",
+      "an absent root must be recorded, not reported as a completed scan",
+    );
+    assert.match(absent.reason, /absent/u);
+
+    const scan = credentialLiteralScan(repositoryRoot, {
+      paths: [path.join(repositoryRoot, "clean.txt"), oversized],
+    });
+    assert.equal(scan.enumerated, 2);
+    assert.equal(scan.scanned, 1);
+    assert.deepEqual(
+      scan.dropped.map((entry) => path.basename(entry.path)),
+      ["oversized.txt"],
+    );
+    assert.deepEqual(scan.hits, []);
+
+    const nonRegular = credentialLiteralScan(repositoryRoot, {
+      paths: [repositoryRoot],
+    });
+    assert.equal(nonRegular.scanned, 0);
+    assert.equal(nonRegular.dropped.length, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-137 — an ownerless top-level tree that duplicates a Zink Tools capability
+//
+// `models/forecast`, `models/optimization`, ... are the Zink Tools capability
+// paths under a different root. A tree an agent can write into and that no
+// canonical document owns is a surface with no contract behind it.
+// ---------------------------------------------------------------------------
+const LOCAL_WORKING_AREAS = new Set([
+  ".git",
+  ".tmp",
+  "node_modules",
+  "scratch",
+]);
+
+test("F-137: no ownerless top-level tree duplicates a Zink Tools capability name", () => {
+  const capabilityNames = new Set(
+    readdirSync(path.join(REPO_ROOT, "zink-tools"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+  assert.ok(
+    capabilityNames.size > 0,
+    "zink-tools must publish its capability paths",
+  );
+
+  const tracked = listTrackedFiles(REPO_ROOT);
+  const offenders = [];
+  for (const entry of readdirSync(REPO_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (LOCAL_WORKING_AREAS.has(entry.name)) continue;
+    const relative = `${entry.name}/`;
+    const carriesTrackedContent = tracked.some((file) =>
+      file.startsWith(relative),
+    );
+    if (carriesTrackedContent) continue;
+    const children = readdirSync(path.join(REPO_ROOT, entry.name), {
+      withFileTypes: true,
+    })
+      .filter((child) => child.isDirectory())
+      .map((child) => child.name);
+    const duplicates = [
+      ...(capabilityNames.has(entry.name) ? [entry.name] : []),
+      ...children.filter((child) => capabilityNames.has(child)),
+    ];
+    if (duplicates.length > 0) {
+      offenders.push(
+        `${entry.name}/ duplicates the Zink Tools capability path(s) ${duplicates.join(", ")} and no canonical document owns it`,
+      );
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `an ownerless top-level tree that duplicates a capability path is a surface with no contract behind it: ${offenders.join("; ")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-344 — an archive-cited legacy id that resolves to nothing
+//
+// The register keeps a `Legacy register id` so a row can be traced back to
+// the plan and the archived contracts. The other direction — an id an
+// archived contract cites, resolved against the live rows and the CLOSED
+// rows' history — is what keeps a closed row from drifting away from the
+// record.
+//
+// H10 (the owner's decision of 2026-10-21): the register is the OPEN queue,
+// and a closed row's history lives in `CHANGELOG.md`. The closure record
+// therefore moved with it, and the resolution below follows it there. The
+// promise is unchanged: every cited id must still resolve to a recorded
+// closure.
+// ---------------------------------------------------------------------------
+const LEGACY_REGISTER_ID = /R[0-9]+-[A-Z0-9]+-[0-9]+/gu;
+
+function registerLegacyIds(register) {
+  const ids = new Set();
+  for (const match of register.matchAll(
+    /^- Legacy register id:[ ]*`?([^`\n]+)`?/gmu,
+  )) {
+    for (const id of match[1].match(LEGACY_REGISTER_ID) ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+function recordedClosureIds(changelog) {
+  const ids = new Set();
+  for (const match of changelog.matchAll(/^-\s+\*\*`([^`]+)`\*\*/gmu)) {
+    for (const id of match[1].match(LEGACY_REGISTER_ID) ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+test("F-344: every legacy id an archived contract cites resolves to a register row, a recorded closure, or a PLAN.md anchor", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  const changelog = readFileSync(path.join(REPO_ROOT, "CHANGELOG.md"), "utf8");
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const live = registerLegacyIds(register);
+  const closed = recordedClosureIds(changelog);
+  const archiveDirectory = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "archive",
+  );
+  assert.ok(
+    existsSync(archiveDirectory),
+    "the execution-contract archive must exist",
+  );
+
+  const dangling = [];
+  for (const name of readdirSync(archiveDirectory)) {
+    if (!name.endsWith(".md")) continue;
+    const contents = readFileSync(path.join(archiveDirectory, name), "utf8");
+    for (const id of new Set(contents.match(LEGACY_REGISTER_ID) ?? [])) {
+      if (live.has(id) || closed.has(id) || plan.includes(id)) continue;
+      dangling.push(
+        `${id} (cited by docs/contracts/execution/archive/${name})`,
+      );
+    }
+  }
+  assert.deepEqual(
+    dangling,
+    [],
+    `an archived contract cites a legacy id that resolves to no register row, no recorded closure and no PLAN.md anchor: ${dangling.join(", ")}`,
+  );
+});
+
+test("F-344: the register states the direction its traceability promise actually holds", () => {
+  const register = readFileSync(
+    path.join(REPO_ROOT, "docs", "execution", "findings.md"),
+    "utf8",
+  );
+  const section1 = register.split(/^## 1\./mu)[1]?.split(/^## 2\./mu)[0] ?? "";
+  assert.match(
+    section1,
+    /Legacy register id/u,
+    "section 1 must state which field carries the legacy id",
+  );
+  assert.match(
+    section1,
+    /PLAN\.md/u,
+    "section 1 must name the durable records a row is traced back through",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-348 — the execution contract may only be deleted after it is archived
+//
+// `docs/contracts/execution/README.md` requires the contract to be copied
+// into `archive/` before the live file is deleted: the archived copy is the
+// only durable record of what was authorized. Nothing could notice a
+// delete-before-archive because the deleted file is Git-ignored.
+// ---------------------------------------------------------------------------
+function planRevisionOf(text) {
+  return /Plan Revision:[ ]*([A-Za-z0-9./-]+)/u.exec(text)?.[1] ?? null;
+}
+
+test("F-348: a deleted execution contract must have an archived copy of its Plan Revision", () => {
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const liveContract = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "ACTIVE.md",
+  );
+  const archiveDirectory = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "archive",
+  );
+  const archived = existsSync(archiveDirectory)
+    ? readdirSync(archiveDirectory).filter((name) => name.endsWith(".md"))
+    : [];
+
+  if (existsSync(liveContract)) {
+    // The contract is live; its deletion is a future event and the archive
+    // rule applies to that event.
+    assert.ok(
+      archived.length > 0,
+      "the execution-contract archive must hold the contracts already closed",
+    );
+    return;
+  }
+
+  const revision = planRevisionOf(plan);
+  assert.ok(
+    revision,
+    "PLAN.md must name the Plan Revision so the archived contract can be located",
+  );
+  const taskId = revision.split(/-R\d+$/u)[0];
+  const archivedTaskId = taskId.replaceAll("/", "-");
+  assert.ok(
+    archived.some((name) => name.includes(archivedTaskId)),
+    `the execution contract of Plan Revision ${revision} was deleted without an archived copy under docs/contracts/execution/archive/`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-523 — PLAN.md must name one live Plan Revision
+//
+// The §4 header and the tail active-task block both carried live-looking
+// `Plan Revision:` fields with different values. Historical records stay in
+// the file, so the invariant is not "one occurrence"; it is "one *unlabeled*
+// occurrence", and it must be the one the live `## Active task` block names.
+// ---------------------------------------------------------------------------
+test("F-523: PLAN.md names one live Plan Revision and matches the live contract", () => {
+  const plan = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8");
+  const liveRevisions = [
+    ...plan.matchAll(/^Plan Revision:[ ]*([A-Za-z0-9./-]+)/gmu),
+  ].map((match) => match[1]);
+  assert.equal(
+    liveRevisions.length,
+    1,
+    "historical Plan Revision fields must be labeled; exactly one live field is allowed",
+  );
+
+  const activeSections = plan.split(/^## Active task\b/mu).slice(1);
+  assert.equal(
+    activeSections.length,
+    1,
+    "PLAN.md must have exactly one live Active task block",
+  );
+  const activeBlock = activeSections[0].split(/^## /mu)[0];
+  assert.match(
+    activeBlock,
+    /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu,
+    "the live Active task block must carry the live Plan Revision",
+  );
+  const activeRevision = /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu.exec(
+    activeBlock,
+  )?.[1];
+  assert.equal(activeRevision, liveRevisions[0]);
+
+  const contractPath = path.join(
+    REPO_ROOT,
+    "docs",
+    "contracts",
+    "execution",
+    "ACTIVE.md",
+  );
+  if (existsSync(contractPath)) {
+    const contractRevision =
+      /^Plan Revision:[ ]*([A-Za-z0-9./-]+)/mu.exec(
+        readFileSync(contractPath, "utf8"),
+      )?.[1] ?? null;
+    assert.equal(
+      contractRevision,
+      activeRevision,
+      "the live execution contract must match PLAN.md",
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F-353 — the nested `AGENTS.md` layer is conditional
+//
+// The bootstrap order tells every agent to read the nearest applicable
+// nested `AGENTS.md`. The repository has never contained one, so the step
+// is only safe while it stays conditional: an unconditional instruction
+// would make every cold start look for a file that cannot be found.
+// ---------------------------------------------------------------------------
+test("F-353: the nested AGENTS.md bootstrap step is conditional", () => {
+  const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
+  assert.match(
+    agents,
+    /nearest[^\n]*applicable[^\n]*nested[^\n]*AGENTS\.md/iu,
+    "the bootstrap step must state that the nested AGENTS.md layer applies only where one exists",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-366 — every generated tree is ignored, wherever it is
+//
+// The ignore rules for `backups/`, `logs/` and `temp/` are no longer
+// root-anchored, so a capture under a module path is invisible to `git
+// status` and one `git add -A` away from history. The recorded check named
+// four fixed paths; this one walks the tree, so a new module path cannot
+// reintroduce the hole.
+// ---------------------------------------------------------------------------
+test("F-366: every generated tree named backups, logs or temp is ignored by git", () => {
+  const generated = [];
+  const walk = (directory, depth) => {
+    if (depth > 6) return;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if ([".git", "node_modules", ".venv", "__pycache__"].includes(entry.name))
+        continue;
+      const full = path.join(directory, entry.name);
+      if (["backups", "logs", "temp"].includes(entry.name)) {
+        generated.push(full);
+        continue;
+      }
+      walk(full, depth + 1);
+    }
+  };
+  walk(REPO_ROOT, 0);
+  assert.ok(generated.length > 0, "the repository must carry generated trees");
+
+  const notIgnored = [];
+  for (const directory of generated) {
+    const probe = path
+      .relative(REPO_ROOT, path.join(directory, "generated-tree-probe"))
+      .replaceAll("\\", "/");
+    try {
+      execFileSync(
+        "git",
+        [
+          "-c",
+          `safe.directory=${REPO_ROOT}`,
+          "check-ignore",
+          "-q",
+          "--",
+          probe,
+        ],
+        { cwd: REPO_ROOT, stdio: "ignore" },
+      );
+    } catch {
+      notIgnored.push(probe);
+    }
+  }
+  assert.deepEqual(
+    notIgnored,
+    [],
+    `a generated tree is not ignored and can be staged: ${notIgnored.join(", ")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-089 — the authorization header an agent must resolve is near the top
+//
+// `PLAN.md` is read whole before any write, and it is far larger than one
+// read pass. The fields an authorization check needs must therefore be
+// reachable without reading the whole file: the header may not sink below
+// the first read pass, or a cold start resolves it from a partial read.
+// ---------------------------------------------------------------------------
+test("F-089: the PLAN.md authorization header is reachable in one bounded read", () => {
+  const lines = readFileSync(path.join(REPO_ROOT, "PLAN.md"), "utf8").split(
+    "\n",
+  );
+  const headerFields = [
+    "Milestone:",
+    "Task:",
+    "Plan Revision:",
+    "Planning Readiness:",
+    "Execution Authorization:",
+    "Execution Contract:",
+  ];
+
+  // The header may live in the dedicated "## Active task" section or in the
+  // front of the file; what must not happen is that the six fields are
+  // spread so far apart that no single read resolves the authorization.
+  const sectionStarts = lines
+    .map((line, index) => (/^## Active task\b/u.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const regions = [];
+  if (sectionStarts.length > 0) {
+    const start = sectionStarts[sectionStarts.length - 1];
+    const end = lines.findIndex(
+      (line, index) => index > start && /^## /u.test(line),
+    );
+    regions.push({
+      name: "## Active task section",
+      lines: lines.slice(start, end < 0 ? undefined : end),
+    });
+  }
+  regions.push({ name: "first read pass", lines: lines.slice(0, 2000) });
+
+  const missing = [];
+  for (const field of headerFields) {
+    const found = regions.some((region) =>
+      region.lines.some((line) => line.startsWith(field)),
+    );
+    if (!found) missing.push(field);
+  }
+  assert.deepEqual(
+    missing,
+    [],
+    `the authorization header must be resolvable from one bounded read: ${missing.join(", ")}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F-110 — the OpenClaw README must document only what the build emits
+//
+// The README still printed the retired Google provider: `plugins.allow` named
+// `google`, the permitted-alias block named two `google/gemini-*` aliases, the
+// operator was told to insert 21 `GEMINI_API_KEY` password-store entries, and
+// seven `openclaw models auth order set --provider google` commands were
+// printed. The build emits ONE model provider (the router) with five model
+// ids, the allowlist `['discord','zink-governance']`, and no auth order at
+// all. Every fact below is read from the policy module, never hardcoded here,
+// so the lane tracks the build instead of a photograph of it.
+//
+// The documentation half of this row is the orchestrator's; this lane is the
+// half that keeps the README honest afterwards.
+// ---------------------------------------------------------------------------
+test("F-110: the OpenClaw README documents only what the build emits", async () => {
+  const readme = readFileSync(
+    path.join(REPO_ROOT, "integrations", "openclaw", "README.md"),
+    "utf8",
+  );
+  const policy = await import("../integrations/openclaw/lib/policy.mjs");
+
+  // The provider. The build emits exactly one model provider.
+  assert.match(
+    readme,
+    new RegExp(`\\b${policy.ROUTER_PROVIDER_ID}\\b`, "iu"),
+    `the README must name the governed model provider the build emits (${policy.ROUTER_PROVIDER_ID})`,
+  );
+
+  // The model ids, read from the policy module — never written down here.
+  for (const modelId of policy.ROUTER_PROVIDER_MODEL_IDS) {
+    assert.ok(
+      readme.includes(modelId),
+      `the README must name the governed model id the build emits: ${modelId}`,
+    );
+  }
+
+  // The plugin allowlist, exactly as the build emits it.
+  const allowlist = /plugins\.allow\s*=\s*(\[[^\]]*\])/u.exec(readme);
+  assert.ok(
+    allowlist,
+    "the README must document the plugin allowlist the build emits, as plugins.allow=[...]",
+  );
+  assert.deepEqual(
+    JSON.parse(allowlist[1].replaceAll("'", '"')),
+    [...policy.GOVERNANCE_PLUGIN_ALLOWLIST],
+    "the README's plugin allowlist must be the one the build emits, with no retired plugin entry",
+  );
+
+  // Every provider a printed command names must be a governed provider.
+  for (const match of readme.matchAll(/--provider\s+([A-Za-z0-9_-]+)/gu)) {
+    assert.equal(
+      match[1],
+      policy.ROUTER_PROVIDER_ID,
+      `the README prints a command for the provider '${match[1]}', which the build no longer emits (the only governed provider is '${policy.ROUTER_PROVIDER_ID}')`,
+    );
+  }
+
+  // Every auth-order command the README prints must name an agent the
+  // policy's own auth-order plan carries. The plan carries none, so the
+  // seven retired `--provider google` orders cannot survive.
+  const authOrder = policy.buildAuthOrderPlan();
+  for (const match of readme.matchAll(
+    /openclaw\s+models\s+auth\s+order\s+set\s+--agent\s+([A-Za-z0-9_-]+)/gu,
+  )) {
+    assert.ok(
+      Object.hasOwn(authOrder.agents, match[1]),
+      `the README prints an auth-order command for '${match[1]}', but the policy's auth-order plan names no such agent (the plan is empty by design: one router credential serves every agent)`,
+    );
+  }
+
+  // Every password-store entry the README tells the operator to insert must be
+  // an entry the policy emits. The 21 retired `GEMINI_API_KEY_*` entries are
+  // not, and neither is any entry the router does not own.
+  const entries = new Set([
+    ...Object.values(policy.PASS_ENTRY_IDS.discord),
+    policy.PASS_ENTRY_IDS.gateway,
+    // M12/T9 F-036 (owner decision 2026-10-21, `H6`): the router credential
+    // is a password-store entry like every other secret, and the README names
+    // it so the operator can insert it.
+    policy.PASS_ENTRY_IDS.router,
+  ]);
+  for (const match of readme.matchAll(/zink\/openclaw\/[A-Za-z0-9_${}]+/gu)) {
+    const documented = match[0];
+    const template = documented.includes("${");
+    const prefix = template
+      ? documented.slice(0, documented.indexOf("${"))
+      : documented;
+    const known = template
+      ? [...entries].some((entry) => entry.startsWith(prefix))
+      : entries.has(documented);
+    assert.ok(
+      known,
+      `the README tells the operator to insert '${documented}', which is not an entry the policy emits`,
+    );
+  }
+});
+
+test("F-197: the quality-gate lane consumes the skip counts", () => {
+  // The skip-expectation gate is the half that keeps a gate tier from going
+  // INERT: the npm `test` script must produce the run's own report and run
+  // the gate over it, and the expectation table must be committed.
+  const packageJson = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+  );
+  assert.match(
+    packageJson.scripts.test,
+    /skip-expectation-gate\.mjs/u,
+    "the npm test script must run the skip-expectation gate",
+  );
+  assert.match(
+    packageJson.scripts.test,
+    /--test-reporter=junit/u,
+    "the npm test script must write the run's own report for the gate to read",
+  );
+  assert.ok(
+    existsSync(
+      path.join(REPO_ROOT, "docs", "contracts", "ci-skip-expectations.json"),
+    ),
+    "the skip-expectation table must exist: a gate without an expectation is not a gate",
+  );
+});
+
+// =========================================================================
+// M12/T9 B8 — the gate registry must state what HEAD actually does.
+//
+// `checkGateRegistry` compared the Script column against
+// `package.json.scripts` and nothing else, so the "Where it runs" and
+// "NOT RUN condition" columns and the CI prose beside them could state the
+// opposite of the workflow and stay green. The cases below drive the parsed
+// workflow and the documented prose through the same predicate.
+// =========================================================================
+const gateRegistryRows = (rows) =>
+  [
+    "| Script | What it checks | Where it runs | NOT RUN condition |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      ([name, what = "d", where = "CI", notRun = "n"]) =>
+        `| \`${name}\` | ${what} | ${where} | ${notRun} |`,
+    ),
+  ].join("\n");
+
+const workflowWith = (steps) =>
+  `name: Test\n\non:\n  push:\n\njobs:\n  gate:\n    steps:\n${steps}`;
+
+test("F-458: the uv pin the registry prose states must match the version CI installs", () => {
+  const packageJson = { scripts: { test: "node --test tests/a.test.mjs" } };
+  const ci = workflowWith('      - run: pip install "uv==0.12.0"\n');
+  const documented = `${gateRegistryRows([["test"]])}\n\n- \`CI / python-quality\` installs \`uv==0.12.5\`.\n`;
+
+  const failures = checkGateRegistry(packageJson, documented, { ci });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /uv==0\.12\.5/u);
+  assert.match(failures[0], /uv==0\.12\.0/u);
+
+  const consistent = checkGateRegistry(
+    packageJson,
+    documented.replace("0.12.5", "0.12.0"),
+    { ci },
+  );
+  assert.deepEqual(consistent, []);
+});
+
+test("F-458: the registry's secret-scan prose must match the Security workflow and the tracked configuration", () => {
+  const packageJson = { scripts: { test: "node --test tests/a.test.mjs" } };
+  const security = workflowWith(
+    '      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e\n        env:\n          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"\n',
+  );
+  const rows = gateRegistryRows([["test"], ["gitleaks/gitleaks-action"]]);
+  const stale = `${rows}\n\n- Gitleaks uses full history, does not create PR comments or upload artifacts, and has no license or custom configuration.\n`;
+
+  const failures = checkGateRegistry(packageJson, stale, {
+    security,
+    gitleaksConfig: true,
+  });
+  assert.equal(failures.length, 2, failures.join(" | "));
+  assert.ok(
+    failures.some((failure) => /does not upload artifacts/u.test(failure)),
+    failures.join(" | "),
+  );
+  assert.ok(
+    failures.some((failure) => /no custom configuration/u.test(failure)),
+    failures.join(" | "),
+  );
+
+  const corrected = checkGateRegistry(
+    packageJson,
+    stale.replace(
+      "does not create PR comments or upload artifacts, and has no license or custom configuration",
+      "uploads its report artifact and is configured by the tracked .gitleaks.toml",
+    ),
+    { security, gitleaksConfig: true },
+  );
+  assert.deepEqual(corrected, []);
+});
+
+test("F-458: every blocking CI check surface must hold a registry row", () => {
+  const packageJson = {
+    scripts: {
+      test: "node --test tests/a.test.mjs",
+      verify: "npm test",
+    },
+  };
+  const ci = workflowWith(
+    '      - run: npm run verify\n      - run: node scripts/merge-gate.mjs --sha "$SHA"\n      - continue-on-error: true\n        run: node scripts/report-only.mjs\n',
+  );
+
+  const complete = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([["test"], ["verify"], ["scripts/merge-gate.mjs"]]),
+    { ci },
+  );
+  assert.deepEqual(complete, []);
+
+  const missing = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([["test"], ["verify"]]),
+    { ci },
+  );
+  assert.equal(missing.length, 1, missing.join(" | "));
+  assert.match(missing[0], /scripts\/merge-gate\.mjs/u);
+
+  const invented = checkGateRegistry(
+    packageJson,
+    gateRegistryRows([
+      ["test"],
+      ["verify"],
+      ["scripts/merge-gate.mjs"],
+      ["scripts/ghost.mjs"],
+    ]),
+    { ci },
+  );
+  assert.equal(invented.length, 1, invented.join(" | "));
+  assert.match(invented[0], /scripts\/ghost\.mjs/u);
+});
+
+test("F-483: a row documented as outside verify and CI must not run there", () => {
+  const packageJson = {
+    scripts: {
+      test: "node --test tests/a.test.mjs tests/m8-one.test.mjs",
+      "test:m8": "node --test tests/m8-*.test.mjs",
+      "rehearse:r16": "node scripts/rehearsal.mjs",
+      verify: "npm test",
+    },
+  };
+  const documented = gateRegistryRows([
+    ["test"],
+    [
+      "test:m8",
+      "d",
+      "**Không nằm trong `verify` và không chạy ở CI** — chỉ khi gọi tường minh",
+      "không được invoke → `NOT RUN`",
+    ],
+    [
+      "rehearse:r16",
+      "d",
+      "chỉ WSL, cần runtime live; **không chạy ở CI**",
+      "cần clone runtime live",
+    ],
+    ["verify"],
+  ]);
+
+  const failures = checkGateRegistry(packageJson, documented, {
+    ci: workflowWith("      - run: npm run verify\n"),
+  });
+  assert.equal(failures.length, 1, failures.join(" | "));
+  assert.match(failures[0], /test:m8/u, failures.join(" | "));
+
+  const corrected = gateRegistryRows([
+    ["test"],
+    ["test:m8", "d", "Windows, WSL, CI `quality-gate` (qua `npm test`)", "n"],
+    [
+      "rehearse:r16",
+      "d",
+      "chỉ WSL, cần runtime live; **không chạy ở CI**",
+      "cần clone runtime live",
+    ],
+    ["verify"],
+  ]);
+  assert.deepEqual(
+    checkGateRegistry(packageJson, corrected, {
+      ci: workflowWith("      - run: npm run verify\n"),
+    }),
+    [],
+  );
+});
+
+test("F-566: a runbook that cites an integrations/ operator driver is checked", () => {
+  withTemporaryRepository((repositoryRoot) => {
+    writeTrackedFile(
+      repositoryRoot,
+      "integrations/openclaw/driver.mjs",
+      "export const run = 1;\n",
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/a.test.mjs",
+      'import test from "node:test";\ntest("a", () => {});\n',
+    );
+    writeTrackedFile(
+      repositoryRoot,
+      "docs/runbooks/operator.md",
+      "Run `node integrations/openclaw/driver.mjs` last.\n",
+    );
+    const tracked = [
+      "integrations/openclaw/driver.mjs",
+      "tests/a.test.mjs",
+      "docs/runbooks/operator.md",
+    ];
+    const uncovered = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs" } },
+      tracked,
+    );
+    assert.ok(
+      uncovered.some((failure) =>
+        /integrations\/openclaw\/driver\.mjs/u.test(failure),
+      ),
+      `a cited integrations driver that no gate reads must fail the check: ${uncovered.join(" | ")}`,
+    );
+
+    writeTrackedFile(
+      repositoryRoot,
+      "tests/b.test.mjs",
+      'const driver = "integrations/openclaw/driver.mjs";\n',
+    );
+    const covered = checkDocumentedScriptsAreCovered(
+      repositoryRoot,
+      { scripts: { test: "node --test tests/a.test.mjs tests/b.test.mjs" } },
+      [...tracked, "tests/b.test.mjs"],
+    );
+    assert.deepEqual(covered, []);
   });
 });

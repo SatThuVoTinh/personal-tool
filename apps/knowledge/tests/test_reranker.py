@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
@@ -89,9 +92,108 @@ def _reranker(session: _Session) -> OnnxReranker:
     return reranker
 
 
+class RerankerConstructorTests(unittest.TestCase):
+    """F-312 (R7-E2-02): the constructor was executed by no test.
+
+    Every other case builds the object around its constructor, so the
+    manifest load, the contract check, the ARTIFACT DIGEST verification and
+    the session construction ordering were never run, and the negative
+    cases asserted only the shared exception type. These cases drive the
+    real constructor against a real artifact directory and each one asserts
+    its own failure code.
+    """
+
+    def _artifacts(self, root: Path) -> tuple[Path, Path]:
+        model = root / "model.int8.onnx"
+        model.write_bytes(b"not-a-real-onnx-graph")
+        tokenizer = root / "tokenizer.json"
+        tokenizer.write_bytes(b"{}")
+        # F-309 (R7-E1-04): the fidelity evidence is part of the shipped file
+        # set, so the fixture ships it too.
+        fidelity = root / "reranker-fidelity.json"
+        fidelity.write_bytes(b"{}")
+        digests = {
+            "model.int8.onnx": hashlib.sha256(model.read_bytes()).hexdigest(),
+            "tokenizer.json": hashlib.sha256(tokenizer.read_bytes()).hexdigest(),
+            "reranker-fidelity.json": hashlib.sha256(fidelity.read_bytes()).hexdigest(),
+        }
+        manifest = {
+            "model_name": RERANKER_MODEL_NAME,
+            "revision": RERANKER_REVISION,
+            "source_model_sha256": SOURCE_MODEL_SHA256,
+            "tokenizer_sha256": ARTIFACT_SHA256_EXPECTED,
+            "files": digests,
+            "runtime_files": dict(digests),
+            "inputs": [],
+            "outputs": [],
+            "graph_contract": {},
+            # F-309 (R7-E1-04): the fidelity evidence is shipped and pinned.
+            "fidelity_evidence_sha256": digests["reranker-fidelity.json"],
+        }
+        manifest_path = root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return model, manifest_path
+
+    def _construct(self, model: Path, manifest_path: Path) -> str:
+        try:
+            OnnxReranker(model, manifest_path, _Budget())
+        except RerankerUnavailableError as error:
+            code = str(error)
+            if code == "ONNX_RUNTIME_UNAVAILABLE":
+                self.skipTest("the ONNX runtime is not installed in this environment")
+            return code
+        self.fail("the fixture is not a real ONNX graph, so the session cannot open")
+
+    def test_the_constructor_passes_every_verification_step(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+
+            code = self._construct(model, manifest_path)
+
+            # The manifest, the provenance contract and the artifact digests
+            # all passed; the fixture is not a real ONNX graph, so the session
+            # is what fails.
+            self.assertEqual(code, "RERANKER_UNAVAILABLE")
+
+    def test_a_tampered_artifact_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            model.write_bytes(b"tampered")
+
+            self.assertEqual(self._construct(model, manifest_path), "RERANKER_ARTIFACT_MISMATCH")
+
+    def test_a_missing_artifact_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            model.unlink()
+
+            self.assertEqual(self._construct(model, manifest_path), "RERANKER_ARTIFACT_MISSING")
+
+    def test_a_wrong_provenance_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["revision"] = "main"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            self.assertEqual(
+                self._construct(model, manifest_path), "RERANKER_PROVENANCE_MISMATCH"
+            )
+
+    def test_a_malformed_manifest_is_refused_with_its_own_code(self) -> None:
+        with TemporaryDirectory() as directory:
+            model, manifest_path = self._artifacts(Path(directory))
+            manifest_path.write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(
+                self._construct(model, manifest_path), "RERANKER_MANIFEST_INVALID"
+            )
+
+
 class RerankerTests(unittest.IsolatedAsyncioTestCase):
     def test_manifest_provenance_is_exact_and_paths_cannot_escape(self) -> None:
         artifact_hash = "0" * 64
+        fidelity_hash = "1" * 64
         manifest = ArtifactManifest(
             model_name=RERANKER_MODEL_NAME,
             revision=RERANKER_REVISION,
@@ -100,14 +202,18 @@ class RerankerTests(unittest.IsolatedAsyncioTestCase):
             files={
                 "model.int8.onnx": artifact_hash,
                 "tokenizer.json": ARTIFACT_SHA256_EXPECTED,
+                "reranker-fidelity.json": fidelity_hash,
             },
             runtime_files={
                 "model.int8.onnx": artifact_hash,
                 "tokenizer.json": ARTIFACT_SHA256_EXPECTED,
+                "reranker-fidelity.json": fidelity_hash,
             },
             inputs=(),
             outputs=(),
             graph_contract={},
+            # F-309 (R7-E1-04): the fidelity evidence is shipped and pinned.
+            fidelity_evidence_sha256=fidelity_hash,
         )
         reranker = object.__new__(OnnxReranker)
         reranker._model_path = Path("model.int8.onnx")

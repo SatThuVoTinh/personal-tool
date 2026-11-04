@@ -4,7 +4,15 @@ import path from "node:path";
 import process from "node:process";
 
 // Redacted read-only preflight. No config/auth/identity-key contents are read.
-const state = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal (see
+// operator-token-probe.mjs): the caller names it, or the probe refuses to
+// run. A read-only preflight that silently inspects one operator's machine
+// says nothing about any other.
+const state = process.env.ZINK_PROBE_STATE_DIR ?? process.argv[2] ?? null;
+if (!state) {
+  process.stderr.write("RUNTIME_PREFLIGHT_STATE_DIR_NOT_NAMED\n");
+  process.exit(2);
+}
 const root = path.join(state, "operator", "m7-t2", "ledger");
 try {
   const snapshotPath = path.join(root, "snapshot.json");

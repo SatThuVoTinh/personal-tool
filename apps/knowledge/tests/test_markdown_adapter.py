@@ -6,8 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from app.markdown_adapter import (
+    CANONICAL_SLUG_TO_TOPIC,
     MAX_CHARS,
     MAX_RETRIEVAL_TOKENS,
     PAIR_MAX_TOKENS,
@@ -20,7 +24,15 @@ from app.markdown_adapter import (
 )
 
 
-TOKENIZER_PATH = Path(os.environ["KNOWLEDGE_TOKENIZER_PATH"])
+_TOKENIZER = os.environ.get("KNOWLEDGE_TOKENIZER_PATH")
+if not _TOKENIZER or not Path(_TOKENIZER).is_file():
+    pytest.skip(
+        "the pinned tokenizer is not provisioned; CI fetches it "
+        "(.github/workflows/ci.yml), so this module is NOT RUN rather than passed",
+        allow_module_level=True,
+    )
+
+TOKENIZER_PATH = Path(_TOKENIZER)
 
 
 class MarkdownAdapterTests(unittest.TestCase):
@@ -42,6 +54,112 @@ class MarkdownAdapterTests(unittest.TestCase):
         path = folder / name
         path.write_text(content, encoding="utf-8", newline="")
         return path
+
+    def test_the_validated_candidate_is_the_object_that_is_read(self) -> None:
+        """F-055 (R5-E15-05): one object checked, one object opened.
+
+        The size bound was measured on the resolved path while the read used
+        the unresolved candidate, so the object that was bounded and the
+        object that was read were not provably the same file.
+        """
+
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        self.write_note(vault, "AI", "note.md", "# Note\n\nBody.\n\n#ai\n")
+
+        stats: list[Path] = []
+        reads: list[Path] = []
+        original_stat = Path.stat
+        original_read = Path.read_bytes
+
+        def stat_spy(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+            stats.append(self)
+            return original_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        def read_spy(self: Path, *args: object, **kwargs: object) -> bytes:
+            reads.append(self)
+            return original_read(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        with patch.object(Path, "stat", stat_spy), patch.object(Path, "read_bytes", read_spy):
+            result = self.scanner.scan_vault(vault)
+
+        self.assertTrue(result.succeeded)
+        statted = [path for path in stats if path.name == "note.md"]
+        read = [path for path in reads if path.name == "note.md"]
+        self.assertTrue(statted, "the source must be stat-ed before it is read")
+        self.assertTrue(read, "the source must be read")
+        self.assertIs(
+            statted[-1],
+            read[-1],
+            "the read handle must come from the validated candidate",
+        )
+
+    def test_every_published_alias_produces_its_canonical_topic(self) -> None:
+        """F-308 (R7-E1-03): the write side must know the published aliases.
+
+        The eighteen-entry slug table was only ever consulted by a query
+        that filtered by topic, so a note tagged with an alias produced no
+        topic, stayed invisible to a topic filter, and -- carrying aliases
+        only -- was refused with a "missing tag" error naming the wrong
+        cause.
+        """
+
+        for slug, topic in CANONICAL_SLUG_TO_TOPIC.items():
+            with self.subTest(alias=slug):
+                temporary, vault = self.make_vault()
+                self.addCleanup(temporary.cleanup)
+                self.write_note(vault, "AI", "aliased.md", f"# Aliased\n\nBody.\n\n#{slug}\n")
+
+                result = self.scanner.scan_vault(vault)
+
+                self.assertTrue(result.succeeded, result.errors)
+                self.assertEqual(result.sources[0].primary_topic, topic)
+                self.assertIn(topic, result.sources[0].canonical_topics)
+
+    def test_a_tag_the_module_does_not_recognise_is_still_refused(self) -> None:
+        """F-308 (R7-E1-03): an unknown tag is still a refused source."""
+
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        self.write_note(vault, "AI", "unknown.md", "# Unknown\n\nBody.\n\n#not-a-topic\n")
+
+        result = self.scanner.scan_vault(vault)
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(
+            [error.code for error in result.errors], ["REQUIRED_TOPIC_TAG_MISSING"]
+        )
+        self.assertEqual(result.errors[0].source_path, "01. Knowledge/AI/unknown.md")
+
+    def test_an_unreadable_component_is_refused_not_admitted(self) -> None:
+        """F-325 (R7-E1-05): "cannot tell" is not "no link"."""
+
+        temporary, vault = self.make_vault()
+        self.addCleanup(temporary.cleanup)
+        self.write_note(vault, "AI", "unreadable.md", "# Note\n\nBody.\n\n#ai\n")
+
+        def raising_lstat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+            raise PermissionError(13, "permission denied")
+
+        with patch("app.markdown_adapter.os.lstat", raising_lstat):
+            result = self.scanner.scan_vault(vault)
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(result.valid_source_count, 0)
+        self.assertIn("SOURCE_READ_FAILED", [error.code for error in result.errors])
+
+    def test_the_link_check_raises_instead_of_reporting_no_link(self) -> None:
+        """F-325 (R7-E1-05): the helper must not collapse the two answers."""
+
+        class UnreadableEntry:
+            def is_symlink(self) -> bool:
+                return False
+
+            def stat(self, follow_symlinks: bool = True) -> os.stat_result:
+                raise PermissionError(13, "permission denied")
+
+        with self.assertRaises(OSError):
+            MarkdownVaultScanner._is_link_like_entry(UnreadableEntry())  # type: ignore[arg-type]
 
     def test_all_canonical_topics_are_derived_from_native_tags(self) -> None:
         temporary, vault = self.make_vault()

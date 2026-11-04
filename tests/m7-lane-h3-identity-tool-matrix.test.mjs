@@ -4,6 +4,7 @@ import {
   registerTools,
   evaluateToolAccess,
   isIngressSenderAuthorized,
+  validateToolAllowlistInvariants,
 } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import {
   DISCORD_BOT_IDS,
@@ -513,6 +514,35 @@ describe("Lane H3 — identity matrix", () => {
       }).valid,
       false,
       "an unrecognized surface channel is refused",
+    );
+  });
+});
+
+describe("F-499 - the tool allowlist invariant is enforced at registration", () => {
+  it("the live tables are disjoint", () => {
+    assert.deepEqual(validateToolAllowlistInvariants(), {
+      valid: true,
+      violations: [],
+    });
+  });
+
+  it("a planted overlap refuses registration", () => {
+    const { api, tools } = captureApi();
+    const errors = [];
+    api.logger = { error: (line) => errors.push(line) };
+    const result = registerTools(api, {
+      toolPolicy: { main: ["zink_sql"] },
+      builtInToolPolicy: { main: ["zink_sql"] },
+    });
+    assert.deepEqual(result, { registered: [], skipped: ["*"] });
+    assert.equal(tools.length, 0, "no tool may be registered past the refusal");
+    assert.ok(
+      errors.some((line) =>
+        /Overlap between callable and builtin tools for main: zink_sql/u.test(
+          line,
+        ),
+      ),
+      `the refusal must name the overlap: ${JSON.stringify(errors)}`,
     );
   });
 });

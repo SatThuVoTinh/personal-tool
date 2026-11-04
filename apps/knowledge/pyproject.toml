@@ -12,5 +12,22 @@ dependencies = [
   "uvicorn[standard]==0.34.0",
 ]
 
+# Test-only dependencies. The runtime image installs `--no-dev`, so this group
+# never reaches the deployed service closure; it exists so the Knowledgebase
+# Python suite is part of the repository quality gate.
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+]
+
 [tool.uv]
 package = false
+
+# F-212 (R5-E09-04): the Knowledgebase lane reported a bare pass count, so a
+# SHRINKING collected set read as an unchanged green and an unreported skip
+# was invisible. `-rs` surfaces every skip reason in the summary and
+# `--strict-markers` turns an unregistered marker into an error instead of a
+# silent pass. The collected-count floor lives in `tests/conftest.py`, which
+# is the only place that can see the collected set.
+[tool.pytest.ini_options]
+addopts = "-rs --strict-markers"

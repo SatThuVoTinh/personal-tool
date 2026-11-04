@@ -1,7 +1,7 @@
 // Trusted operator probe. Never prints prompts, raw RPC results, IDs or auth.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,10 +16,115 @@ import {
   SCHEMA_VERSION,
   GOVERNANCE_VERSION,
 } from "../../lib/canonical.mjs";
-import { checkNativePatch } from "../../lib/native-patch.mjs";
+import {
+  checkNativePatch,
+  nativeDiscordChannelRoot,
+} from "../../lib/native-patch.mjs";
 import { validateContract } from "../../lib/schema.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-195: this probe is a synthetic instrument, not a read-only one. It writes
+// its own fixtures into the state root it inspects, so it must never silently
+// default to the PRODUCTION root: a "PASS" derived from a precondition the
+// probe created itself says nothing about ingress, delivery or the live
+// ledger, and writing that "PASS" into the production history is a mutation
+// dressed as a probe.
+//
+// Two explicit gates, both before any write:
+//   1. the state root must be NAMED (env or argv) - there is no default;
+//   2. a target that IS the production root additionally needs an explicit
+//      acknowledgement, because that is the only case where the probe's own
+//      fixtures land in the live governance history.
+//
+// F-033: the acknowledgement was never enough. The probe FORGES origin
+// provenance - a synthetic `origin_principal_ref`, a synthetic
+// `origin_message_id` and a task id derived from them - and it journals that
+// origin into the state root it inspects. A forged row in a live ledger is
+// indistinguishable from real intake except by its message-id range, and the
+// synthetic ids never collide, so the duplicate guard stays unexercisable in
+// exactly the ledger where it matters.
+//
+// So the state root must be DISPOSABLE, and NO acknowledgement can buy a
+// production write any more:
+//   3. the state root must not BE the production root, and must not lie
+//      INSIDE it (a path-segment comparison, so a sibling directory with the
+//      production root as a prefix is not mistaken for it);
+//   4. the state root must not already hold a real governance ledger - a
+//      non-empty journal, or a snapshot with a non-zero sequence or any task.
+//
+// The acknowledgement therefore no longer BUYS a write: it only changes WHICH
+// refusal the operator is shown. A disposable root is the only root this probe
+// will write to.
+const PRODUCTION_STATE_DIR = "/home/hoang_vinh/.openclaw-zink";
+const PRODUCTION_WRITE_ACK = "--acknowledge-production-ledger-write";
+const stateDir = process.env.ZINK_PROBE_STATE_DIR ?? process.argv[2] ?? null;
+if (!stateDir) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_NOT_NAMED" })}\n`,
+  );
+  process.exit(2);
+}
+/** True when `child` is `parent` or lies inside it, compared by path segment. */
+function isInside(child, parent) {
+  const childParts = path.resolve(child).split(path.sep).filter(Boolean);
+  const parentParts = path.resolve(parent).split(path.sep).filter(Boolean);
+  if (childParts.length < parentParts.length) return false;
+  return parentParts.every((part, index) => childParts[index] === part);
+}
+/**
+ * Whether the state root already holds a real governance ledger. A disposable
+ * root is empty, or holds the empty ledger the probe itself created.
+ */
+function holdsGovernanceHistory(root) {
+  const ledgerRoot = path.join(root, "operator", "m7-t2", "ledger");
+  const events = path.join(ledgerRoot, "events.jsonl");
+  if (existsSync(events) && readFileSync(events, "utf8").trim() !== "")
+    return true;
+  const snapshot = path.join(ledgerRoot, "snapshot.json");
+  if (!existsSync(snapshot)) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(snapshot, "utf8"));
+  } catch {
+    // An unreadable snapshot is not a disposable root: the probe cannot prove
+    // the tree is scratch, so it refuses rather than writes.
+    return true;
+  }
+  return (
+    (Number(parsed?.sequence) || 0) > 0 ||
+    Object.keys(parsed?.tasks ?? {}).length > 0
+  );
+}
+const resolvedStateDir = path.resolve(stateDir);
+const productionRoot = path.resolve(PRODUCTION_STATE_DIR);
+const writesProductionLedger =
+  resolvedStateDir === productionRoot ||
+  isInside(resolvedStateDir, productionRoot);
+if (writesProductionLedger && !process.argv.includes(PRODUCTION_WRITE_ACK)) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PRODUCTION_LEDGER_WRITE_NOT_ACKNOWLEDGED" })}\n`,
+  );
+  process.exit(2);
+}
+if (writesProductionLedger) {
+  // The acknowledgement no longer unlocks a production write: the probe's
+  // forged provenance must never reach the live governance history.
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_IS_PRODUCTION_ROOT" })}\n`,
+  );
+  process.exit(2);
+}
+if (holdsGovernanceHistory(resolvedStateDir)) {
+  process.stdout.write(
+    `${JSON.stringify({ stage: "preflight", status: "FAIL", reason: "PROBE_STATE_DIR_NOT_DISPOSABLE" })}\n`,
+  );
+  process.exit(2);
+}
+// Every PASS this probe prints states that its own fixture seeded the ledger,
+// so the record can never be read as evidence about a real ingress path.
+const PRECONDITION = {
+  ledger_precondition: "PROBE_WRITTEN",
+  ledger_target: "disposable",
+};
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
 const executable = "/home/hoang_vinh/.local/bin/openclaw";
 const environment = {
@@ -35,8 +140,63 @@ const environment = {
 };
 const paths = ledgerPaths(stateDir);
 let stage = "native-patch";
+
+// F-209 (R2-B03-03): a FAIL record has to name the check that failed.
+//
+// The classifier used to build ONE detail string out of the error code or the
+// error message, match it against a fixed list of RPC and runtime classes, and
+// fall back to a single catch-all. An AssertionError carries no class of its
+// own, so a completion or lineage regression in the state this probe reads and
+// an unknown harness fault produced the SAME line: LIVE_GATE_REJECTED.
+//
+// The classes are separated here: a specific whitelisted class always wins, an
+// assertion failure is reported as the state failure it is, and only an
+// unrecognised fault keeps the catch-all.
+function classifyProbeFailure(error) {
+  const code = String(error?.code ?? "");
+  const message = String(error?.message ?? "");
+  const rpcRuntimeClasses = [
+    "GOVERNANCE_COMPLETION_UNAVAILABLE",
+    "GOVERNANCE_INGRESS_UNAVAILABLE",
+    "EXECUTION_STATE_UNKNOWN",
+    "LINEAGE_MISMATCH",
+    "GOVERNANCE_HASH_MISMATCH",
+    "RUNTIME_CAPABILITY_MISMATCH",
+    "VALIDATION_FAILED",
+    "SCHEMA_INVALID",
+    "POLICY_DENIED",
+    "ETIMEDOUT",
+    "INVENTORY_SHAPE_MISMATCH",
+  ];
+  const matched = rpcRuntimeClasses.find(
+    (value) => code.includes(value) || message.includes(value),
+  );
+  if (matched) {
+    return matched;
+  }
+  if (error?.name === "AssertionError" || code === "ERR_ASSERTION") {
+    return "STATE_ASSERTION_FAILED";
+  }
+  return "LIVE_GATE_REJECTED";
+}
+
+// F-209 (R2-B03-03): the nested matrix asserts six delegated children in turn,
+// so a single stage label for the whole matrix turns a real completion
+// regression in one child into an unattributable FAIL line. The stage names
+// the child that failed.
+const NESTED_MATRIX_STAGE = "nested-seven-role-matrix";
+
+function nestedChildStage(matrixStage, agentId) {
+  return `${matrixStage}/child:${agentId}`;
+}
+
 try {
-  checkNativePatch(runtimeRoot);
+  checkNativePatch({
+    runtimeRoot,
+    // M12/T9 F-011: the channel root is RESOLVED from the installed plugin, so
+    // the probe follows a reinstall instead of probing a pinned directory.
+    discordChannelRoot: nativeDiscordChannelRoot(stateDir),
+  });
   stage = "gateway-auth";
   environment.OPENCLAW_GATEWAY_TOKEN = await resolveGatewayToken(
     path.join(stateDir, "bin/openclaw-pass-resolver"),
@@ -142,11 +302,13 @@ try {
       "COMPLETE",
     );
     await checkTools(agentId, fixture.sessionKey);
-    process.stdout.write(`${JSON.stringify({ stage, status: "PASS" })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ stage, status: "PASS", ...PRECONDITION })}\n`,
+    );
     await delay(6000);
   }
   await delay(60000);
-  stage = "nested-seven-role-matrix";
+  stage = NESTED_MATRIX_STAGE;
   const fixture = openFixture("main");
   const leafInput = "Synthetic leaf execution. Return COMPLETE outcome.";
   const constraints = "Synthetic only; no external access";
@@ -235,32 +397,20 @@ Never directly spawn any specialist. Use the frozen native fields and semantic p
   assert.equal(task.delegated_runs_used, 6);
   assert.equal(task.transitions_used, 1);
   for (const run of Object.values(task.delegations)) {
+    // F-209 (R2-B03-03): the FAIL record names the child that failed, so a
+    // regression in one delegated child is not reported against the matrix.
+    stage = nestedChildStage(NESTED_MATRIX_STAGE, run.agent_id);
     assert.equal(run.accepted_outcome_status, "COMPLETE");
     assert.ok(run.accepted_payload_digest);
     await checkTools(run.agent_id, run.child_session_key);
   }
   process.stdout.write(
-    `${JSON.stringify({ stage, status: "PASS", accepted_children: 6 })}\n`,
+    `${JSON.stringify({ stage: NESTED_MATRIX_STAGE, status: "PASS", accepted_children: 6, ...PRECONDITION })}\n`,
   );
 } catch (error) {
   // Never emit model output, RPC arguments, raw response or stderr. Preserve a
   // small static classification so operators can repair a gate safely.
-  const detail = String(error?.code ?? error?.message ?? "");
-  const known = [
-    "GOVERNANCE_COMPLETION_UNAVAILABLE",
-    "GOVERNANCE_INGRESS_UNAVAILABLE",
-    "EXECUTION_STATE_UNKNOWN",
-    "LINEAGE_MISMATCH",
-    "GOVERNANCE_HASH_MISMATCH",
-    "RUNTIME_CAPABILITY_MISMATCH",
-    "VALIDATION_FAILED",
-    "SCHEMA_INVALID",
-    "POLICY_DENIED",
-    "ETIMEDOUT",
-    "INVENTORY_SHAPE_MISMATCH",
-  ];
-  const reason =
-    known.find((value) => detail.includes(value)) ?? "LIVE_GATE_REJECTED";
+  const reason = classifyProbeFailure(error);
   process.stdout.write(
     `${JSON.stringify({ stage, status: "FAIL", reason })}\n`,
   );

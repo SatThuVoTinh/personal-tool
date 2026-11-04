@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # No branch filter on either trigger: the quality gate must run for a push to
+  # ANY branch and for a pull request to ANY branch, not only for `main`.
+  # Narrowing them to `main` left a task branch ungated - the lane ran only when
+  # a human re-dispatched it by hand - so a commit could reach `main` through a
+  # merge without the gate ever having looked at it.
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -41,3 +44,123 @@ jobs:
         run: npm ci
       - name: Run quality gate
         run: npm run verify
+
+  # The Knowledgebase Python suite is a blocking gate. The runtime service and
+  # this job share one pinned lockfile, so a Python regression that would break
+  # the deployed service fails CI instead of reaching a release.
+  python-quality:
+    name: python-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install --disable-pip-version-check "uv==0.12.0"
+      - name: Verify Python version
+        run: python -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+      # The suite is invoked through `npm run test:knowledge`, and package.json
+      # pins devEngines.runtime to node >=24.15.0 <25 with onFail=error, so
+      # without this toolchain the runner's default Node makes npm abort before
+      # pytest collects anything. Steps mirror quality-gate exactly.
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Install npm 12.0.2
+        working-directory: ${{ runner.temp }}
+        run: npm install --global npm@12.0.2
+      - name: Verify Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.15.0"
+          test "$(npm --version)" = "12.0.2"
+      # The suite tokenizes real text through the pinned bge-reranker-v2-m3
+      # tokenizer. Fetch the exact bytes the runtime image uses and prove the
+      # checksum so the gate cannot silently degrade to a different tokenizer.
+      - name: Fetch pinned tokenizer
+        run: |
+          mkdir -p "${{ runner.temp }}/knowledge-artifacts"
+          curl --fail --location --silent --show-error \
+            --output "${{ runner.temp }}/knowledge-artifacts/tokenizer.json" \
+            "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e/tokenizer.json"
+          echo "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15  ${{ runner.temp }}/knowledge-artifacts/tokenizer.json" | sha256sum --check --strict
+      - name: Install locked Knowledgebase dependencies
+        working-directory: apps/knowledge
+        run: uv sync --locked
+      # pdf-runtime is deliberately not installed here: its lock is restricted
+      # to linux/x86_64 and pulls the torch/docling stack. That suite stays an
+      # explicit NOT RUN in CI rather than an assumed pass.
+      - name: Run Knowledgebase Python suite
+        env:
+          KNOWLEDGE_TOKENIZER_PATH: ${{ runner.temp }}/knowledge-artifacts/tokenizer.json
+        run: npm run test:knowledge
+
+  # F-034 (legacy `R5-E09-02`) — H2: the POST-MERGE half of the in-repo
+  # merge blocker.
+  #
+  # `scripts/merge-gate.mjs` is the PRE-MERGE half: the operator runs it
+  # before merging and it refuses unless the tip carries a successful blocking
+  # run at that exact SHA. This job is the POST-MERGE half.
+  #
+  # F-567 (legacy `R10-T09-2`): the detector must NOT judge `github.sha`. The
+  # run that hosts this job necessarily carries its own `quality-gate` job, so
+  # that SHA can never take the no-run refusal and a merge that landed an
+  # ungated branch tip would still read green. The detector instead asks git
+  # for the pushed commit's predecessor SHAs — the old `main` tip and, for a
+  # merge, the merged branch tip — and the gate refuses if any of them carries
+  # no successful blocking run. The full history is therefore required: the
+  # checkout below uses `fetch-depth: 0`, without which a shallow merge has no
+  # parents and the gate refuses rather than judging a truncated graph.
+  #
+  # It runs AFTER the gate, with `always()`, so the verdict is about a
+  # CONCLUDED run: a gated merge is green, and a merge whose merged tip was
+  # never gated is red. It reads the run metadata, so it needs `actions: read`
+  # on top of the repository's `contents: read`; it cannot write to the
+  # repository and it uses only the workflow's own token.
+  #
+  # M12/T9 F-388: the detector must ALSO run when the quality gate FAILED at
+  # that SHA. Without `always()` a failed gate SKIPS the detector, and the one
+  # merge the detector exists for — a merge that landed without a successful
+  # gate — would be exactly the case that stays silent.
+  merge-gate-detector:
+    name: merge-gate-detector
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+      - name: Detect a merge that was not gated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          predecessors="$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)"
+          if [ -z "$predecessors" ]; then
+            echo "merge-gate: REFUSED — HEAD has no predecessor SHA to judge." >&2
+            exit 1
+          fi
+          arguments=()
+          for sha in $predecessors; do
+            arguments+=(--sha "$sha")
+          done
+          node scripts/merge-gate.mjs "${arguments[@]}"

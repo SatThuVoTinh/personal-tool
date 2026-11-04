@@ -11,10 +11,21 @@ import {
   fsyncSync,
   renameSync,
   mkdirSync,
+  unlinkSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { inflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { assertNoSymlinkComponents } from "./policy.mjs";
+// F-459 (R9-T08-1): the ONE SQL mask both artifact decisions read. It is owned
+// by the canonical validator so the two gates cannot drift into two dialects;
+// the owner authorized this static edge on 2026-10-25, and
+// `policy.mjs`'s packaging table rewrites the path for the deployed tree.
+// Re-exported because this module's public surface already named it.
+import { maskSqlLiteralsAndComments } from "../../../zink-tools/sql/validator.mjs";
+
+export { maskSqlLiteralsAndComments };
 
 /**
  * Multi-Tier Artifact Validation & Real Preview Generator
@@ -109,16 +120,219 @@ export function parseCsvLine(line) {
   return fields;
 }
 
-// J02 & J03: Inspect ZIP central directory / local headers for required entry patterns
-export function inspectZipContainsEntries(filePath, requiredKeywords) {
+// J02 & J03: Inspect ZIP central directory / local headers for required entry patterns.
+//
+// M12/T9 F-258: this helper read the whole file as latin1 and asked whether a
+// keyword appeared ANYWHERE in the bytes, so a keyword inside arbitrary
+// payload bytes counted as a container entry and a garbage file reached a
+// PASS verdict. The CENTRAL DIRECTORY is parsed instead: the entry names come
+// from the container's own index, and a file that is not a readable ZIP has no
+// entries at all.
+export function readZipEntryNames(filePath) {
+  let buf;
   try {
-    const buf = readFileSync(filePath);
-    if (buf.length < 22) return false;
-    const str = buf.toString("latin1");
-    return requiredKeywords.some((kw) => str.includes(kw));
+    buf = readFileSync(filePath);
   } catch {
-    return false;
+    return null;
   }
+  return readZipArchive(buf, { includeContents: false })?.names ?? null;
+}
+
+const ENTRY_COUNT_LIMIT = 5000;
+const PER_ENTRY_LIMIT = 128 * 1024 * 1024;
+const TOTAL_UNCOMPRESSED_LIMIT = 512 * 1024 * 1024;
+
+/**
+ * Parse the ZIP central directory and, when asked, inflate the declared parts.
+ *
+ * F-465: the EXCEL tier now parses the worksheet XML, so it needs the
+ * archive's real bytes, not just the entry names. The per-part output is
+ * capped at the artifact ceiling so a crafted container cannot expand a small
+ * file into an unbounded buffer. Name-only callers skip inflation.
+ *
+ * F-OC-002: archive-level budget enforcement (ENTRY_COUNT_LIMIT, PER_ENTRY_LIMIT,
+ * TOTAL_UNCOMPRESSED_LIMIT). Central-directory declared sizes checked before
+ * inflation; actual inflated buffer length checked before storing contents.
+ * Errors preserve budget specificity with named limits.
+ *
+ * @param {Buffer} buf
+ * @param {{ includeContents?: boolean }} [options]
+ * @returns {{ names: string[], contents: Map<string, Buffer> } | null|{ error: string, names?: string[] }}
+ */
+function readZipArchive(buf, { includeContents = true } = {}) {
+  if (!Buffer.isBuffer(buf) || buf.length < 22) return null;
+  let eocd = -1;
+  const lowest = Math.max(0, buf.length - 66000);
+  for (let i = buf.length - 22; i >= lowest; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return null;
+  const entryCount = buf.readUInt16LE(eocd + 10);
+  if (entryCount > ENTRY_COUNT_LIMIT) {
+    return { error: `archive exceeds budget: entries ${entryCount} > 5000` };
+  }
+
+  let offset = buf.readUInt32LE(eocd + 16);
+  const names = [];
+  const contents = new Map();
+
+  // Phase 1: Collect all names first (for name-only consumers)
+  for (let i = 0; i < entryCount; i++) {
+    if (offset + 46 > buf.length) return null;
+    if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const name = buf
+      .subarray(offset + 46, offset + 46 + nameLen)
+      .toString("utf8");
+    names.push(name);
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+
+  // Re-parse for full content processing with budgets
+  const eocd2 = eocd;
+  const entryCount2 = entryCount;
+  const offsetStart = buf.readUInt32LE(eocd2 + 16);
+  offset = offsetStart;
+  let declaredAggregateBytes = 0;
+  let actualAggregateBytes = 0;
+
+  for (let i = 0; i < entryCount2; i++) {
+    if (offset + 46 > buf.length) return null;
+    if (buf.readUInt32LE(offset) !== 0x02014b50) return null;
+
+    const method = buf.readUInt16LE(offset + 10);
+    const compressedSize = buf.readUInt32LE(offset + 20);
+    const declaredSize = buf.readUInt32LE(offset + 24);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const name = buf
+      .subarray(offset + 46, offset + 46 + nameLen)
+      .toString("utf8");
+
+    // Check declared per-entry size budget BEFORE counting aggregate
+    if (declaredSize > PER_ENTRY_LIMIT) {
+      return {
+        error: `archive exceeds budget: per-entry ${name} declared size ${declaredSize} > ${PER_ENTRY_LIMIT}`,
+      };
+    }
+
+    // Check declared aggregate budget incrementally
+    const remainingTotal = TOTAL_UNCOMPRESSED_LIMIT - declaredAggregateBytes;
+    if (declaredSize > remainingTotal) {
+      return {
+        error: `archive exceeds budget: total uncompressed ${declaredAggregateBytes + declaredSize} > ${TOTAL_UNCOMPRESSED_LIMIT}`,
+      };
+    }
+    declaredAggregateBytes += declaredSize;
+
+    if (
+      includeContents &&
+      localOffset + 30 <= buf.length &&
+      buf.readUInt32LE(localOffset) === 0x04034b50
+    ) {
+      const localNameLen = buf.readUInt16LE(localOffset + 26);
+      const localExtraLen = buf.readUInt16LE(localOffset + 28);
+      const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+      const raw = buf.subarray(dataStart, dataStart + compressedSize);
+
+      if (method === 0) {
+        if (raw.length > PER_ENTRY_LIMIT) {
+          return {
+            error: `archive exceeds budget: per-entry ${name} actual size ${raw.length} > 128 MiB`,
+          };
+        }
+        const remainingAfterActual =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        if (raw.length > remainingAfterActual) {
+          return {
+            error: `archive exceeds budget: total uncompressed ${actualAggregateBytes + raw.length} > 512 MiB`,
+          };
+        }
+        const inflated = Buffer.from(raw);
+        actualAggregateBytes += inflated.length;
+        contents.set(name, inflated);
+      } else {
+        const remainingBeforeInflation =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        const maxOutputLength = Math.min(
+          PER_ENTRY_LIMIT,
+          remainingBeforeInflation,
+        );
+        let inflated;
+        try {
+          inflated = inflateRawSync(raw, { maxOutputLength });
+        } catch (error) {
+          if (error.message.includes("Buffer larger")) {
+            const quantity =
+              remainingBeforeInflation < PER_ENTRY_LIMIT
+                ? "total uncompressed"
+                : "per-entry";
+            const limit =
+              remainingBeforeInflation < PER_ENTRY_LIMIT
+                ? "512 MiB"
+                : "128 MiB";
+            return {
+              error: `archive exceeds budget: ${quantity} actual output from ${name} exceeds ${limit}`,
+            };
+          }
+          // Other inflate errors are treated as unreadable parts
+        }
+        if (inflated && inflated.length > PER_ENTRY_LIMIT) {
+          return {
+            error: `archive exceeds budget: per-entry ${name} actual size ${inflated.length} > 128 MiB`,
+          };
+        }
+        const remainingAfterInflated =
+          TOTAL_UNCOMPRESSED_LIMIT - actualAggregateBytes;
+        if (inflated && inflated.length > remainingAfterInflated) {
+          return {
+            error: `archive exceeds budget: total uncompressed ${actualAggregateBytes + inflated.length} > 512 MiB`,
+          };
+        }
+        if (inflated) {
+          actualAggregateBytes += inflated.length;
+          contents.set(name, inflated);
+        }
+      }
+    }
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return { names, contents };
+}
+
+/** An entry matches a required keyword by name or by path prefix. */
+function zipEntryMatches(entryName, keyword) {
+  return (
+    entryName === keyword ||
+    entryName.startsWith(keyword) ||
+    entryName.includes(`/${keyword}`)
+  );
+}
+
+/** True when the container is a readable ZIP holding AT LEAST ONE of the parts. */
+export function inspectZipContainsEntries(filePath, requiredKeywords) {
+  const names = readZipEntryNames(filePath);
+  if (!names) return false;
+  return requiredKeywords.some((keyword) =>
+    names.some((name) => zipEntryMatches(name, keyword)),
+  );
+}
+
+/** True when the container is a readable ZIP holding EVERY one of the parts. */
+export function inspectZipContainsAllEntries(filePath, requiredKeywords) {
+  const names = readZipEntryNames(filePath);
+  if (!names) return false;
+  return requiredKeywords.every((keyword) =>
+    names.some((name) => zipEntryMatches(name, keyword)),
+  );
 }
 
 // J01: Python syntax validator using py_compile with AST bracket fallback
@@ -131,7 +345,21 @@ export function validatePythonSyntax(filePath, content) {
     return { valid: true, method: "py_compile" };
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString("utf8") : "";
-    if (stderr.includes("SyntaxError") || (err.status && err.status !== 0)) {
+    // F-554 (R10-T06-6): only an interpreter that RAN can answer the syntax
+    // question. A spawn failure (`ENOENT`), the 5000 ms overrun (`ETIMEDOUT`)
+    // and a child killed by a signal all arrive with `status: null` and an
+    // empty stderr, so they used to fall through to the structural counter and
+    // return `valid: true` from a check that never executed â€” and the caller
+    // stamped `checks.pythonSyntax: true` over it.
+    const interpreterRan = typeof err?.status === "number" && !err?.signal;
+    if (!interpreterRan) {
+      return {
+        valid: false,
+        error: `PYTHON_INTERPRETER_UNAVAILABLE: the Python syntax validator did not run (${err?.code ?? (err?.signal ? `signal ${err.signal}` : "no exit status")})`,
+        method: "interpreter_unavailable",
+      };
+    }
+    if (stderr.includes("SyntaxError") || err.status !== 0) {
       return {
         valid: false,
         error: `INVALID_PYTHON_SYNTAX: ${stderr.trim() || err.message}`,
@@ -286,11 +514,13 @@ function readLastBytes(filePath, n) {
 
 /**
  * Derives the canonical type string from a file extension or explicit override.
+ * F-472 / R9-T12-1: exported so the governed completion seam can consult the
+ * same FORMAT_MAX_SIZE_LIMITS row the validator uses, BEFORE it reads the bytes.
  * @param {string|undefined} expectedType
  * @param {string} ext  lowercase extension including dot
  * @returns {string}
  */
-function deriveType(expectedType, ext) {
+export function deriveType(expectedType, ext) {
   if (expectedType) return expectedType;
   switch (ext) {
     case ".xlsx":
@@ -321,6 +551,193 @@ function deriveType(expectedType, ext) {
     default:
       return "generic";
   }
+}
+
+/**
+ * True when the bytes carry the ZIP local-file signature (`PK\x03\x04`).
+ * F-564 (R10-T08-5): one predicate for the technical tier and the preview arm,
+ * so the two verdicts over one artifact cannot use different magic-byte tests.
+ *
+ * @param {Buffer} header
+ * @returns {boolean}
+ */
+function isPkZipHeader(header) {
+  return (
+    header.length >= 4 &&
+    header[0] === 0x50 &&
+    header[1] === 0x4b &&
+    header[2] === 0x03 &&
+    header[3] === 0x04
+  );
+}
+
+/**
+ * F-564 (R10-T08-5): the PDF container facts the TECHNICAL tier decides on.
+ * The preview arm used to read only the `%PDF-` header, so a file the tier
+ * refused over a missing `%%EOF` trailer was still reported to the operator as
+ * valid. Both callers now share this reader.
+ *
+ * @param {string} filePath
+ * @param {number | null} knownSizeBytes the tier's already-measured size, when it has one
+ * @returns {{ isPdfHeader: boolean, version: string, hasTrailerEof: boolean, hasStartXref: boolean }}
+ */
+function inspectPdfContainer(filePath, knownSizeBytes = null) {
+  const header = readFirstBytes(filePath, 8);
+  const isPdfHeader =
+    header.length >= 5 && header.subarray(0, 5).toString("ascii") === "%PDF-";
+  const versionMatch = header.toString("ascii").match(/%PDF-([\d.]+)/u);
+  const trailerStr = readLastBytes(filePath, 1024).toString("ascii");
+  let sizeBytes = knownSizeBytes;
+  if (typeof sizeBytes !== "number") {
+    try {
+      sizeBytes = statSync(filePath).size;
+    } catch {
+      sizeBytes = 0;
+    }
+  }
+  return {
+    isPdfHeader,
+    version: versionMatch ? versionMatch[1] : "?",
+    hasTrailerEof:
+      trailerStr.includes("%%EOF") ||
+      (sizeBytes <= 64 && trailerStr.includes("%EOF")),
+    hasStartXref:
+      trailerStr.includes("startxref") ||
+      trailerStr.includes("xref") ||
+      sizeBytes <= 64,
+  };
+}
+
+/**
+ * F-564 (R10-T08-5): the Power BI structure the TECHNICAL tier decides on.
+ * `[Content_Types].xml` alone is an OPC part every Office document carries, so
+ * the report layout plus its data half are required conjunctively. Shared with
+ * the preview arm, which used to call any PK container "valid".
+ *
+ * @param {string} filePath
+ * @returns {{ isPkZip: boolean, hasStructure: boolean }}
+ */
+function inspectPowerBiContainer(filePath) {
+  const isPkZip = isPkZipHeader(readFirstBytes(filePath, 4));
+  const hasStructure =
+    isPkZip &&
+    (inspectZipContainsAllEntries(filePath, ["Report/Layout", "DataMashup"]) ||
+      inspectZipContainsAllEntries(filePath, ["Report/Layout", "DataModel"]));
+  return { isPkZip, hasStructure };
+}
+
+/**
+ * F-564 (R10-T08-5): the legacy `.doc` header facts the TECHNICAL tier decides
+ * on. A `.doc` carrying the DOCX ZIP signature is refused by the tier, while
+ * the preview arm used to call exactly that shape a valid Word container.
+ *
+ * @param {string} filePath
+ * @returns {{ isPkZip: boolean, isOle2: boolean }}
+ */
+function inspectLegacyDocContainer(filePath) {
+  const header = readFirstBytes(filePath, 8);
+  return {
+    isPkZip: isPkZipHeader(header),
+    isOle2:
+      header.length >= 8 &&
+      header[0] === 0xd0 &&
+      header[1] === 0xcf &&
+      header[2] === 0x11 &&
+      header[3] === 0xe0 &&
+      header[4] === 0xa1 &&
+      header[5] === 0xb1 &&
+      header[6] === 0x1a &&
+      header[7] === 0xe1,
+  };
+}
+
+// XML 1.0 forbids C0 controls other than tab/LF/CR, plus U+FFFE/U+FFFF and
+// unpaired surrogates. F-465: the EXCEL tier parses each worksheet part, so a
+// forbidden byte cannot hide behind a container-only structure check.
+function forbiddenXmlCharacterCode(xml) {
+  for (const character of xml) {
+    const code = character.codePointAt(0);
+    const forbidden =
+      code === 0xfffe ||
+      code === 0xffff ||
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      (code >= 0xd800 && code <= 0xdfff);
+    if (forbidden) {
+      return code.toString(16).toUpperCase().padStart(4, "0");
+    }
+  }
+  return null;
+}
+
+// Excel's published per-cell text budget (F-473). The validator checks the
+// decoded text so escaped characters (`&amp;`) are measured as one character.
+const EXCEL_MAX_CELL_CHARACTERS = 32767;
+
+function decodeXmlText(value) {
+  return String(value)
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+/**
+ * Return the first worksheet cell that exceeds Excel's per-cell text budget.
+ *
+ * F-473: the writer refuses an over-budget value, but a workbook built by any
+ * other producer could still arrive here; the EXCEL tier therefore measures
+ * the `<t>`/`<v>` text of every cell instead of trusting the container shape.
+ *
+ * @param {string} sheetName
+ * @param {string} xml
+ * @returns {string | null}
+ */
+function overBudgetCellFailure(sheetName, xml) {
+  for (const cell of xml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gu)) {
+    const inner = cell[2];
+    let characters = 0;
+    for (const text of inner.matchAll(
+      /<(?:t|v)\b[^>]*>([\s\S]*?)<\/(?:t|v)>/gu,
+    )) {
+      characters += decodeXmlText(text[1]).length;
+    }
+    if (characters > EXCEL_MAX_CELL_CHARACTERS) {
+      const ref = /\br="([^"]*)"/u.exec(cell[1])?.[1] || "(unreferenced)";
+      return `EXCEL_CELL_TOO_LONG: ${sheetName} cell ${ref} holds ${characters} characters, above the ${EXCEL_MAX_CELL_CHARACTERS}-character per-cell budget`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse every worksheet part of a workbook archive.
+ *
+ * @param {{ names: string[], contents: Map<string, Buffer> } | null} archive
+ * @returns {string | null} the failure code with its detail, or null when the
+ *   worksheet parts are readable and XML-valid.
+ */
+function inspectExcelSheetParts(archive) {
+  if (!archive) {
+    return "CORRUPT_EXCEL: workbook central directory could not be read";
+  }
+  for (const name of archive.names) {
+    if (!/^xl\/worksheets\/[^/]+\.xml$/u.test(name)) continue;
+    const part = archive.contents.get(name);
+    if (!part) {
+      return `CORRUPT_EXCEL: worksheet part ${name} could not be read`;
+    }
+    const xml = part.toString("utf8");
+    const code = forbiddenXmlCharacterCode(xml);
+    if (code) {
+      return `INVALID_EXCEL_SHEET_XML: ${name} contains U+${code}, which XML 1.0 forbids`;
+    }
+    const overBudget = overBudgetCellFailure(name, xml);
+    if (overBudget) {
+      return overBudget;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +859,7 @@ export function validateTechnicalArtifact({
     result.checks.sandboxContainment = true;
   }
 
-  // 2. File size & readability check + SHA-256 hash (I07)
+  // 2. File size & readability check (stat only)
   let fileSizeBytes;
   try {
     const stat = statSync(filePath);
@@ -457,13 +874,6 @@ export function validateTechnicalArtifact({
       return stampProvenanceAndDigest(result, initialInferredType);
     }
     result.checks.readability = true;
-
-    // I07: Compute immutable SHA-256 hash
-    const contentBuf = readFileSync(filePath);
-    const hash = createHash("sha256").update(contentBuf).digest("hex");
-    result.sizeBytes = fileSizeBytes;
-    result.sha256 = hash;
-    result.checks.hash = hash;
   } catch (err) {
     result.status = VALIDATION_STATUS.FAIL;
     result.errors.push(
@@ -473,12 +883,13 @@ export function validateTechnicalArtifact({
     return stampProvenanceAndDigest(result, initialInferredType);
   }
 
-  // 3. Content parsing & schema check by type
+  // 3. Format-specific maximum size limits bounded by the Discord upload
+  // ceiling. F-464: the ceiling is compared against stat.size BEFORE the
+  // artifact body is read, so an over-limit file is refused without paying the
+  // full read and hash cost.
   const ext = path.extname(filePath).toLowerCase();
   const inferredType = deriveType(expectedType, ext);
   result.checks.inferredType = inferredType;
-
-  // J09: Format-specific maximum size limits bounded by Discord upload ceiling
   const maxSize =
     FORMAT_MAX_SIZE_LIMITS[inferredType] || MAX_ARTIFACT_SIZE_BYTES;
   result.checks.maxSizeBytes = maxSize;
@@ -492,6 +903,24 @@ export function validateTechnicalArtifact({
   }
   result.checks.sizeBound = true;
 
+  // 4. Read + SHA-256 hash (I07), bounded by the ceiling above
+  let contentBuf;
+  try {
+    contentBuf = readFileSync(filePath);
+    const hash = createHash("sha256").update(contentBuf).digest("hex");
+    result.sizeBytes = fileSizeBytes;
+    result.sha256 = hash;
+    result.checks.hash = hash;
+  } catch (err) {
+    result.status = VALIDATION_STATUS.FAIL;
+    result.errors.push(
+      `READ_ERROR: Failed to read the artifact: ${err?.message}`,
+    );
+    result.checks.readability = false;
+    return stampProvenanceAndDigest(result, inferredType);
+  }
+
+  // 5. Content parsing & schema check by type
   if (inferredType === "json") {
     try {
       const content = readFileSync(filePath, "utf8");
@@ -563,13 +992,60 @@ export function validateTechnicalArtifact({
       result.errors.push(`CSV_READ_ERROR: ${readErr?.message}`);
     }
   } else if (inferredType === "excel") {
-    // Basic structural presence check
+    // M12/T9 F-258: this branch checked NOTHING structural. The type came
+    // from the file extension, the only check was a 100-byte floor, and the
+    // verdict was a PASS for any file over it â€” so a 200-byte text file named
+    // `report.xlsx` reached the governed result card. The container is now
+    // parsed: a workbook must be a readable ZIP that declares its content
+    // types and at least one worksheet.
     result.checks.format = "EXCEL";
     if (fileSizeBytes < 100) {
       result.status = VALIDATION_STATUS.FAIL;
       result.errors.push(
         "CORRUPT_EXCEL: File size too small to be valid workbook",
       );
+      result.checks.excelStructureValid = false;
+    } else {
+      const archiveResult = readZipArchive(contentBuf);
+
+      // Handle budget error return format
+      if (
+        archiveResult &&
+        typeof archiveResult === "object" &&
+        archiveResult.error
+      ) {
+        // Budget violation - convert to FAIL with explicit error message
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(archiveResult.error);
+        result.checks.excelStructureValid = false;
+        return stampProvenanceAndDigest(result, inferredType);
+      }
+
+      const { names, contents } = archiveResult || {};
+      const hasContentTypes =
+        Array.isArray(names) && names.includes("[Content_Types].xml");
+      const hasWorksheet =
+        Array.isArray(names) &&
+        names.some(
+          (name) => name.startsWith("xl/worksheets/") && name.endsWith(".xml"),
+        );
+      result.checks.excelStructureValid = hasContentTypes && hasWorksheet;
+      if (!result.checks.excelStructureValid) {
+        result.status = VALIDATION_STATUS.FAIL;
+        const missing = [];
+        if (!hasContentTypes) missing.push("[Content_Types].xml");
+        if (!hasWorksheet) missing.push("xl/worksheets/*.xml");
+        result.errors.push(
+          `CORRUPT_EXCEL: Workbook container is missing required part(s): ${missing.join(", ")}`,
+        );
+      } else {
+        const sheetXmlFailure = inspectExcelSheetParts({ names, contents });
+        result.checks.sheetXmlValid = sheetXmlFailure === null;
+        if (sheetXmlFailure) {
+          result.status = VALIDATION_STATUS.FAIL;
+          result.errors.push(sheetXmlFailure);
+        }
+      }
     }
   } else if (inferredType === "sql") {
     try {
@@ -578,10 +1054,16 @@ export function validateTechnicalArtifact({
         result.status = VALIDATION_STATUS.FAIL;
         result.errors.push("EMPTY_SQL: SQL file has no content");
       } else {
+        // F-459 (R9-T08-1): BOTH decisions below read the same mask, so a
+        // keyword or a bracket that only exists inside a literal or a comment
+        // is never read as syntax. The mask also carries the lexer's own
+        // refusals (unterminated literal/comment, backslash escape), which the
+        // hand-rolled quote toggle could not see.
+        const sqlMask = maskSqlLiteralsAndComments(content);
         // J08: Bounded parser-level safety contract
         const UNSAFE_SQL =
           /\b(DROP\s+DATABASE|DROP\s+SCHEMA|SHUTDOWN|GRANT\s+ALL|REVOKE|ALTER\s+SYSTEM|EXEC\s+xp_)\b/i;
-        if (UNSAFE_SQL.test(content)) {
+        if (UNSAFE_SQL.test(sqlMask.masked)) {
           result.status = VALIDATION_STATUS.FAIL;
           result.errors.push(
             "UNSAFE_SQL_STATEMENT: Destructive or administrative SQL commands forbidden in governed artifacts",
@@ -593,22 +1075,22 @@ export function validateTechnicalArtifact({
 
         let parenCount = 0;
         let bracketCount = 0;
-        let inSingleQuote = false;
-        for (let i = 0; i < content.length; i++) {
-          const ch = content[i];
-          if (ch === "'" && (i === 0 || content[i - 1] !== "\\")) {
-            inSingleQuote = !inSingleQuote;
-          } else if (!inSingleQuote) {
-            if (ch === "(") parenCount++;
-            else if (ch === ")") parenCount--;
-            else if (ch === "[") bracketCount++;
-            else if (ch === "]") bracketCount--;
-          }
+        for (const ch of sqlMask.masked) {
+          if (ch === "(") parenCount++;
+          else if (ch === ")") parenCount--;
+          else if (ch === "[") bracketCount++;
+          else if (ch === "]") bracketCount--;
         }
-        if (parenCount !== 0 || bracketCount !== 0 || inSingleQuote) {
+        if (
+          parenCount !== 0 ||
+          bracketCount !== 0 ||
+          sqlMask.unterminatedLiteral ||
+          sqlMask.unterminatedComment ||
+          sqlMask.backslashInLiteral
+        ) {
           result.status = VALIDATION_STATUS.FAIL;
           result.errors.push(
-            "MALFORMED_SQL_SYNTAX: Unbalanced parentheses/brackets or unclosed string literal in SQL artifact",
+            "MALFORMED_SQL_SYNTAX: Unbalanced parentheses/brackets, an unclosed string literal or comment, or a backslash escape in a SQL string literal",
           );
           result.checks.sqlSyntax = false;
         } else {
@@ -617,7 +1099,7 @@ export function validateTechnicalArtifact({
 
         const SQL_KEYWORDS =
           /\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|WITH|MERGE|CALL|EXEC)\b/i;
-        result.checks.hasSqlKeyword = SQL_KEYWORDS.test(content);
+        result.checks.hasSqlKeyword = SQL_KEYWORDS.test(sqlMask.masked);
         const lines = content.split(/\r?\n/);
         result.checks.lineCount = lines.length;
         const stmtCount = (content.match(/;/g) || []).length;
@@ -660,14 +1142,8 @@ export function validateTechnicalArtifact({
       result.errors.push(`PYTHON_READ_ERROR: ${readErr?.message}`);
     }
   } else if (inferredType === "powerbi") {
-    // PBIX and PBIT are ZIP archives — check PK magic bytes
-    const header = readFirstBytes(filePath, 4);
-    const isPkZip =
-      header.length >= 4 &&
-      header[0] === 0x50 &&
-      header[1] === 0x4b &&
-      header[2] === 0x03 &&
-      header[3] === 0x04;
+    // PBIX and PBIT are ZIP archives â€” the same reader the preview arm calls.
+    const { isPkZip, hasStructure } = inspectPowerBiContainer(filePath);
     result.checks.format = "POWERBI";
     result.checks.magicBytesValid = isPkZip;
     if (!isPkZip) {
@@ -676,26 +1152,22 @@ export function validateTechnicalArtifact({
         "CORRUPT_POWERBI: File does not have valid ZIP/PBIX magic bytes (PK\\x03\\x04)",
       );
     } else {
-      // J03: Inspect internal Power BI structures
-      if (fileSizeBytes >= 100) {
-        const hasPbixStructure = inspectZipContainsEntries(filePath, [
-          "DataModel",
-          "DataMashup",
-          "DiagramLayout",
-          "Report/Layout",
-          "[Content_Types].xml",
-          "Version",
-          "Settings",
-        ]);
-        result.checks.powerbiStructureValid = hasPbixStructure;
-        if (!hasPbixStructure) {
-          result.status = VALIDATION_STATUS.FAIL;
-          result.errors.push(
-            "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (DataModel, DataMashup, Report/Layout, Version)",
-          );
-        }
-      } else {
-        result.checks.powerbiStructureValid = true;
+      // J03: Inspect internal Power BI structures.
+      // M12/T9 F-258: the structure check now reads the container's own central
+      // directory, so a keyword inside arbitrary payload bytes no longer
+      // counts as an entry.
+      // F-503 / R10-L02-2: the gate was an ANY-of over a list that carried
+      // "[Content_Types].xml", a part the OPC spec mandates for EVERY Office
+      // document, so a renamed xlsx/docx/pptx satisfied it and reached the
+      // result gate as a valid Power BI artifact. Power BI is now identified
+      // conjunctively by its own distinguishing parts: the report layout plus
+      // its data half (DataMashup or DataModel).
+      result.checks.powerbiStructureValid = hasStructure;
+      if (!hasStructure) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(
+          "INVALID_POWERBI_STRUCTURE: ZIP archive does not contain recognizable Power BI structures (Report/Layout with DataModel or DataMashup)",
+        );
       }
     }
   } else if (inferredType === "parquet") {
@@ -740,35 +1212,26 @@ export function validateTechnicalArtifact({
       }
     }
   } else if (inferredType === "pdf") {
-    // J05: PDF header + trailer %%EOF and startxref validation
-    const header = readFirstBytes(filePath, 8);
-    const isPdfHeader = header.toString("ascii").startsWith("%PDF-");
+    // J05: PDF header + trailer %%EOF and startxref validation. F-564: the
+    // preview arm consumes the same reader instead of re-testing magic bytes.
+    const pdf = inspectPdfContainer(filePath, fileSizeBytes);
     result.checks.format = "PDF";
-    result.checks.magicBytesValid = isPdfHeader;
-    if (!isPdfHeader) {
+    result.checks.magicBytesValid = pdf.isPdfHeader;
+    if (!pdf.isPdfHeader) {
       result.status = VALIDATION_STATUS.FAIL;
       result.errors.push(
         "CORRUPT_PDF: File does not start with %PDF- magic bytes",
       );
     } else {
-      const trailerBuf = readLastBytes(filePath, 1024);
-      const trailerStr = trailerBuf.toString("ascii");
-      const hasTrailerEof =
-        trailerStr.includes("%%EOF") ||
-        (fileSizeBytes <= 64 && trailerStr.includes("%EOF"));
-      const hasStartXref =
-        trailerStr.includes("startxref") ||
-        trailerStr.includes("xref") ||
-        fileSizeBytes <= 64;
-      result.checks.hasTrailerEof = hasTrailerEof;
-      result.checks.hasStartXref = hasStartXref;
-      if (!hasTrailerEof) {
+      result.checks.hasTrailerEof = pdf.hasTrailerEof;
+      result.checks.hasStartXref = pdf.hasStartXref;
+      if (!pdf.hasTrailerEof) {
         result.status = VALIDATION_STATUS.FAIL;
         result.errors.push(
           "CORRUPT_PDF: Missing %%EOF trailer marker in last 1024 bytes",
         );
       }
-      if (!hasStartXref) {
+      if (!pdf.hasStartXref) {
         result.status = VALIDATION_STATUS.FAIL;
         result.errors.push(
           "CORRUPT_PDF: Missing xref or startxref pointer in trailer",
@@ -777,13 +1240,7 @@ export function validateTechnicalArtifact({
     }
   } else if (inferredType === "docx") {
     // J02: DOCX is a ZIP archive with word/ and [Content_Types].xml
-    const header = readFirstBytes(filePath, 4);
-    const isPkZip =
-      header.length >= 4 &&
-      header[0] === 0x50 &&
-      header[1] === 0x4b &&
-      header[2] === 0x03 &&
-      header[3] === 0x04;
+    const isPkZip = isPkZipHeader(readFirstBytes(filePath, 4));
     result.checks.format = "DOCX";
     result.checks.magicBytesValid = isPkZip;
     if (!isPkZip) {
@@ -792,52 +1249,33 @@ export function validateTechnicalArtifact({
         "CORRUPT_DOCX: File does not have valid ZIP/DOCX magic bytes (PK\\x03\\x04)",
       );
     } else {
-      if (fileSizeBytes >= 100) {
-        const hasDocxStructure = inspectZipContainsEntries(filePath, [
-          "word/",
-          "[Content_Types].xml",
-          "_rels/",
-          "word/document.xml",
-        ]);
-        result.checks.docxStructureValid = hasDocxStructure;
-        if (!hasDocxStructure) {
-          result.status = VALIDATION_STATUS.FAIL;
-          result.errors.push(
-            "INVALID_DOCX_STRUCTURE: ZIP archive does not contain recognizable DOCX structures (word/, [Content_Types].xml)",
-          );
-        }
-      } else {
-        result.checks.docxStructureValid = true;
+      // M12/T9 F-258: the DOCX structure is read from the archive's own
+      // central directory and BOTH required parts must be present. A truncated
+      // or garbage container is not a DOCX, whatever its magic bytes say.
+      const hasDocxStructure = inspectZipContainsAllEntries(filePath, [
+        "[Content_Types].xml",
+        "word/document.xml",
+      ]);
+      result.checks.docxStructureValid = hasDocxStructure;
+      if (!hasDocxStructure) {
+        result.status = VALIDATION_STATUS.FAIL;
+        result.errors.push(
+          "INVALID_DOCX_STRUCTURE: ZIP archive does not contain recognizable DOCX structures (word/, [Content_Types].xml)",
+        );
       }
     }
   } else if (inferredType === "doc") {
     // J02: Legacy .doc is OLE2 Compound Document Binary Format
-    const header = readFirstBytes(filePath, 8);
-    const isPkZip =
-      header.length >= 4 &&
-      header[0] === 0x50 &&
-      header[1] === 0x4b &&
-      header[2] === 0x03 &&
-      header[3] === 0x04;
-    if (isPkZip) {
+    const doc = inspectLegacyDocContainer(filePath);
+    if (doc.isPkZip) {
       result.status = VALIDATION_STATUS.FAIL;
       result.errors.push(
         "LEGACY_DOC_MISMATCH: .doc file has DOCX ZIP signature, expected OLE2 binary header (\\xD0\\xCF\\x11\\xE0)",
       );
       result.checks.legacyDocValid = false;
     } else {
-      const isOle2Doc =
-        header.length >= 8 &&
-        header[0] === 0xd0 &&
-        header[1] === 0xcf &&
-        header[2] === 0x11 &&
-        header[3] === 0xe0 &&
-        header[4] === 0xa1 &&
-        header[5] === 0xb1 &&
-        header[6] === 0x1a &&
-        header[7] === 0xe1;
-      result.checks.legacyDocValid = isOle2Doc;
-      if (!isOle2Doc) {
+      result.checks.legacyDocValid = doc.isOle2;
+      if (!doc.isOle2) {
         result.status = VALIDATION_STATUS.FAIL;
         result.errors.push(
           "CORRUPT_LEGACY_DOC: Invalid OLE2 binary signature (\\xD0\\xCF\\x11\\xE0)",
@@ -977,7 +1415,7 @@ export function validateBusinessLogic({
 
 /**
  * Extracts real preview data from an artifact file.
- * Prohibits mock data — all content derived directly from the file.
+ * Prohibits mock data â€” all content derived directly from the file.
  *
  * @param {object} opts
  * @param {string} opts.filePath
@@ -989,7 +1427,7 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     return {
       available: false,
       reason: "FILE_NOT_FOUND",
-      previewText: "*(Tệp không tồn tại)*",
+      previewText: "*(Tá»‡p khÃ´ng tá»“n táº¡i)*",
     };
   }
 
@@ -1003,7 +1441,7 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const content = readFileSync(filePath, "utf8");
       const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
       if (lines.length === 0) {
-        return { available: false, previewText: "*(Tệp CSV rỗng)*" };
+        return { available: false, previewText: "*(Tá»‡p CSV rá»—ng)*" };
       }
       const header = lines[0];
       const rows = lines.slice(1, 1 + maxRows);
@@ -1031,10 +1469,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const parsed = JSON.parse(content);
       let summary = "";
       if (Array.isArray(parsed)) {
-        summary = `Mảng gồm ${parsed.length} bản ghi.\n\`\`\`json\n${JSON.stringify(parsed.slice(0, maxRows), null, 2)}\n\`\`\``;
+        summary = `Máº£ng gá»“m ${parsed.length} báº£n ghi.\n\`\`\`json\n${JSON.stringify(parsed.slice(0, maxRows), null, 2)}\n\`\`\``;
       } else {
         const keys = Object.keys(parsed);
-        summary = `Đối tượng gồm ${keys.length} trường chính: ${keys.slice(0, 10).join(", ")}`;
+        summary = `Äá»‘i tÆ°á»£ng gá»“m ${keys.length} trÆ°á»ng chÃ­nh: ${keys.slice(0, 10).join(", ")}`;
       }
       return {
         available: true,
@@ -1057,11 +1495,11 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
         : hasSvg
           ? path.basename(svgPath)
           : null;
-      let text = `📊 **Bảng tính Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
+      let text = `ðŸ“Š **Báº£ng tÃ­nh Excel:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`;
       if (hasPng && hasSvg) {
-        text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${path.basename(pngPath)}\` (vector: \`${path.basename(svgPath)}\`)`;
+        text += `\nðŸ–¼ï¸ **HÃ¬nh áº£nh Preview thá»±c táº¿:** \`${path.basename(pngPath)}\` (vector: \`${path.basename(svgPath)}\`)`;
       } else if (previewImg) {
-        text += `\n🖼️ **Hình ảnh Preview thực tế:** \`${previewImg}\` (đã đính kèm để xem trực tiếp)`;
+        text += `\nðŸ–¼ï¸ **HÃ¬nh áº£nh Preview thá»±c táº¿:** \`${previewImg}\` (Ä‘Ã£ Ä‘Ã­nh kÃ¨m Ä‘á»ƒ xem trá»±c tiáº¿p)`;
       }
       return {
         available: true,
@@ -1086,13 +1524,13 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const MUTATION_RE = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)\b/i;
       const hasMutations = MUTATION_RE.test(content);
       const mutationNote = hasMutations
-        ? "\n⚠️ **Chứa câu lệnh ghi/xóa (DML/DDL)**"
-        : "\n✅ **Chỉ đọc (không có DML mutation)**";
+        ? "\nâš ï¸ **Chá»©a cÃ¢u lá»‡nh ghi/xÃ³a (DML/DDL)**"
+        : "\nâœ… **Chá»‰ Ä‘á»c (khÃ´ng cÃ³ DML mutation)**";
       const text =
-        `📄 **SQL Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ~${stmtCount} câu lệnh${mutationNote}\n` +
+        `ðŸ“„ **SQL Script:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ~${stmtCount} cÃ¢u lá»‡nh${mutationNote}\n` +
         "```sql\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 30 ? "\n-- ... (còn tiếp)" : "") +
+        (nonEmpty.length > 30 ? "\n-- ... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1116,10 +1554,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const clsCount = (content.match(/^\s*class\s+/gm) || []).length;
       const impCount = (content.match(/^\s*(import|from)\s+/gm) || []).length;
       const text =
-        `🐍 **Python Script:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${fnCount} hàm, ${clsCount} class, ${impCount} import\n` +
+        `ðŸ **Python Script:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ${fnCount} hÃ m, ${clsCount} class, ${impCount} import\n` +
         "```python\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 30 ? "\n# ... (còn tiếp)" : "") +
+        (nonEmpty.length > 30 ? "\n# ... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1137,23 +1575,25 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     // -----------------------------------------------------------------------
     if (ext === ".pbix" || ext === ".pbit") {
       const stat = statSync(filePath);
-      const header = readFirstBytes(filePath, 4);
-      const isPkZip =
-        header.length >= 4 &&
-        header[0] === 0x50 &&
-        header[1] === 0x4b &&
-        header[2] === 0x03 &&
-        header[3] === 0x04;
-      const validity = isPkZip
-        ? "✅ Container ZIP hợp lệ"
-        : "❌ Không nhận dạng được định dạng PBIX/PBIT";
+      // F-564 (R10-T08-5): the preview reported any PK container as valid while
+      // the technical tier required the report layout plus its data half, so a
+      // renamed xlsx reached the operator as a valid Power BI report. It reads
+      // the tier's reader now.
+      const { isPkZip, hasStructure } = inspectPowerBiContainer(filePath);
+      const validity = !isPkZip
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng PBIX/PBIT"
+        : hasStructure
+          ? "âœ… Container ZIP há»£p lá»‡ vÃ  Ä‘á»§ cáº¥u trÃºc Power BI (Report/Layout vá»›i DataModel hoáº·c DataMashup)"
+          : "âŒ Container ZIP nhÆ°ng KHÃ”NG pháº£i Power BI há»£p lá»‡ (thiáº¿u Report/Layout vá»›i DataModel hoáº·c DataMashup)";
       const label = ext === ".pbit" ? "Template (.pbit)" : "Report (.pbix)";
-      const text = `📊 **Power BI ${label}:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      const text = `ðŸ“Š **Power BI ${label}:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "powerbi",
         sizeBytes: stat.size,
         magicBytesValid: isPkZip,
+        structureValid: hasStructure,
+        verdict: hasStructure ? "VALID" : "INVALID",
         previewText: text,
       };
     }
@@ -1171,9 +1611,9 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
         footer.length === 4 && footer.toString("ascii") === "PAR1";
       const validity =
         headerOk && footerOk
-          ? "✅ Magic bytes PAR1 hợp lệ (header + footer)"
-          : `❌ Magic bytes không hợp lệ (header=${headerOk}, footer=${footerOk})`;
-      const text = `🗃️ **Apache Parquet:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+          ? "âœ… Magic bytes PAR1 há»£p lá»‡ (header + footer)"
+          : `âŒ Magic bytes khÃ´ng há»£p lá»‡ (header=${headerOk}, footer=${footerOk})`;
+      const text = `ðŸ—ƒï¸ **Apache Parquet:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "parquet",
@@ -1188,23 +1628,27 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     // -----------------------------------------------------------------------
     if (ext === ".pdf") {
       const stat = statSync(filePath);
-      const header = readFirstBytes(filePath, 8);
-      const isPdf =
-        header.length >= 5 &&
-        header.subarray(0, 5).toString("ascii") === "%PDF-";
-      // Attempt to extract version from header e.g. "%PDF-1.7"
-      const versionMatch = header.toString("ascii").match(/%PDF-([\d.]+)/);
-      const version = versionMatch ? versionMatch[1] : "?";
-      const validity = isPdf
-        ? `✅ PDF hợp lệ (phiên bản ${version})`
-        : "❌ Không nhận dạng được định dạng PDF";
-      const text = `📕 **PDF:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      // F-564 (R10-T08-5): the technical tier refuses a PDF without its
+      // `%%EOF` trailer and an xref/startxref pointer; the preview used to
+      // print valid from the `%PDF-` header alone. Same reader, same verdict.
+      const pdf = inspectPdfContainer(filePath, stat.size);
+      const structurallyValid =
+        pdf.isPdfHeader && pdf.hasTrailerEof && pdf.hasStartXref;
+      const validity = !pdf.isPdfHeader
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng PDF"
+        : structurallyValid
+          ? `âœ… PDF há»£p lá»‡ (phiÃªn báº£n ${pdf.version})`
+          : "âŒ PDF KHÃ”NG há»£p lá»‡: thiáº¿u %%EOF trailer hoáº·c xref/startxref";
+      const text = `ðŸ“• **PDF:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "pdf",
         sizeBytes: stat.size,
-        magicBytesValid: isPdf,
-        pdfVersion: isPdf ? version : null,
+        magicBytesValid: pdf.isPdfHeader,
+        hasTrailerEof: pdf.hasTrailerEof,
+        hasStartXref: pdf.hasStartXref,
+        pdfVersion: pdf.isPdfHeader ? pdf.version : null,
+        verdict: structurallyValid ? "VALID" : "INVALID",
         previewText: text,
       };
     }
@@ -1212,24 +1656,53 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     // -----------------------------------------------------------------------
     // DOCX / DOC
     // -----------------------------------------------------------------------
-    if (ext === ".docx" || ext === ".doc") {
+    if (ext === ".docx") {
       const stat = statSync(filePath);
-      const header = readFirstBytes(filePath, 4);
-      const isPkZip =
-        header.length >= 4 &&
-        header[0] === 0x50 &&
-        header[1] === 0x4b &&
-        header[2] === 0x03 &&
-        header[3] === 0x04;
-      const validity = isPkZip
-        ? "✅ Container ZIP hợp lệ (DOCX/OOXML)"
-        : "❌ Không nhận dạng được định dạng DOCX";
-      const text = `📝 **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      // F-564 (R10-T08-5): the technical tier requires both OOXML parts; the
+      // preview used to call any PK container a valid DOCX.
+      const isPkZip = isPkZipHeader(readFirstBytes(filePath, 4));
+      const hasDocxStructure =
+        isPkZip &&
+        inspectZipContainsAllEntries(filePath, [
+          "[Content_Types].xml",
+          "word/document.xml",
+        ]);
+      const validity = !isPkZip
+        ? "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng DOCX"
+        : hasDocxStructure
+          ? "âœ… Container ZIP há»£p lá»‡ vÃ  Ä‘á»§ cáº¥u trÃºc DOCX (OOXML)"
+          : "âŒ Container ZIP nhÆ°ng KHÃ”NG pháº£i DOCX há»£p lá»‡ (thiáº¿u [Content_Types].xml hoáº·c word/document.xml)";
+      const text = `ðŸ“ **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
       return {
         available: true,
         type: "docx",
         sizeBytes: stat.size,
         magicBytesValid: isPkZip,
+        structureValid: hasDocxStructure,
+        verdict: hasDocxStructure ? "VALID" : "INVALID",
+        previewText: text,
+      };
+    }
+
+    if (ext === ".doc") {
+      const stat = statSync(filePath);
+      // F-564 (R10-T08-5): a `.doc` must be an OLE2 compound document; the
+      // technical tier refuses a DOCX ZIP signature under this extension, so
+      // the preview may not call that shape a valid Word container.
+      const doc = inspectLegacyDocContainer(filePath);
+      const validity = doc.isOle2
+        ? "âœ… Container OLE2 há»£p lá»‡ (DOC)"
+        : doc.isPkZip
+          ? "âŒ .doc KHÃ”NG há»£p lá»‡: cÃ³ chá»¯ kÃ½ ZIP cá»§a DOCX, thiáº¿u header OLE2"
+          : "âŒ KhÃ´ng nháº­n dáº¡ng Ä‘Æ°á»£c Ä‘á»‹nh dáº¡ng DOC (OLE2)";
+      const text = `ðŸ“ **Word Document:** \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)\n${validity}`;
+      return {
+        available: true,
+        type: "doc",
+        sizeBytes: stat.size,
+        magicBytesValid: doc.isOle2,
+        legacyDocValid: doc.isOle2,
+        verdict: doc.isOle2 ? "VALID" : "INVALID",
         previewText: text,
       };
     }
@@ -1244,10 +1717,10 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
       const previewLines = nonEmpty.slice(0, 20);
       const headingCount = (content.match(/^#+\s+/gm) || []).length;
       const text =
-        `📄 **Markdown:** \`${path.basename(filePath)}\` — ${allLines.length} dòng, ${headingCount} heading\n` +
+        `ðŸ“„ **Markdown:** \`${path.basename(filePath)}\` â€” ${allLines.length} dÃ²ng, ${headingCount} heading\n` +
         "```markdown\n" +
         previewLines.join("\n") +
-        (nonEmpty.length > 20 ? "\n... (còn tiếp)" : "") +
+        (nonEmpty.length > 20 ? "\n... (cÃ²n tiáº¿p)" : "") +
         "\n```";
       return {
         available: true,
@@ -1265,13 +1738,13 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
     return {
       available: true,
       type: ext.replace(".", "") || "file",
-      previewText: `Tệp: \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`,
+      previewText: `Tá»‡p: \`${path.basename(filePath)}\` (${(stat.size / 1024).toFixed(1)} KB)`,
     };
   } catch (err) {
     return {
       available: false,
       reason: err?.message,
-      previewText: `*(Lỗi trích xuất preview: ${err?.message})*`,
+      previewText: `*(Lá»—i trÃ­ch xuáº¥t preview: ${err?.message})*`,
     };
   }
 }
@@ -1283,6 +1756,8 @@ export function generateArtifactPreview({ filePath, maxRows = 5 }) {
 /**
  * Comprehensive Validation Gate combining Technical + Business + Real Preview.
  * Enforces: Technical PASS + Business FAIL = RESULT BLOCKED.
+ * F-564 (R10-T08-5): the preview is evaluated BEFORE the outcome so a container
+ * refusal it can prove is never attached beneath a PASS.
  */
 export function evaluateResultGate({
   artifactPath,
@@ -1326,14 +1801,34 @@ export function evaluateResultGate({
     } else {
       technical.checks.artifactSetPathSecurity = true;
     }
+    // F-469 (R9-L05-8): the digest was stamped inside validateTechnicalArtifact
+    // BEFORE this mutation, so a FAIL(artifactSetPathSecurity) result shipped a
+    // stale PASS-era evidenceDigest that omitted the added check and error.
+    // Recompute over the FINAL artifact-set verdict.
+    stampProvenanceAndDigest(
+      technical,
+      technical.provenance?.format ?? "generic",
+    );
   } else if (technical.status === VALIDATION_STATUS.PASS) {
     technical.checks.artifactSetPathSecurity = true;
+    // F-469 (R9-L05-8): the added check key also postdates the original stamp.
+    stampProvenanceAndDigest(
+      technical,
+      technical.provenance?.format ?? "generic",
+    );
   }
 
   const business = validateBusinessLogic({
     data: businessData,
     ...businessConfig,
   });
+
+  // F-564 (R10-T08-5): the preview is EVALUATED BEFORE the outcome, not attached
+  // after it. It used to be generated at the end and only spray-painted onto an
+  // already-decided payload, so a preview that could not verify the container
+  // (a header-only PDF under a generic expected type, for example) rode beside a
+  // PASS and the operator read the weaker of two verdicts as the answer.
+  const preview = generateArtifactPreview({ filePath: primaryPath });
 
   let overallStatus = VALIDATION_STATUS.PASS;
   let blockedReason = null;
@@ -1345,9 +1840,15 @@ export function evaluateResultGate({
     // CRITICAL INVARIANT: Technical PASS but Business FAIL = RESULT BLOCKED
     overallStatus = VALIDATION_STATUS.BLOCKED;
     blockedReason = `RESULT BLOCKED: Technical check passed, but Business validation failed: ${business.errors.join("; ")}`;
+  } else if (preview?.verdict === "INVALID") {
+    // F-564: a structural refusal the preview can prove must not be emitted as a
+    // PASS. The preview arm now reads the same per-type helpers as the technical
+    // tier, so an INVALID verdict here is a real container refusal, not the old
+    // magic-bytes-only snapshot.
+    overallStatus = VALIDATION_STATUS.FAIL;
+    blockedReason =
+      "Technical validation failed: PREVIEW_STRUCTURE_REFUSED: the preview arm could not verify the artifact container";
   }
-
-  const preview = generateArtifactPreview({ filePath: primaryPath });
 
   return {
     overallStatus,
@@ -1365,6 +1866,13 @@ export function evaluateResultGate({
 /**
  * I10: Atomic artifact publication step.
  * Prevents partially written files from being reviewed or validated.
+ *
+ * F-502 (R10-L02-1): this writer used to adopt whatever already sat at its
+ * predictable `.tmp-<pid>-<ms>` name (`"w"` truncates), never checked the path
+ * for symlinked components, and left its own residue behind when the write
+ * failed â€” the exact adopt-pattern `queue-manager.mjs` and `decision-ledger.mjs`
+ * replaced with `"wx"` + `assertNoSymlinkComponents` + own-temp removal. It is
+ * the same discipline here, not a new atomic writer.
  */
 export function publishArtifactAtomic({ sourcePath, targetPath }) {
   if (!sourcePath || !targetPath) {
@@ -1374,18 +1882,64 @@ export function publishArtifactAtomic({ sourcePath, targetPath }) {
     throw new Error(`SOURCE_FILE_NOT_FOUND: ${sourcePath}`);
   }
   const targetDir = path.dirname(targetPath);
+  const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  // Before anything is created: `mkdirSync(recursive)` would otherwise happily
+  // materialize the artifact through a symlinked ancestor.
+  assertNoSymlinkComponents(tempPath);
   if (!existsSync(targetDir)) {
     mkdirSync(targetDir, { recursive: true });
   }
-  const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
   const data = readFileSync(sourcePath);
-  const fd = openSync(tempPath, "w", 0o600);
+  let fd = null;
+  let tempIsOurs = false;
   try {
+    // `"wx"` CREATES the temp instead of adopting a path an attacker (or a
+    // crashed earlier attempt) already populated; `EEXIST` is the refusal.
+    fd = openSync(tempPath, "wx", 0o600);
+    tempIsOurs = true;
     writeFileSync(fd, data);
     fsyncSync(fd);
-  } finally {
     closeSync(fd);
+    fd = null;
+    renameSync(tempPath, targetPath);
+    // M10/T2-R17: fsync the parent directory after the rename so the rename
+    // itself is durable; otherwise the bytes are safe but the published name can
+    // revert on a crash, and a "published" artifact can disappear. Parity with
+    // `topology/lib/ledger.mjs` and `lib/queue-manager.mjs` (M7-066).
+    try {
+      const directoryFd = openSync(targetDir, "r");
+      try {
+        fsyncSync(directoryFd);
+      } finally {
+        closeSync(directoryFd);
+      }
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
+      ) {
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* preserve the original failure */
+      }
+    }
+    // Closed first, so the removal can succeed on Windows as well as POSIX. Only
+    // ever a temp this call created: after a successful rename the temp name is
+    // gone, and a foreign file at that path must be left untouched.
+    if (tempIsOurs && existsSync(tempPath)) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        /* preserve the original failure */
+      }
+    }
+    throw error;
   }
-  renameSync(tempPath, targetPath);
   return { success: true, publishedPath: targetPath, sizeBytes: data.length };
 }

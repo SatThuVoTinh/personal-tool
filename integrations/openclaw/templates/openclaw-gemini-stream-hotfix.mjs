@@ -222,12 +222,17 @@ function resolveRuntime() {
     "node_modules",
     "openclaw",
   );
-  const binary = realpathSync(
-    path.join(homedir(), ".local", "bin", "openclaw"),
-  );
+  let binary;
+  try {
+    binary = realpathSync(path.join(homedir(), ".local", "bin", "openclaw"));
+  } catch {
+    throw notApplicable(
+      "the OpenClaw package is not installed in the user-local tree",
+    );
+  }
   const packageRoot = path.dirname(binary);
   if (packageRoot !== realpathSync(expectedRoot)) {
-    throw new Error(
+    throw notApplicable(
       "OpenClaw package root is outside the expected user-local install",
     );
   }
@@ -252,6 +257,36 @@ function resolveRuntime() {
   });
 }
 
+/**
+ * F-296: fsync the PARENT DIRECTORY after a rename.
+ *
+ * A rename is only durable once the directory entry that carries it is
+ * flushed, and the file's own fsync does not do that. The other writers in
+ * this repository (topology/lib/ledger.mjs, lib/queue-manager.mjs,
+ * lib/decision-ledger.mjs, lib/artifact-validator.mjs,
+ * topology/lib/native-patch.mjs, topology/lib/runtime-backup.mjs) all fsync
+ * the parent directory for exactly this reason; this template published the
+ * renamed file without it, so a crash right after the rename could lose the
+ * replacement.
+ *
+ * Windows cannot fsync a directory handle, so the platform error is tolerated
+ * there and only there, exactly as the sibling writers do.
+ */
+function syncDirectory(directory) {
+  let descriptor;
+  try {
+    descriptor = openSync(directory, "r");
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error.code)
+    )
+      throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
 function writeAtomically(filePath, contents, fileMode) {
   const temporaryPath = `${filePath}.zink-hotfix-${process.pid}.tmp`;
   let descriptor;
@@ -263,6 +298,7 @@ function writeAtomically(filePath, contents, fileMode) {
     descriptor = undefined;
     chmodSync(temporaryPath, fileMode);
     renameSync(temporaryPath, filePath);
+    syncDirectory(path.dirname(filePath));
   } catch (error) {
     if (descriptor !== undefined) {
       try {
@@ -280,12 +316,53 @@ function writeAtomically(filePath, contents, fileMode) {
   }
 }
 
+export const HOTFIX_NOT_APPLICABLE_CODE = "OPENCLAW_HOTFIX_NOT_APPLICABLE";
+
+/**
+ * M12/T9 F-179: the boot gate must distinguish "this host is broken" from
+ * "this hotfix does not apply here". A hotfix that targets one pinned
+ * OpenClaw release cannot be applied to another release, and an install that
+ * is not the user-local one is not this script's business; neither is a
+ * reason to fail the systemd unit and take the whole assistant down.
+ */
+function notApplicable(reason) {
+  const error = new Error(reason);
+  error.code = HOTFIX_NOT_APPLICABLE_CODE;
+  return error;
+}
+
 export function requireSupportedRelease(version) {
   if (version !== OPENCLAW_HOTFIX_RELEASE) {
-    throw new Error(
+    throw notApplicable(
       `Unsupported OpenClaw version: expected ${OPENCLAW_HOTFIX_RELEASE}`,
     );
   }
+}
+
+/**
+ * What the boot gate does about the runtime state it finds.
+ *
+ * ALREADY_PATCHED: the hotfix is in place, nothing to do.
+ * REPAIR: the hotfix applies to this runtime and is not in place, so the
+ *   gate puts it in place instead of failing the unit.
+ * NOT_APPLICABLE: the installed release is not the one this hotfix targets,
+ *   so there is nothing to enforce and nothing to fail.
+ */
+export const HOTFIX_BOOT_ACTION = Object.freeze({
+  ALREADY_PATCHED: "ALREADY_PATCHED",
+  REPAIR: "REPAIR",
+  NOT_APPLICABLE: "NOT_APPLICABLE",
+});
+
+export function hotfixBootAction({ state, releaseSupported = true }) {
+  if (!releaseSupported) return HOTFIX_BOOT_ACTION.NOT_APPLICABLE;
+  if (state === "patched") return HOTFIX_BOOT_ACTION.ALREADY_PATCHED;
+  if (state === "original" || state === "r18-predecessor") {
+    return HOTFIX_BOOT_ACTION.REPAIR;
+  }
+  throw new Error(
+    `OpenClaw hotfix artifacts are in an unsupported partial state: ${state}`,
+  );
 }
 
 export function requireKnownHash(artifactId, contents) {
@@ -299,10 +376,16 @@ export function requireKnownHash(artifactId, contents) {
   return digest;
 }
 
-function classifyState(records) {
+export function classifyState(records) {
   const states = records.map(({ spec, contents }) => {
-    const digest = requireKnownHash(spec.id, contents);
-    return digest === spec.patchedSha256 ? "patched" : "original";
+    const s = spec ?? artifactSpec(spec?.id);
+    const digest = sha256(contents);
+    if (digest !== s.originalSha256 && digest !== s.patchedSha256) {
+      throw new Error(
+        `OpenClaw hotfix target hash is not allowlisted: ${s.fileName}`,
+      );
+    }
+    return digest === s.patchedSha256 ? "patched" : "original";
   });
   if (states.every((state) => state === "patched")) return "patched";
   if (states.every((state) => state === "original")) return "original";
@@ -336,7 +419,11 @@ function desiredContents(record, desiredState) {
   return output;
 }
 
-function writeTransaction(records, desiredState) {
+export function writeTransaction(
+  records,
+  desiredState,
+  _writeAtomically = writeAtomically,
+) {
   const planned = records.map((record) => ({
     ...record,
     desired: desiredContents(record, desiredState),
@@ -345,8 +432,12 @@ function writeTransaction(records, desiredState) {
   try {
     for (const record of planned) {
       if (record.desired === record.contents) continue;
-      writeAtomically(record.filePath, record.desired, record.fileMode);
+      // Option A: record in `changed` before writeAtomically returns so
+      // rollback can restore even if a subsequent write fails after its
+      // rename (F-OC-008). The renamed artifact must be restorable via
+      // rollback when an fsync failure leaves it untracked.
       changed.push(record);
+      _writeAtomically(record.filePath, record.desired, record.fileMode);
     }
   } catch (error) {
     let rollbackError;
@@ -384,7 +475,47 @@ function verifyRuntimeState(records, expectedState) {
   }
 }
 
+/**
+ * The boot gate. M12/T9 F-179: `ExecStartPre` used to run `--check`, which
+ * exits non-zero unless the runtime is already patched. The apply ceremony
+ * never establishes that state, so a fresh apply-then-start failed the unit
+ * five times in 60 s and left the assistant down with no recovery.
+ *
+ * `--ensure` closes that: when the hotfix applies to the installed runtime it
+ * puts it in place (the same transactional write the operator runs by hand) and
+ * verifies it; when the installed release is not the one this hotfix targets
+ * it says so and does not fail the unit. A runtime that cannot be repaired
+ * still fails, because that is a real fault.
+ */
+export function runEnsure() {
+  let records;
+  try {
+    records = resolveRuntime();
+  } catch (error) {
+    if (error?.code === HOTFIX_NOT_APPLICABLE_CODE) {
+      process.stdout.write(
+        `PASS: Gemini stream recovery hotfix ensure (not applicable: ${error.message})\n`,
+      );
+      return;
+    }
+    throw error;
+  }
+  const currentState = classifyState(records);
+  const action = hotfixBootAction({ state: currentState });
+  if (action === HOTFIX_BOOT_ACTION.REPAIR) {
+    writeTransaction(records, "patched");
+    verifyRuntimeState(records, "patched");
+  }
+  process.stdout.write(
+    `PASS: Gemini stream recovery hotfix ensure (${action})\n`,
+  );
+}
+
 export function run(mode) {
+  if (mode === "ensure") {
+    runEnsure();
+    return;
+  }
   const records = resolveRuntime();
   const currentState = classifyState(records);
   if (mode === "check") {
@@ -408,10 +539,10 @@ function main() {
   const arguments_ = process.argv.slice(2);
   if (
     arguments_.length !== 1 ||
-    !/^--(?:check|apply|revert)$/u.test(arguments_[0])
+    !/^--(?:check|ensure|apply|revert)$/u.test(arguments_[0])
   ) {
     throw new Error(
-      "Usage: openclaw-gemini-stream-hotfix.mjs --check|--apply|--revert",
+      "Usage: openclaw-gemini-stream-hotfix.mjs --check|--ensure|--apply|--revert",
     );
   }
   run(arguments_[0].slice(2));

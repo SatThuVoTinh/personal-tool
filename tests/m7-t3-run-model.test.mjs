@@ -136,6 +136,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(after.model, MODEL_ALLOWLIST[1]);
       assert.equal(after.run_scoped, true);
       assert.equal(after.session_override, false);
@@ -168,6 +169,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(result.model, MODEL_ALLOWLIST[1]);
 
       const ledgerAfter = ledgerBytes(paths);
@@ -224,6 +226,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         sessionKey,
         runId,
       });
+      // M10/T2-R12: failover restored — low quota moves to the fallback.
       assert.equal(firstRun.model, MODEL_ALLOWLIST[1]);
       const afterFirst = ledgerBytes(paths);
       unregister?.();
@@ -371,12 +374,43 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
         const receipt = await selfNativeQuota(config, { agentId });
         assert.equal(receipt.quota_self_read.agent_id, agentId);
         assert.equal(receipt.quota_self_read.quota.remaining_pct, expected);
+        // M12/T9 F-319: the previous check searched the serialised receipt for
+        // the other agents' percentage in QUOTED form, but the field is
+        // numeric in the producer and in the assertion two lines above, so
+        // JSON never emits it quoted: the condition was unfalsifiable and a
+        // reader widened with another agent's snapshot stayed green. The
+        // receipt is now checked for the absence of the other agents BY
+        // IDENTIFIER ? a form the data type can produce ? and for the absence
+        // of any field a widened reader would have to add.
+        const serialized = JSON.stringify(receipt);
+        assert.deepEqual(
+          Object.keys(receipt).sort(),
+          ["quota_self_read"],
+          "the receipt must carry the self-scope and nothing else",
+        );
+        assert.deepEqual(
+          Object.keys(receipt.quota_self_read).sort(),
+          ["agent_id", "health", "policy", "quota", "scope", "status"],
+          "the self-read must carry exactly the published fields",
+        );
+        assert.deepEqual(
+          Object.keys(receipt.quota_self_read.quota ?? {}).sort(),
+          [
+            "age_ms",
+            "model",
+            "observed_at",
+            "provider",
+            "remaining_pct",
+            "reset_at",
+            "source",
+          ],
+          "the quota block must carry exactly the published fields",
+        );
         for (const other of ["o1", "o2", "python"].filter(
           (a) => a !== agentId,
         )) {
-          const otherPct = { o1: 90, o2: 40, python: 15 }[other];
           assert.equal(
-            JSON.stringify(receipt).includes(`"${otherPct}"`),
+            serialized.includes(`"${other}"`),
             false,
             `${agentId} receipt must not expose ${other} quota`,
           );
@@ -448,7 +482,7 @@ describe("T3 — run-scoped model resolution (no session override)", () => {
           (await resolveNativeRunModel(config, { agentId, sessionKey, runId }))
             .model,
           MODEL_ALLOWLIST[1],
-          `${agentId} low quota -> fallback`,
+          `${agentId} low quota -> fallback (R12 failover restoration)`,
         );
       } finally {
         unregister?.();

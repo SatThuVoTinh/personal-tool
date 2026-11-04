@@ -28,6 +28,7 @@
 //   * The snapshot is verified by re-hashing every body it holds, so a tampered
 //     or truncated snapshot is rejected before it is used to restore anything.
 import { createHash, randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   chmodSync,
   closeSync,
@@ -43,6 +44,12 @@ import {
 } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import {
+  NATIVE_DISCORD_CHANNEL_AMBIGUOUS,
+  nativePatchedDiscordChannelRelatives,
+  nativePatchedRuntimeRelatives,
+  resolveNativeDiscordChannelRelative,
+} from "./native-patch.mjs";
 
 /**
  * Reported when the apply could not establish a rollback target. Distinct from
@@ -58,6 +65,14 @@ export const RESTORE_UNVERIFIED = "TRANSACTION_RESTORE_UNVERIFIED";
  * Every live path the apply can mutate and rollback must restore, relative to
  * the state directory or the OpenClaw runtime root. Both roots are snapshotted
  * so a partial-root apply is still reversible.
+ *
+ * M10/T2-R8: the runtime list is DERIVED from the native patch pins (plus the
+ * bridge) instead of being a hand-maintained list. The hand-maintained list
+ * named three files while the patch writes four, so the Discord preflight
+ * file was mutated outside transaction tracking: runtime-verify could not see
+ * the only changed component and the rollback reported success with that
+ * component still mutated. Deriving from the pins makes "mutated but
+ * untracked" structurally impossible.
  */
 export const SNAPSHOT_TARGETS = Object.freeze({
   state: Object.freeze([
@@ -66,12 +81,34 @@ export const SNAPSHOT_TARGETS = Object.freeze({
     "extensions/zink-governance/package.json",
     "extensions/zink-governance/openclaw.plugin.json",
     "extensions/zink-governance/governance-manifests.json",
+    // M12/T9 F-106: the builder's apply branch writes these four, so they are
+    // mutated surfaces of the apply. The preimage did not record them, so a
+    // failed apply reported `rollbackSucceeded: true` while the resolver, the
+    // hotfix utility and the two auth plans stayed at the NEW revision: the
+    // rollback compared only the bytes it had captured.
+    "zink-auth-secret-plan.json",
+    "zink-auth-order-plan.json",
+    "bin/openclaw-pass-resolver",
+    "bin/openclaw-gemini-stream-hotfix.mjs",
   ]),
-  runtime: Object.freeze([
-    "dist/selection-DopzNY3I.js",
-    "dist/subagent-announce-Bh1QyKiE.js",
-    "dist/zink-governance-boundary.mjs",
-  ]),
+  runtime: nativePatchedRuntimeRelatives(),
+  // M10/T2-R8: the patched Discord preflight lives in the INSTALLED CHANNEL
+  // PLUGIN package, which is inside the state directory, so these are extra
+  // state-relative targets rather than a third governed root. Without them the
+  // only file the ingress repair actually rewrites was outside transaction
+  // tracking — the same "mutated but untracked" hole the derived runtime list
+  // was introduced to close, one tree over.
+  discordChannel: nativePatchedDiscordChannelRelatives(),
+  // M12/T9 F-106: the unit drop-in is the third governed root.
+  //
+  // The builder writes `~/.config/systemd/user/<unit>.service.d/10-zink.conf`
+  // in its apply branch, and that path is in NEITHER the state directory nor
+  // the OpenClaw runtime root, so a two-root preimage could not hold it at
+  // all: the drop-in was rewritten by every apply and restored by none, and
+  // the rollback reported success while the unit still carried the new
+  // revision. The drop-in is therefore a target of its own root, named by the
+  // caller that owns it.
+  systemd: Object.freeze(["openclaw-gateway-zink.service.d/10-zink.conf"]),
 });
 
 const digest = (body) => createHash("sha256").update(body).digest("hex");
@@ -94,28 +131,35 @@ function noLinks(target) {
  * a newly added asset cannot silently escape the snapshot. An irregular entry is
  * a hard error, never a silently skipped component.
  */
+function listFilesRecursively(root, relative = "") {
+  const found = [];
+  for (const name of readdirSync(path.join(root, relative))) {
+    const child = relative ? `${relative}/${name}` : name;
+    const stat = lstatSync(path.join(root, child));
+    if (stat.isSymbolicLink())
+      throw new Error("TRANSACTION_SNAPSHOT_SYMLINK_DENIED");
+    if (stat.isDirectory()) found.push(...listFilesRecursively(root, child));
+    else if (stat.isFile()) found.push(child);
+    else throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
+  }
+  return found.sort();
+}
+
 function discoverExtensionAssets(extensionRoot) {
   if (!existsSync(extensionRoot)) return [];
-  const found = [];
-  const visit = (relative) => {
-    for (const name of readdirSync(path.join(extensionRoot, relative))) {
-      const child = relative ? `${relative}/${name}` : name;
-      const stat = lstatSync(path.join(extensionRoot, child));
-      if (stat.isSymbolicLink())
-        throw new Error("TRANSACTION_SNAPSHOT_SYMLINK_DENIED");
-      if (stat.isDirectory()) visit(child);
-      else if (stat.isFile()) found.push(`extensions/zink-governance/${child}`);
-      else throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
-    }
-  };
-  visit("");
-  return found.sort();
+  return listFilesRecursively(extensionRoot).map(
+    (child) => `extensions/zink-governance/${child}`,
+  );
 }
 
 /** Which root a recorded relative path belongs to. */
 function rootForRelative(relative) {
+  // M12/T9 F-106: the systemd drop-in is the third root, and it is named
+  // explicitly so it can never be mistaken for a runtime-relative path.
+  if (SNAPSHOT_TARGETS.systemd.includes(relative)) return "systemdRoot";
   return SNAPSHOT_TARGETS.state.includes(relative) ||
-    relative.startsWith("extensions/zink-governance/")
+    relative.startsWith("extensions/zink-governance/") ||
+    SNAPSHOT_TARGETS.discordChannel.includes(relative)
     ? "stateDir"
     : "runtimeRoot";
 }
@@ -125,7 +169,14 @@ function rootForRelative(relative) {
  * path that would escape its root.
  */
 function resolveRelative(snapshot, relative) {
-  const base = path.resolve(snapshot[rootForRelative(relative)]);
+  const root = rootForRelative(relative);
+  const declared = snapshot[root];
+  // M12/T9 F-106: a path whose root was never named cannot be resolved. It is
+  // refused rather than guessed, so a snapshot that lost its systemd root
+  // fails closed instead of resolving against the wrong tree.
+  if (typeof declared !== "string" || !declared)
+    throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
+  const base = path.resolve(declared);
   const absolute = path.resolve(base, relative);
   if (absolute !== base && !absolute.startsWith(base + path.sep))
     throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
@@ -135,7 +186,14 @@ function resolveRelative(snapshot, relative) {
 function rootsFrom(snapshot) {
   if (!snapshot?.stateDir || !snapshot?.runtimeRoot)
     throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-  return { stateDir: snapshot.stateDir, runtimeRoot: snapshot.runtimeRoot };
+  return {
+    stateDir: snapshot.stateDir,
+    runtimeRoot: snapshot.runtimeRoot,
+    // M12/T9 F-106: the third root is OPTIONAL, so a snapshot captured before
+    // the drop-in was tracked still resolves. A path that needs it and does
+    // not have it is refused by `resolveRelative`.
+    systemdRoot: snapshot.systemdRoot ?? null,
+  };
 }
 
 /**
@@ -144,17 +202,45 @@ function rootsFrom(snapshot) {
  * remove a file the apply created.
  */
 export function createTransactionSnapshot(roots) {
-  const { stateDir, runtimeRoot } = roots ?? {};
+  const { stateDir, runtimeRoot, systemdRoot = null } = roots ?? {};
   if (!stateDir || !runtimeRoot)
     throw new Error("TRANSACTION_SNAPSHOT_NO_ROOTS");
-  for (const root of [stateDir, runtimeRoot]) noLinks(root);
+  for (const root of [stateDir, runtimeRoot, systemdRoot].filter(Boolean))
+    noLinks(root);
 
+  // M12/T9 F-011: the channel targets follow the INSTALLED package, so a
+  // reinstall that changes the install directory is covered instead of missed.
+  // An install that cannot be resolved to exactly one project fails closed;
+  // an install that is simply not there contributes no live file.
+  let channelTargets = SNAPSHOT_TARGETS.discordChannel;
+  try {
+    channelTargets = nativePatchedDiscordChannelRelatives(
+      resolveNativeDiscordChannelRelative(stateDir),
+    );
+  } catch (error) {
+    if (error?.message === NATIVE_DISCORD_CHANNEL_AMBIGUOUS) throw error;
+  }
   const fixed = [
     ...SNAPSHOT_TARGETS.state.map((relative) => ({ relative, root: stateDir })),
+    // M10/T2-R8: channel targets are state-relative, so they resolve inside the
+    // state root that is already validated and snapshotted.
+    ...channelTargets.map((relative) => ({
+      relative,
+      root: stateDir,
+    })),
     ...SNAPSHOT_TARGETS.runtime.map((relative) => ({
       relative,
       root: runtimeRoot,
     })),
+    // M12/T9 F-106: the unit drop-in is captured from the THIRD root when the
+    // caller names it. A caller that does not name it captures no systemd
+    // target, which is why the live apply names it explicitly.
+    ...(systemdRoot
+      ? SNAPSHOT_TARGETS.systemd.map((relative) => ({
+          relative,
+          root: systemdRoot,
+        }))
+      : []),
   ];
   const discovered = discoverExtensionAssets(
     path.join(stateDir, "extensions", "zink-governance"),
@@ -177,11 +263,23 @@ export function createTransactionSnapshot(roots) {
     if (!stat.isFile())
       throw new Error("TRANSACTION_SNAPSHOT_TARGET_NOT_REGULAR");
     const body = readFileSync(absolute);
+    // F-230: the digest is taken over the RAW bytes, so the body must be
+    // recorded in a form that reproduces them. Stored as UTF-8 text, every
+    // byte that is not valid UTF-8 was lost, and the re-hash of the stored
+    // text then disagreed with the digest the capture had recorded - so one
+    // binary asset made the whole capture fail with
+    // TRANSACTION_SNAPSHOT_INCONSISTENT and left no rollback target at all.
+    //
+    // A body that IS valid UTF-8 round-trips through the text form exactly, so
+    // it keeps the shape every snapshot already has; only a body that would
+    // be lossy is stored base64-encoded.
+    const text = body.toString("utf8");
+    const lossless = Buffer.from(text, "utf8").equals(body);
     files[relative] = {
       existed: true,
       sha256: digest(body),
       mode: stat.mode & 0o777,
-      body: body.toString("utf8"),
+      ...(lossless ? { body: text } : { body_base64: body.toString("base64") }),
     };
   }
 
@@ -189,11 +287,31 @@ export function createTransactionSnapshot(roots) {
     schema: "zink-transaction-snapshot/1",
     stateDir: path.resolve(stateDir),
     runtimeRoot: path.resolve(runtimeRoot),
+    // M12/T9 F-106: the third root travels with the snapshot, so a restore
+    // resolves the unit drop-in against the tree it was captured from.
+    systemdRoot: systemdRoot ? path.resolve(systemdRoot) : null,
     files,
   };
   // Never hand back a snapshot that cannot already be trusted.
   verifyTransactionSnapshot(snapshot);
   return snapshot;
+}
+
+/**
+ * F-230: the recorded BYTES of one snapshot entry.
+ *
+ * A snapshot written by the current capture carries the exact bytes, base64
+ * encoded, so the digest it recorded and the bytes it can restore are the same
+ * value. A snapshot written before that rule carries the body as UTF-8 text;
+ * a body that was valid UTF-8 re-encodes to the same bytes, so it still
+ * verifies and still restores byte-exactly. A body that was NOT valid UTF-8
+ * could never be captured in that form, so there is nothing to preserve.
+ */
+function snapshotBytes(entry) {
+  if (typeof entry.body_base64 === "string")
+    return Buffer.from(entry.body_base64, "base64");
+  if (typeof entry.body === "string") return Buffer.from(entry.body, "utf8");
+  return null;
 }
 
 /**
@@ -213,9 +331,9 @@ export function verifyTransactionSnapshot(snapshot) {
     if (!entry.existed) continue;
     if (!/^[a-f0-9]{64}$/u.test(entry.sha256 ?? ""))
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-    if (typeof entry.body !== "string")
-      throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
-    if (digest(entry.body) !== entry.sha256)
+    const body = snapshotBytes(entry);
+    if (body === null) throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
+    if (digest(body) !== entry.sha256)
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
     if (!Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777)
       throw new Error("TRANSACTION_SNAPSHOT_INCONSISTENT");
@@ -260,7 +378,9 @@ export function restoreTransactionSnapshot(snapshot) {
       continue;
     }
     mkdirSync(path.dirname(absolute), { recursive: true });
-    writeFileSync(absolute, entry.body, "utf8");
+    // F-230: the restored bytes are the recorded bytes, not a re-encoding of
+    // them, so a preimage that is not valid UTF-8 is restored byte-exactly.
+    writeFileSync(absolute, snapshotBytes(entry));
     chmodSync(absolute, entry.mode);
   }
   return {
@@ -292,6 +412,23 @@ export function restoreTransactionSnapshot(snapshot) {
  * successful apply changed the runtime. Both are byte comparisons against the
  * same preimage, which is why one implementation can serve both.
  */
+/**
+ * Compare the live runtime against a snapshot.
+ *
+ * Rollback (no `postApply`): `restored` is true only when EVERY tracked
+ * component matches its recorded preimage. Because the tracked set now
+ * includes every file the native patch can rewrite, a leftover mutation is a
+ * named mismatch instead of an invisible success.
+ *
+ * Post-apply: the apply is verified against `options.expected` — the
+ * authoritative post-image derived from the patch contract — rather than
+ * against "did anything change", which reported both false negatives (an
+ * idempotent apply) and false confidence. When `expected` is supplied, every
+ * entry must match live: a drifted or absent component fails closed and is
+ * named in `unverified`. `changed` always names every tracked component that
+ * differs from the preimage, so a mutation verification was not told about is
+ * still surfaced rather than silently absorbed.
+ */
 export function verifyLiveRestore(roots, snapshot, options = {}) {
   void roots;
   verifyTransactionSnapshot(snapshot);
@@ -320,20 +457,110 @@ export function verifyLiveRestore(roots, snapshot, options = {}) {
     )
       mismatches.push(relative);
   }
+  if (options.postApply) {
+    const unverified = [];
+    for (const entry of options.expected ?? []) {
+      try {
+        const absolute = resolveRelative(snapshot, entry.relative);
+        noLinks(absolute);
+        const stat = lstatSync(absolute, { throwIfNoEntry: false });
+        if (!stat || !stat.isFile()) unverified.push(entry.relative);
+        else if (digest(readFileSync(absolute)) !== entry.sha256)
+          unverified.push(entry.relative);
+      } catch {
+        unverified.push(entry.relative);
+      }
+    }
+    // With no declared expectation the apply cannot claim to be verified, so
+    // the caller is forced to state what the runtime must look like.
+    const applied =
+      Array.isArray(options.expected) &&
+      options.expected.length > 0 &&
+      unverified.length === 0;
+    return {
+      applied,
+      unrestored: mismatches.sort(),
+      changed: mismatches.sort(),
+      unverified: unverified.sort(),
+      checked: Object.keys(snapshot.files).length,
+    };
+  }
   // A component whose bytes still equal the preimage was NOT changed by the
   // apply, so a self-reported success that left it untouched is unproven.
   const unchanged = mismatches.length === 0;
-  if (options.postApply)
-    return {
-      applied: !unchanged,
-      unrestored: mismatches.sort(),
-      checked: Object.keys(snapshot.files).length,
-    };
   return {
     restored: unchanged,
     mismatches: mismatches.sort(),
     checked: Object.keys(snapshot.files).length,
   };
+}
+
+/**
+ * M12/T9 F-106: the relative path an absolute path has under a governed root,
+ * or null when it lies outside every root the snapshot declares.
+ */
+function relativeUnderAnyRoot(roots, absolutePath) {
+  const target = path.resolve(absolutePath);
+  for (const root of [roots.stateDir, roots.runtimeRoot, roots.systemdRoot]) {
+    if (typeof root !== "string" || !root) continue;
+    const base = path.resolve(root);
+    if (target === base) return "";
+    if (target.startsWith(base + path.sep))
+      return path.relative(base, target).split(path.sep).join("/");
+  }
+  return null;
+}
+
+/**
+ * M12/T9 F-106: can the transaction preimage recreate this path?
+ *
+ * The preimage IS the rollback target, so a path it does not record cannot be
+ * brought back by a rollback. A file the preimage recorded under the same
+ * relative path is recreatable. A DIRECTORY is recreatable only when EVERY
+ * file under it is recorded, because anything else would be deleted for good
+ * with no preimage to restore it from.
+ *
+ * The answer is false for a path outside every governed root, and false for a
+ * path the snapshot cannot resolve: an unknown path is never assumed to be
+ * recreatable.
+ */
+export function preimageRecreates(snapshot, absolutePath) {
+  const roots = rootsFrom(snapshot);
+  const relative = relativeUnderAnyRoot(roots, absolutePath);
+  if (relative === null) return false;
+  const files = snapshot.files ?? {};
+  if (Object.hasOwn(files, relative)) return true;
+  const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) return false;
+  for (const child of listFilesRecursively(absolutePath)) {
+    const childRelative = relative ? `${relative}/${child}` : child;
+    if (!Object.hasOwn(files, childRelative)) return false;
+  }
+  return true;
+}
+
+/**
+ * M12/T9 F-106: delete a path ONLY when the transaction can recreate it.
+ *
+ * The apply's prune stages used to delete whole trees that no preimage could
+ * restore - the legacy r12 quarantine among them - so a failed apply left
+ * unique evidence gone for good while the rollback reported success. The
+ * delete is now gated on the preimage: what the transaction cannot recreate is
+ * RETAINED, and the caller is told which path was kept and why.
+ *
+ * The removal happens HERE, so a caller cannot delete a path without passing
+ * the gate. A path outside every governed root is never recreatable, so it is
+ * never deleted either.
+ */
+export function pruneTransactionPath(snapshot, absolutePath) {
+  if (!preimageRecreates(snapshot, absolutePath))
+    return {
+      deleted: false,
+      retained: absolutePath,
+      reason: "TRANSACTION_PREIMAGE_CANNOT_RECREATE",
+    };
+  rmSync(absolutePath, { recursive: true, force: true });
+  return { deleted: true, retained: null, reason: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -506,47 +733,89 @@ export function persistTransactionSnapshot(
     // Never silently replace a transaction. A leftover directory is an orphan
     // the caller must resolve with an explicit recovery decision.
     throw new Error("TRANSACTION_ALREADY_EXISTS");
-  mkdirSync(directory, { mode: 0o700 });
-  chmodSync(directory, 0o700);
 
   const files = {};
-  for (const [relative, entry] of Object.entries(snapshot.files)) {
-    if (!entry.existed) {
-      files[relative] = { existed: false, sha256: null, mode: null };
-      continue;
+  let loaded;
+  // F-416: the directory creation, its chmod and the preimage mkdir all run
+  // INSIDE the cleanup scope. Before this, a throw from any of them stranded a
+  // record-less transaction directory that `findOrphanedTransaction` reports
+  // unreadable and every later apply refuses. `created` keeps the cleanup from
+  // deleting a directory this call did not make (a concurrent mkdir race).
+  let created = false;
+  try {
+    mkdirSync(directory, { mode: 0o700 });
+    created = true;
+    chmodSync(directory, 0o700);
+
+    // M12/T9: the preimage directory is created HERE, before the per-file loop.
+    // It used to be created only inside that loop, so a snapshot whose files all
+    // did not exist left the directory missing and `syncDirectory` below opened a
+    // directory that was not there — a FIRST apply against an empty state root
+    // could not take a transaction at all, which is the live fresh-install path.
+    mkdirSync(path.join(directory, PREIMAGE_DIR), {
+      recursive: true,
+      mode: 0o700,
+    });
+
+    for (const [relative, entry] of Object.entries(snapshot.files)) {
+      if (!entry.existed) {
+        files[relative] = { existed: false, sha256: null, mode: null };
+        continue;
+      }
+      // The on-disk layout mirrors the recorded relative path, so a restore reads
+      // exactly what the record names. Traversal is impossible by construction and
+      // is refused again on the way back out.
+      const target = path.join(directory, PREIMAGE_DIR, relative);
+      noLinks(target);
+      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      // F-409: the recorded BYTES, not the text member. A base64-captured
+      // preimage carries no `body`, so passing it here handed the writer
+      // `undefined` and threw mid-loop.
+      writeExclusiveFile(target, snapshotBytes(entry), 0o600);
+      files[relative] = {
+        existed: true,
+        sha256: entry.sha256,
+        mode: entry.mode,
+      };
     }
-    // The on-disk layout mirrors the recorded relative path, so a restore reads
-    // exactly what the record names. Traversal is impossible by construction and
-    // is refused again on the way back out.
-    const target = path.join(directory, PREIMAGE_DIR, relative);
-    noLinks(target);
-    mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    writeExclusiveFile(target, entry.body, 0o600);
-    files[relative] = { existed: true, sha256: entry.sha256, mode: entry.mode };
+    syncDirectory(path.join(directory, PREIMAGE_DIR));
+
+    const record = {
+      schema: RECORD_SCHEMA,
+      // WHICH attempt this is.
+      attemptId: id,
+      // WHICH exact runtime state it started from. Deterministic, and derived from
+      // the component manifest so the two can never disagree.
+      preimageDigest: derivePreimageDigest(snapshot),
+      createdAt,
+      status: TRANSACTION_STATUS.STARTED,
+      snapshotPath: PREIMAGE_DIR,
+      stateDir: snapshot.stateDir,
+      runtimeRoot: snapshot.runtimeRoot,
+      // M12/T9 F-106: the third root is part of the record, so a recovery that
+      // reloads the preimage can restore the unit drop-in as well. It is
+      // OPTIONAL, so a record written before the drop-in was tracked still
+      // loads; the manifest binding covers it either way.
+      systemdRoot: snapshot.systemdRoot ?? null,
+      files,
+    };
+    record.manifestDigest = manifestDigest(record);
+    writeExclusiveFile(
+      path.join(directory, RECORD_NAME),
+      `${JSON.stringify(record, null, 2)}\n`,
+    );
+
+    loaded = loadTransaction(stateDir, id);
+  } catch (error) {
+    // F-409: a throw between the mkdir and the record write used to strand a
+    // directory that is neither a transaction nor empty; findOrphanedTransaction
+    // reports it unreadable and every later apply refuses. The directory was
+    // created by this call, so it is removed rather than left behind. F-416:
+    // only a directory this call actually made may be removed, so a concurrent
+    // mkdir race cannot turn cleanup into someone else's data loss.
+    if (created) rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
-  syncDirectory(path.join(directory, PREIMAGE_DIR));
-
-  const record = {
-    schema: RECORD_SCHEMA,
-    // WHICH attempt this is.
-    attemptId: id,
-    // WHICH exact runtime state it started from. Deterministic, and derived from
-    // the component manifest so the two can never disagree.
-    preimageDigest: derivePreimageDigest(snapshot),
-    createdAt,
-    status: TRANSACTION_STATUS.STARTED,
-    snapshotPath: PREIMAGE_DIR,
-    stateDir: snapshot.stateDir,
-    runtimeRoot: snapshot.runtimeRoot,
-    files,
-  };
-  record.manifestDigest = manifestDigest(record);
-  writeExclusiveFile(
-    path.join(directory, RECORD_NAME),
-    `${JSON.stringify(record, null, 2)}\n`,
-  );
-
-  const loaded = loadTransaction(stateDir, id);
   if (loaded.status !== TRANSACTION_STATUS.STARTED)
     throw new Error("TRANSACTION_RECORD_INVALID");
   return loaded;
@@ -606,6 +875,10 @@ export function loadTransaction(stateDir, id) {
     schema: "zink-transaction-snapshot/1",
     stateDir: record.stateDir,
     runtimeRoot: record.runtimeRoot,
+    // M12/T9 F-106: the third root comes back with the record. A record
+    // written before the drop-in was tracked carries none, and the paths that
+    // would need it are then refused rather than resolved against a guess.
+    systemdRoot: record.systemdRoot ?? null,
     files: {},
   };
   for (const [relative, entry] of Object.entries(record.files)) {
@@ -627,14 +900,20 @@ export function loadTransaction(stateDir, id) {
       throw new Error("TRANSACTION_SNAPSHOT_TARGET_MISMATCH");
     noLinks(file);
     if (!existsSync(file)) throw new Error("TRANSACTION_SNAPSHOT_INCOMPLETE");
-    const body = readFileSync(file, "utf8");
+    const body = readFileSync(file);
+    // F-409: the digest was recorded over RAW bytes, so the re-hash must read
+    // raw bytes too. Reading as UTF-8 replaced every non-UTF-8 byte and the
+    // round trip failed its own integrity check. A lossless body keeps the text
+    // shape every older record has; only a lossy one is carried base64.
     if (digest(body) !== entry.sha256)
       throw new Error("TRANSACTION_SNAPSHOT_DIGEST_MISMATCH");
+    const text = body.toString("utf8");
+    const lossless = Buffer.from(text, "utf8").equals(body);
     snapshot.files[relative] = {
       existed: true,
       sha256: entry.sha256,
       mode: entry.mode,
-      body,
+      ...(lossless ? { body: text } : { body_base64: body.toString("base64") }),
     };
   }
   verifyTransactionSnapshot(snapshot);
@@ -731,4 +1010,55 @@ export function findOrphanedTransaction(stateDir) {
   return orphans.sort((left, right) =>
     left.attemptId.localeCompare(right.attemptId),
   );
+}
+
+/**
+ * M12/T9 F-111: the ONE builder apply per transaction.
+ *
+ * The builder (`configure.mjs --apply`) could be invoked on its own: nothing tied
+ * it to the transaction snapshot the apply orchestration takes, so the rollback
+ * target, the native patch, the byte verification and the gateway restart could
+ * all be skipped, and the "exactly one apply per grant" rule had no tool
+ * support at all.
+ *
+ * The transaction attempt is the GRANT. The builder refuses to run without one,
+ * and the attempt is marked consumed by the apply that used it, so a second
+ * `--apply` against the same transaction is refused with a named code.
+ */
+const BUILDER_APPLY_RECEIPT = "builder-apply.consumed";
+
+export function builderApplyReceiptPath(stateDir, attemptId) {
+  if (!ATTEMPT_ID.test(attemptId) || path.basename(attemptId) !== attemptId)
+    throw new Error("TRANSACTION_ID_INVALID");
+  return path.join(transactionRoot(stateDir), attemptId, BUILDER_APPLY_RECEIPT);
+}
+
+/**
+ * The transaction must exist and must not have been spent.
+ */
+export function assertBuilderApplyAvailable(stateDir, attemptId) {
+  const receipt = builderApplyReceiptPath(stateDir, attemptId);
+  if (existsSync(receipt))
+    throw new Error(
+      "APPLY_ALREADY_SPENT: this transaction already ran the builder apply",
+    );
+  const record = path.join(transactionRoot(stateDir), attemptId, RECORD_NAME);
+  if (!existsSync(record))
+    throw new Error(
+      "TRANSACTION_NOT_FOUND: the apply orchestration took no such transaction",
+    );
+  return receipt;
+}
+
+/**
+ * Mark the transaction spent. The receipt is written EXCLUSIVELY, so two applies
+ * racing on the same transaction cannot both believe they own it.
+ */
+export function markBuilderApplyConsumed(stateDir, attemptId) {
+  const receipt = builderApplyReceiptPath(stateDir, attemptId);
+  writeExclusiveFile(
+    receipt,
+    `${JSON.stringify({ consumedAt: new Date().toISOString() })}\n`,
+  );
+  return receipt;
 }

@@ -54,6 +54,8 @@ export const ACTIONS = Object.freeze({
   APPROVE: "APPROVE",
   REJECT_APPROVAL: "REJECT_APPROVAL",
   REQUEST_REVISION_APPROVAL: "REQUEST_REVISION_APPROVAL",
+  // F-531 (R10-T01-4): the owner's revocation path after a durable APPROVE.
+  CANCEL: "CANCEL",
 
   // Queue & execution-agent actions
   CLAIM: "CLAIM",
@@ -79,10 +81,152 @@ export const ACTIONS = Object.freeze({
 });
 
 /**
- * A Discord snowflake, validated. Shared shape with `parseIdentifiers` in
- * policy.mjs, which is the canonical place a configured identity is admitted.
+ * M12/T9 F-085: the ONE reviewed mapping between the authority vocabulary and
+ * the ledger decision vocabulary.
+ *
+ * Three vocabularies used to meet only inside the plugin entrypoint:
+ *
+ *   - the authority action names (`ACTIONS`, above), which tell an APPROVAL
+ *     verdict apart from a RESULT verdict;
+ *   - the ledger decision strings (`WORKFLOW_USER_APPROVAL_DECIDED.decision`),
+ *     which are the only values the workflow reducer commits for that event;
+ *   - the channel, which decides whether a bare "REJECT" is an approval or a
+ *     result verdict.
+ *
+ * The reducer commits exactly three decision values for
+ * `WORKFLOW_USER_APPROVAL_DECIDED` (APPROVE, REJECT, REQUEST_REVISION); the
+ * result verdicts travel on their own event types
+ * (`WORKFLOW_USER_RESULT_ACCEPTED`, `WORKFLOW_USER_RESULT_REJECTED`,
+ * `WORKFLOW_RESULT_REVISION_REQUESTED`). This table is therefore the single
+ * reviewed statement of which authority action maps to which ledger decision
+ * string, and `normalizeAuthorityAction` is the single statement of how a bare
+ * action word is resolved against the channel it was taken on.
+ *
+ * `validateActionAuthority` below uses both, so the authority gate and the
+ * ledger write can never disagree about a verdict. The plugin entrypoint must
+ * use both as well instead of its own inline channel ternary — a writer that
+ * trusts the published contract must never be able to mint a decision the
+ * reducer refuses, and a decision must never be recorded under a name the
+ * reducer does not commit.
  */
-const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
+export const LEDGER_APPROVAL_DECISIONS = Object.freeze({
+  APPROVE: "APPROVE",
+  REJECT: "REJECT",
+  REQUEST_REVISION: "REQUEST_REVISION",
+});
+
+/**
+ * The closed set of decision values the reducer commits for
+ * `WORKFLOW_USER_APPROVAL_DECIDED`. The published contract
+ * (`ledger-event.schema.json`) admits exactly this set; anything else in that
+ * enum is dead vocabulary a trusting writer could mint and the reducer would
+ * refuse.
+ */
+export const LEDGER_APPROVAL_DECISION_VALUES = Object.freeze(
+  Object.values(LEDGER_APPROVAL_DECISIONS),
+);
+
+/**
+ * F-531 (R10-T01-4): the marker `resolveLedgerDecision` returns for the
+ * owner's cancellation action. It is NOT an approval decision: the
+ * cancellation is carried by `WORKFLOW_CANCELLED`, whose payload declares
+ * `reason_code: OWNER_CANCELLED`, not by
+ * `WORKFLOW_USER_APPROVAL_DECIDED`.
+ */
+export const LEDGER_CANCELLATION_DECISION = "CANCEL";
+
+/**
+ * The authority action -> ledger decision mapping.
+ *
+ * Approval verdicts map to the three decision strings the
+ * `WORKFLOW_USER_APPROVAL_DECIDED` reducer commits. `CANCEL` maps to the
+ * cancellation marker, which the plugin uses to route the owner's revocation
+ * to `WORKFLOW_CANCELLED`. A result verdict has no entry here on purpose: it
+ * is carried by its own event type, not by
+ * `WORKFLOW_USER_APPROVAL_DECIDED`.
+ */
+export const AUTHORITY_ACTION_LEDGER_DECISION = Object.freeze({
+  [ACTIONS.APPROVE]: LEDGER_APPROVAL_DECISIONS.APPROVE,
+  [ACTIONS.REJECT_APPROVAL]: LEDGER_APPROVAL_DECISIONS.REJECT,
+  [ACTIONS.REQUEST_REVISION_APPROVAL]:
+    LEDGER_APPROVAL_DECISIONS.REQUEST_REVISION,
+  [ACTIONS.CANCEL]: LEDGER_CANCELLATION_DECISION,
+});
+
+/**
+ * The ledger decision string an authority action resolves to, or `null` when
+ * the action is not an approval verdict. A result verdict resolves to `null`
+ * here BY DESIGN: it is recorded on its own event type, and returning `null`
+ * keeps "no approval decision" distinguishable from "an approval decision we
+ * do not know".
+ */
+export function resolveLedgerDecision(action) {
+  const key = typeof action === "string" ? action.toUpperCase().trim() : "";
+  return Object.hasOwn(AUTHORITY_ACTION_LEDGER_DECISION, key)
+    ? AUTHORITY_ACTION_LEDGER_DECISION[key]
+    : null;
+}
+
+/**
+ * Resolve one action word against the channel it was taken on.
+ *
+ * This is the single place that answers "is this REJECT an approval or a
+ * result verdict?". It is total: it never throws, and an action it does not
+ * recognise is returned in canonical upper-case form so the authority gate
+ * denies it by name instead of crashing on it.
+ */
+export function normalizeAuthorityAction(action, channel) {
+  if (!action) return null;
+  const upper = String(action).toUpperCase().trim();
+  const normChannel = normalizeChannel(channel);
+  if (upper === "REJECT") {
+    if (normChannel === CHANNELS.RESULTS) return ACTIONS.REJECT_RESULT;
+    if (normChannel === CHANNELS.APPROVALS) return ACTIONS.REJECT_APPROVAL;
+    return upper;
+  }
+  if (upper === "REQUEST_REVISION") {
+    if (normChannel === CHANNELS.RESULTS) {
+      return ACTIONS.REQUEST_REVISION_RESULT;
+    }
+    if (normChannel === CHANNELS.APPROVALS) {
+      return ACTIONS.REQUEST_REVISION_APPROVAL;
+    }
+    return upper;
+  }
+  return upper;
+}
+
+/**
+ * M12/T9 F-112: the agents that may own the execution of a task.
+ *
+ * `main` coordinates and is never an executable coordinator; the specialists
+ * execute and never coordinate. Only `o1` and `o2` can be the primary
+ * coordinator of an approved task, and only they can be spawned BY another
+ * coordinator — which is why a coordinator id among a DAG's node agent ids is
+ * the ASSIGNMENT and never a capability (see `projectGovernedCapabilities` in
+ * `lib/policy.mjs`).
+ */
+export const EXECUTABLE_COORDINATOR_IDS = Object.freeze(["o1", "o2"]);
+
+/**
+ * M7-073: coordinator must be o1/o2 for executable queue work.
+ *
+ * The predicate lives here, in the canonical authority module, because the
+ * queue projection, the dispatch derivation and the spawn policy must all
+ * answer "is this an executable coordinator?" the same way. It used to live
+ * only in `lib/queue-manager.mjs`, which made the answer unreachable from
+ * `lib/policy.mjs` without a circular import.
+ */
+export function isExecutableCoordinator(rootAgentId) {
+  return EXECUTABLE_COORDINATOR_IDS.includes(rootAgentId);
+}
+
+/**
+ * A Discord snowflake, validated. The canonical shape lives in
+ * `isDiscordSnowflake` below; `parseIdentifiers` in policy.mjs and every owner
+ * gate use that one validator, so a configured identity and the gate that
+ * admits it can never disagree about the shape (M12/T9 F-139).
+ */
 
 /**
  * The owner actor, derived from CONFIGURATION only.
@@ -110,9 +254,32 @@ const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 function isConfiguredOwnerActor(lowerCasedActor) {
   const configured =
     typeof process !== "undefined" ? process.env?.DISCORD_OWNER_ID : undefined;
-  if (typeof configured !== "string" || !SNOWFLAKE.test(configured))
-    return false;
+  if (!isOwnerDiscordId(configured)) return false;
   return lowerCasedActor === configured.toLowerCase();
+}
+
+/**
+ * The owner id, validated by ONE canonical shape.
+ *
+ * M12/T9 F-139: the owner id was validated by three different regexes (17-19
+ * digits anywhere in the plugin, 17-20 here, 17-20 in the configuration
+ * admission), so a 20-digit configured owner was admitted by the configuration
+ * and then denied by every owner gate: a fail-closed self-DoS rather than an
+ * escalation. `isDiscordSnowflake` is the canonical shape; the owner id uses
+ * it and nothing else.
+ */
+export function isOwnerDiscordId(value) {
+  return isDiscordSnowflake(value);
+}
+
+/**
+ * The owner id, from CONFIGURATION only, or `undefined` when it is absent or
+ * malformed. The caller-facing gates read `config.ownerDiscordId`; this is the
+ * one place that turns it into a usable identity.
+ */
+export function resolveOwnerDiscordId(config) {
+  const ownerId = config?.ownerDiscordId;
+  return isOwnerDiscordId(ownerId) ? ownerId : undefined;
 }
 
 /**
@@ -172,17 +339,10 @@ export function validateActionAuthority({
   const normActor = normalizeActor(actor);
   const normChannel = normalizeChannel(channel);
   const normState = currentState ? currentState.toUpperCase().trim() : null;
-  let normAction = action ? action.toUpperCase().trim() : null;
-  if (normAction === "REJECT") {
-    if (normChannel === CHANNELS.RESULTS) normAction = ACTIONS.REJECT_RESULT;
-    else if (normChannel === CHANNELS.APPROVALS)
-      normAction = ACTIONS.REJECT_APPROVAL;
-  } else if (normAction === "REQUEST_REVISION") {
-    if (normChannel === CHANNELS.RESULTS)
-      normAction = ACTIONS.REQUEST_REVISION_RESULT;
-    else if (normChannel === CHANNELS.APPROVALS)
-      normAction = ACTIONS.REQUEST_REVISION_APPROVAL;
-  }
+  // M12/T9 F-085: the channel-dependent action resolution lives in ONE place
+  // (`normalizeAuthorityAction`), so this gate and the ledger write can never
+  // disagree about which verdict an action word means.
+  const normAction = normalizeAuthorityAction(action, channel);
 
   if (!normActor) return { allowed: false, reason: "UNKNOWN_ACTOR" };
   if (!normChannel) return { allowed: false, reason: "UNKNOWN_CHANNEL" };
@@ -242,6 +402,34 @@ export function validateActionAuthority({
         ? TASK_STATES.QUEUED
         : TASK_STATES.REJECTED;
     return { allowed: true, nextState };
+  }
+
+  // F-531 (R10-T01-4): CANCEL is the owner's revocation of a QUEUED plan.
+  //
+  // It is deliberately narrow: only the owner, only on the approvals surface,
+  // and only after a durable APPROVE has projected QUEUED. A task that is
+  // still APPROVAL_PENDING is refused by REJECT_APPROVAL instead, and a task
+  // already executing is not revoked by this action.
+  if (normAction === ACTIONS.CANCEL) {
+    if (normActor !== ACTORS.USER) {
+      return {
+        allowed: false,
+        reason: "AUTHORITY_DENIED: Only User can cancel a queued plan",
+      };
+    }
+    if (normChannel !== CHANNELS.APPROVALS) {
+      return {
+        allowed: false,
+        reason: "CHANNEL_MISMATCH: A plan cancellation must occur in #approvals",
+      };
+    }
+    if (normState !== TASK_STATES.QUEUED) {
+      return {
+        allowed: false,
+        reason: `INVALID_STATE_TRANSITION: Cannot cancel a task in state ${normState} (must be QUEUED)`,
+      };
+    }
+    return { allowed: true, nextState: TASK_STATES.CANCELLED };
   }
 
   // ACCEPT_RESULT and REJECT_RESULT are strictly USER ONLY
@@ -570,6 +758,21 @@ export const ZINK_TOOLS_ACCESS_MATRIX = Object.freeze({
   }),
 });
 
+// M12/T9 F-060 (the owner's ruling of 2026-10-21): EVERY work step that works
+// WITH DATA belongs to @O1, EXCEPT the dashboard and the data-visualization
+// work, which belongs to @O2.
+//
+// Over the owner's own stack definitions this is exact. `infrastructure` (the
+// machine software that runs tasks), `data_plant` (ETL) and `semantic` (the
+// layer where meaning is added - KPI, metric, schema meaning, business rules
+// and constraints) are DATA WORK, so they are @O1's. `intelligence` (ANALYTICS:
+// charts and dashboards) and `decision` (the decision report the bot analyses)
+// are the DASHBOARD side, so they are @O2's.
+//
+// This table is the ONE ownership statement: the coordinator derivation reads
+// it (`topology/lib/workflow.mjs`), the published manifest carries it
+// (`lib/policy.mjs`), and `docs/architecture/five-stack.md` is derived from it
+// and gated against it (M12/T9 F-118).
 export const AGENT_STACK_POLICY = Object.freeze({
   main: [
     "infrastructure",
@@ -578,8 +781,8 @@ export const AGENT_STACK_POLICY = Object.freeze({
     "intelligence",
     "decision",
   ],
-  o1: ["infrastructure", "data_plant"],
-  o2: ["semantic", "intelligence", "decision"],
+  o1: ["infrastructure", "data_plant", "semantic"],
+  o2: ["intelligence", "decision"],
   excel: ["data_plant", "semantic", "decision"],
   "power-bi": ["semantic", "intelligence", "decision"],
   sql: ["data_plant", "semantic", "decision"],
@@ -596,10 +799,33 @@ export const AGENT_IDS = Object.freeze([
   "python",
 ]);
 
+/**
+ * M12/T9 F-060: the DASHBOARD is recognised by its CRAFT as well as by its
+ * stack.
+ *
+ * The owner's rule names the dashboard as @O2's work, and the `power-bi`
+ * specialist's craft IS the dashboard. A plan that puts the dashboard on the
+ * `semantic` stack (the KPI and metric meaning behind the report) still has
+ * @O2 doing it, because @O1 cannot spawn `power-bi` at all. The craft is a
+ * FACT about the specialist, not a label on the plan, so it overrides the
+ * stack's owner where the stack's owner is @O1.
+ */
+export const DASHBOARD_CRAFT_AGENTS = Object.freeze(["power-bi"]);
+
 export const AGENT_DEFINITIONS = Object.freeze([
   Object.freeze({ id: "main", name: "Main" }),
-  Object.freeze({ id: "o1", name: "ETL Coordinator" }),
-  Object.freeze({ id: "o2", name: "Analytics Coordinator" }),
+  // Display names for the two coordinators. They used to be "ETL Coordinator"
+  // and "Analytics Coordinator" — retired L&SC Data Plant branding that
+  // `AGENTS.md` §9 forbids for a runtime role. The names are stack-neutral
+  // now so they cannot pre-judge the routing decision; the ownership lives in
+  // `AGENT_STACK_POLICY` (this file) and `AGENT_SPAWN_POLICY` (policy.mjs), and
+  // `docs/architecture/five-stack.md` is derived from those two tables and
+  // gated against them (M12/T9 F-118: the table had been written by hand from
+  // a retired roster and had drifted into the inverse of the enforced spawn
+  // tree). The ingress aliases ("điều phối 1/2") already used this
+  // vocabulary.
+  Object.freeze({ id: "o1", name: "Coordinator O1" }),
+  Object.freeze({ id: "o2", name: "Coordinator O2" }),
   Object.freeze({ id: "excel", name: "Excel" }),
   Object.freeze({ id: "power-bi", name: "Power BI" }),
   Object.freeze({ id: "sql", name: "SQL" }),
@@ -615,6 +841,14 @@ export const AGENT_DEFINITIONS = Object.freeze([
 // identity comes only from validated configuration (see `isConfiguredOwnerActor`
 // and `resolveOwnerDiscordId`). Changing a bot or role id is a roster change,
 // not a permission change.
+//
+// M12/T9 F-048: THIS FILE IS THE ONLY SOURCE of the server-scoped identity
+// map. The map used to be published a second time in `README.md`, which lives
+// under a synced third-party store (OneDrive) and is pushable to a remote —
+// publishing the bot ids, the role ids and the surface ids gave a reader the
+// complete set needed to impersonate an agent mention surface, and the copies
+// could silently diverge. No tracked markdown file may carry a raw Discord
+// snowflake again; documentation points here instead.
 export const DISCORD_BOT_IDS = Object.freeze({
   main: "1545436878835163156",
   o1: "1545437953197744248",
@@ -633,6 +867,29 @@ export const DISCORD_ROLE_IDS = Object.freeze({
   "power-bi": "1545612740398157957",
   sql: "1545612050099609730",
   python: "1545615832556507220",
+});
+
+/**
+ * M12/T9 F-048: the server-scoped surface ids (the office channel and the
+ * three governed forums), in the same canonical registry as the bot and role
+ * ids.
+ *
+ * These are the "documented baseline values" the governance instruction body
+ * falls back to when a caller supplies no runtime configuration. They lived in
+ * `lib/policy.mjs`, which made the identity map live in two files that could
+ * diverge; the VALUES are unchanged, so the governance manifest digest is
+ * unchanged, and the deployed build needs no re-admission.
+ *
+ * At runtime the operator's own configuration wins: `parseIdentifiers` refuses
+ * to build a configuration whose surface ids are not valid snowflakes, and
+ * every outbound post target is resolved from the configuration, never from
+ * these defaults.
+ */
+export const DISCORD_CHANNEL_IDS = Object.freeze({
+  office: "1545425766161063937",
+  approvals: "1545696207316455527",
+  results: "1545696269010477056",
+  incidents: "1545696360018481182",
 });
 
 export const DISCORD_SURFACE_IDENTIFIERS = Object.freeze([
@@ -917,6 +1174,135 @@ export function resolveMentionedAgents(
 }
 
 // A01, A06, Mandatory Semantic Contract (§8)
+/**
+ * The refusal resolveIngressRouting produces when no Main-directed mention
+ * evidence exists. Exported (same text as before) so the admission layer can
+ * recognise exactly this refusal without re-matching message text. Any other
+ * refusal (wrong guild, broadcast, non-Main target, …) must never be treated
+ * as a missing-mention case.
+ */
+export const MISSING_MENTION_REFUSAL =
+  "MISSING_MENTION: No @main mention. Discord ingress is not admitted.";
+
+/**
+ * M10/T2-R4: deterministic Main-owned-thread continuation signal.
+ *
+ * Answers ONLY "is this message in a thread Main posted in?" — never "is the
+ * sender authorized?" (existing sender/channel/bot checks answer that) and
+ * never "what did the message say?" (no content is read). All inputs are
+ * structured Discord identity metadata forwarded at the native seam; the
+ * thread bindings are recorded from Main's own awaited outbound posts.
+ */
+export const MAIN_CONVERSATION_CONTINUATION = "MAIN_CONVERSATION_CONTINUATION";
+export const MAIN_NOT_CONFIRMED = "MAIN_NOT_CONFIRMED";
+
+const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
+
+export function isDiscordSnowflake(value) {
+  return typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value);
+}
+
+/**
+ * M10/T2-R5: deterministic reply-to-Main signal. Answers ONLY whether the
+ * inbound message replies to a Main-authored message, using the structured
+ * reply-reference author id forwarded from the Discord event. Both ids must
+ * be well-formed; a missing or foreign author never admits.
+ */
+export const MAIN_DIRECTED = "MAIN_DIRECTED";
+
+export function resolveMainReplyAdmission({
+  agentId,
+  replyReferenceMessageId,
+  replyReferenceAuthorId,
+  mainBotId,
+  missingMentionRefusal = false,
+} = {}) {
+  if (agentId !== "main") {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (missingMentionRefusal !== true) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (
+    !isDiscordSnowflake(replyReferenceMessageId) ||
+    !isDiscordSnowflake(replyReferenceAuthorId) ||
+    !isDiscordSnowflake(mainBotId)
+  ) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (replyReferenceAuthorId !== mainBotId) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  return Object.freeze({
+    admitted: true,
+    classification: MAIN_DIRECTED,
+  });
+}
+
+/**
+ * M10/T2-R4 established, M10/T2-R5 re-homed: deterministic Main-owned-thread
+ * continuation. R4 attributed threads from Main's own outbound posts (bounded
+ * memory-only map); R5 uses the host-resolved thread owner id forwarded from
+ * the Discord preflight seam instead — authoritative, no memory, no eviction
+ * semantics to defend. Same verdict contract.
+ */
+export function resolveMainConversationAdmission({
+  agentId,
+  threadId,
+  threadOwnerId,
+  mainBotId,
+  missingMentionRefusal = false,
+} = {}) {
+  if (agentId !== "main") {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (missingMentionRefusal !== true) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  // A present owner with an absent or malformed thread is inconsistent input
+  // and fails closed rather than admitting on the owner alone.
+  if (!isDiscordSnowflake(threadId)) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (!isDiscordSnowflake(threadOwnerId) || !isDiscordSnowflake(mainBotId)) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  if (threadOwnerId !== mainBotId) {
+    return Object.freeze({
+      admitted: false,
+      classification: MAIN_NOT_CONFIRMED,
+    });
+  }
+  return Object.freeze({
+    admitted: true,
+    classification: MAIN_CONVERSATION_CONTINUATION,
+  });
+}
+
 export function resolveIngressRouting({
   message,
   context = {},
@@ -979,8 +1365,7 @@ export function resolveIngressRouting({
     // R4: no mention means no model/session/spawn admission.
     isAmbiguous = true;
     needsClarification = true;
-    clarificationReason =
-      "MISSING_MENTION: No @main mention. Discord ingress is not admitted.";
+    clarificationReason = MISSING_MENTION_REFUSAL;
   }
 
   const primaryTarget = targetAgents[0] ?? null;
@@ -1172,13 +1557,23 @@ export function validateOpenClawReleaseCompatibility(
     "update",
     "gateway",
     "agents",
-    "auth",
     "tools",
     "commands",
     "secrets",
     "plugins",
     "bindings",
     "channels",
+    // M10/T2-R14: `auth` was listed here but is NOT a real requirement, and the
+    // canonical generator deliberately omits it — M10/T2-R9 removed
+    // auth.profiles/order/cooldowns because there is one router credential and
+    // the router performs its own upstream rotation, so an OpenClaw-side order
+    // would be a second rotation policy that cannot take effect. The validator
+    // therefore could never pass on a config this repository produces: its own
+    // generator omits `auth`, and `validateConfig` rejects unexpected top-level
+    // keys so `auth` could not be added to satisfy it. The only test that
+    // exercised it hand-built a config containing `auth: {}`, which is why the
+    // contradiction was invisible. Requiring a key that must NOT exist is a
+    // landmine for whoever wires this validator in later.
   ];
   for (const key of REQUIRED_TOP_LEVEL_KEYS) {
     if (!Object.hasOwn(config, key)) {
@@ -1218,11 +1613,38 @@ export const DISCORD_COMPONENT_ACTION_NAMESPACE = Object.freeze({
   RESULT_ACCEPT: "zink:result:accept",
   RESULT_REJECT: "zink:result:reject",
   RESULT_REVISION: "zink:result:revision",
+  // Skill learning actions (target: #office learning confirmation).
+  // A skill proposal is a governance transaction, never a workflow task,
+  // so it must never share the execution approval action identity.
+  SKILL_APPROVE: "zink:skill:approve",
+  SKILL_REJECT: "zink:skill:reject",
+});
+
+// Discriminated approval subjects. Execution-plan approval authorizes queue
+// execution; skill-candidate approval authorizes canonical Skill Store
+// materialization. One subject must never be honored on the other's path.
+export const APPROVAL_SUBJECT_TYPES = Object.freeze({
+  EXECUTION_PLAN_APPROVAL: "EXECUTION_PLAN_APPROVAL",
+  SKILL_CANDIDATE_APPROVAL: "SKILL_CANDIDATE_APPROVAL",
 });
 
 // A16/A17: Build a namespaced custom_id string bound to task + revision.
 // The revision argument is the approval plan_version or attempt number so that
 // replayed or stale buttons for a different revision can be detected.
+//
+// M10/T2-R12: the id is wrapped in the host's component wire envelope
+// `occomp:cid=<componentId>`. A bare `zink:...` id is REJECTED by the host on
+// the interaction: `parseDiscordComponentCustomId` requires the parsed key to be
+// `occomp`, so it returned null and the host answered every click with "This
+// component is no longer valid." — proven live 2026-10-08 15:45:08
+// (`discord component button: failed to parse component data`). `parseComponentCustomId`
+// below already unwraps this prefix, so both the wire format and the internal
+// format stay understood by one parser.
+export const DISCORD_COMPONENT_CUSTOM_ID_PREFIX = "occomp:cid=";
+
+/** Discord's hard ceiling on custom_id length. Exceeding it fails the POST. */
+const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
+
 export function buildComponentCustomId(actionType, taskId, revision) {
   if (!Object.values(DISCORD_COMPONENT_ACTION_NAMESPACE).includes(actionType))
     throw new Error(`Unknown action type: ${actionType}`);
@@ -1230,7 +1652,38 @@ export function buildComponentCustomId(actionType, taskId, revision) {
     throw new Error("taskId must be a non-empty string");
   if (typeof revision !== "string" || revision.length === 0)
     throw new Error("revision must be a non-empty string");
-  return `${actionType}:${taskId}:${revision}`;
+  const componentId = `${actionType}:${taskId}:${revision}`;
+  // `occomp:cid=` is the only envelope the host understands, so a component id
+  // that does not fit can never be delivered. Fail closed here instead of
+  // posting a button Discord silently refuses.
+  assertCustomIdFits(
+    `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`,
+    componentId,
+  );
+  return `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`;
+}
+
+/**
+ * Fail closed when a custom_id would exceed Discord's ceiling. The longest
+ * governed namespace (APPROVAL_REVISION) with the legacy 64-hex task id measured
+ * 100 characters at a one-digit revision and 101 at a two-digit one, so that
+ * namespace was already refusing a card. M12/T1-R1: with the 12-character identity
+ * the same worst case measures 49 characters, which leaves the ceiling far behind.
+ */
+export function assertCustomIdFits(customId, componentId) {
+  if (typeof customId !== "string" || customId.length === 0)
+    throw new Error("CUSTOM_ID_REQUIRED");
+  if (customId.length > DISCORD_CUSTOM_ID_MAX_LENGTH) {
+    throw new Error(
+      `CUSTOM_ID_TOO_LONG: ${customId.length} > ${DISCORD_CUSTOM_ID_MAX_LENGTH}`,
+    );
+  }
+  // The envelope is only valid when the component id itself carries no `;` or
+  // `%`, which the host would otherwise require to be percent-encoded.
+  if (/[%;]/u.test(componentId)) {
+    throw new Error(`CUSTOM_ID_REQUIRES_ENCODING: ${componentId}`);
+  }
+  return customId;
 }
 
 // A16: Parse a custom_id back to its components. Returns null if malformed.
@@ -1262,6 +1715,41 @@ export function parseComponentCustomId(customId) {
     }
   }
   return null;
+}
+
+// M8/T3: compact skill-button identity. A full proposal+digest binding
+// (`zink:skill:approve:<32hex>:<64hex>`) is 116 characters and Discord
+// native buttons cap custom_id at 100. The button therefore carries the
+// 32-hex proposal id plus a 16-hex digest corroborator (68 chars total);
+// the approval itself always binds the exact bytes stored server-side.
+// A click corroborates identity; it never substitutes for the stored digest.
+export const SKILL_BUTTON_DIGEST_PREFIX_LENGTH = 16;
+
+export function buildSkillComponentCustomId(
+  actionType,
+  proposalId,
+  contentSha256,
+) {
+  if (
+    actionType !== DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE &&
+    actionType !== DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT
+  )
+    throw new Error(`Unknown skill action type: ${actionType}`);
+  if (typeof proposalId !== "string" || !/^[a-f0-9]{32}$/u.test(proposalId))
+    throw new Error("proposalId must be a 32-character hex digest");
+  if (
+    typeof contentSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(contentSha256)
+  )
+    throw new Error("contentSha256 must be a 64-character hex digest");
+  // M10/T2-R12: same host wire envelope as buildComponentCustomId — see the note
+  // there. Without it every skill button click answers "This component is no
+  // longer valid."
+  const componentId = `${actionType}:${proposalId}:${contentSha256.slice(0, SKILL_BUTTON_DIGEST_PREFIX_LENGTH)}`;
+  return assertCustomIdFits(
+    `${DISCORD_COMPONENT_CUSTOM_ID_PREFIX}${componentId}`,
+    componentId,
+  );
 }
 
 // A19: Stale interaction rejection — returns true when the parsed custom_id's

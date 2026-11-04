@@ -1,7 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { parseDocument } from "yaml";
+
+import { AUDIT_BASELINE_PATH, readAuditBaseline } from "./audit-baseline.mjs";
 
 const REQUIRED_FILES = [
   ".editorconfig",
@@ -19,8 +22,30 @@ const REQUIRED_SCRIPTS = [
   "format:check",
   "lint",
   "test",
+  "test:knowledge",
+  "test:m8",
+  "rehearse:r16",
   "repo:check",
   "verify",
+];
+
+// `npm run verify` is the fail-fast Node-tier quality gate: static checks first, then
+// the JavaScript suite, then repository policy validation. The stage order is part of
+// the contract and a missing stage must fail the policy check rather than silently
+// shrink the gate, which is why this is a fixed sequence instead of a loose membership
+// test.
+//
+// The Knowledgebase Python suite is deliberately NOT a `verify` stage. It is a separate
+// blocking gate with exactly one executor per environment: `CI / python-quality` in CI
+// (enforced below, by checkCiWorkflow), and `npm run test:knowledge` / `make
+// test-knowledge` on a host. Folding it into `verify` would make one command depend on
+// the Python toolchain in every job that runs `verify`, including the ones that
+// provision only Node.
+const REQUIRED_VERIFY_STAGES = [
+  "npm run format:check",
+  "npm run lint",
+  "npm test",
+  "npm run repo:check",
 ];
 
 const MAKE_TARGETS = {
@@ -29,9 +54,147 @@ const MAKE_TARGETS = {
   "format-check": "npm run format:check",
   lint: "npm run lint",
   test: "npm test",
+  "test-knowledge": "npm run test:knowledge",
   "repo-check": "npm run repo:check",
   verify: "npm run verify",
 };
+
+// The findings register is the one queue every remediation band reads. It is
+// tracked, so every row edit carries a commit, an author and a diff.
+const FINDINGS_REGISTER_PATH = "docs/execution/findings.md";
+// The tracked ledger that records every recovery archive the tree holds, with
+// its digest, its provenance and its retention.
+const RECOVERY_ARCHIVE_LEDGER_PATH =
+  "docs/runbooks/recovery-archive-ledger.json";
+// The register moved out of the Git-ignored states tree on 2026-10-17. A
+// tracked file that still cites the retired path without naming the current
+// one sends a reader to a file that does not exist.
+const RETIRED_REGISTER_PATH = ".agents/states/findings.md";
+const CURRENT_REGISTER_PATH = "docs/execution/findings.md";
+// The ten fields every register row carries (findings.md 0.1) and the status
+// vocabulary of 0.3.
+const FINDINGS_REGISTER_FIELDS = [
+  "Category",
+  "Legacy register id",
+  "Affected modules",
+  "Severity",
+  "Status",
+  "Root cause",
+  "Evidence",
+  "Reproduction",
+  "Acceptance criteria",
+  "Related findings",
+];
+const FINDINGS_STATUS_VOCABULARY = new Set([
+  "OPEN",
+  "LATENT",
+  "HYPOTHESIS",
+  "PARTIAL",
+  "BLOCKED",
+  "EXCLUDED",
+  "REFUTED",
+]);
+// The secret-scan allowlist suppresses whole directories. These are the
+// recorded scopes: each one names the ANCHORED pattern the allowlist file
+// must carry, so a tracked path is suppressed only through a scope that a
+// record names.
+//
+// F-339 (R7-OA-02): the allowlist carried ONE unanchored pattern
+// (`tests/.*`), which matched every path containing `tests/` - 224 tracked
+// paths at the measurement below - and nothing read the allowlist files, so
+// the suppressed set could grow without any lane noticing. The anchored set
+// suppresses exactly the same 224 paths, so the scan's behaviour is
+// unchanged; what changes is that the set is now EXPLICIT and READ.
+//
+// The recorded scopes, their anchored patterns, and the tracked paths each
+// one suppressed at the measurement (2026-10-20, M12/T9):
+const SECRET_SCAN_ALLOWED_SCOPES = [
+  {
+    scope: "tests/",
+    pattern: "^tests/.*",
+    measured: 321,
+  },
+  {
+    scope: "apps/knowledge/tests/",
+    pattern: "^apps/knowledge/tests/.*",
+    measured: 38,
+  },
+  {
+    scope: "apps/knowledge/pdf-runtime/tests/",
+    pattern: "^apps/knowledge/pdf-runtime/tests/.*",
+    measured: 0,
+  },
+  {
+    // The one file the allowlist names by path rather than by scope. It is
+    // also fingerprinted line-precisely in .gitleaksignore, so the
+    // duplication is recorded rather than accidental.
+    scope: "integrations/openclaw/orchestration/README.md",
+    pattern: "^integrations/openclaw/orchestration/README\\.md$",
+    measured: 1,
+  },
+];
+// The measured total was 224 tracked paths; the M12/T9 band added 51 lanes
+// under the recorded `tests/` scope, so the measured total became 275. The
+// ceiling carries headroom for a band's new test files; a band that exceeds
+// it re-measures and records the new number, which is the visible act the
+// row asked for. Measured again on 2026-10-25 while closing the R4 band:
+// 283 + 36 + 1 + 1 = 321 tracked paths (one `pdf-runtime/tests/` lane left
+// the tree since the 2026-10-20 measurement). Nine R4 band tests (F-506,
+// F-393, F-395, F-401, F-403, F-404, F-409, F-411, F-421) landed after that
+// measurement, so `tests/` carries 292 and the total is 292 + 36 + 1 + 1 = 330.
+// One more R4 band test (F-407) landed after that, so `tests/` carries 293 and
+// the total is 293 + 36 + 1 + 1 = 331. The F-402/F-405/F-406 lane is one more,
+// so `tests/` carries 294 and the total is 294 + 36 + 1 + 1 = 332.
+// Measured again on 2026-10-26 after the W1/W2 integration: 27 new
+// `tests/m12-t9-r4-*` lanes landed, two new `apps/knowledge/tests/` lanes
+// landed, and the deleted `pdf-runtime/tests/test_ocr_contract.py` left the
+// tree, so `tests/` carries 321, the KB tests 38, the PDF tests 0 and the
+// allowlisted README 1: 321 + 38 + 0 + 1 = 360.
+const SECRET_SCAN_SUPPRESSED_CEILING = 370;
+
+// The fingerprint half of the suppression record. A pattern suppresses a
+// family; a fingerprint suppresses one finding, and the finding has four
+// coordinates. The five entries below name the shipped governance plugin and
+// the shipped builder, which sit inside no recorded pattern scope, so this
+// table is the only record their suppression has.
+const SECRET_SCAN_RECORDED_FINGERPRINTS = [
+  {
+    commit: "0e5a899b4b29482a4d927480a47175a5fd3b5616",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3647",
+  },
+  {
+    commit: "01489aa996aef7ab04789ba3bb08dcd0b0974c68",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3656",
+  },
+  {
+    commit: "01489aa996aef7ab04789ba3bb08dcd0b0974c68",
+    file: "integrations/openclaw/plugins/zink-governance/index.mjs",
+    rule: "discord-client-id",
+    line: "3845",
+  },
+  {
+    commit: "7d922112f7649e0ff7d2ef9f35f84666ab7b93da",
+    file: "integrations/openclaw/configure.mjs",
+    rule: "generic-api-key",
+    line: "62",
+  },
+  {
+    commit: "7d922112f7649e0ff7d2ef9f35f84666ab7b93da",
+    file: "integrations/openclaw/configure.mjs",
+    rule: "generic-api-key",
+    line: "64",
+  },
+];
+// Seven entries at HEAD; the ceiling leaves one band's headroom, and a band
+// that exceeds it must re-measure and raise the number in the same commit.
+const SECRET_SCAN_FINGERPRINT_CEILING = 16;
+
+// The workflow step that compares the live audit with the recorded baseline.
+const AUDIT_BASELINE_SCRIPT = "scripts/audit-baseline.mjs";
 
 const WORKFLOW_PATHS = {
   ci: ".github/workflows/ci.yml",
@@ -41,6 +204,7 @@ const WORKFLOW_PATHS = {
 const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   setupNode: "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+  setupPython: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
   gitleaks: "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e",
 };
 
@@ -252,10 +416,23 @@ function checkWorkflowTriggers(
   const push = workflow.on?.push;
   const pullRequestBranches = pullRequest?.branches;
   const pushBranches = push?.branches;
+  // An unfiltered trigger covers every branch, main included, so it satisfies
+  // the "for main" requirement without naming main. The `push` side has always
+  // said so; the `pull_request` side did not, and M12/T9 (the owner's `H1`)
+  // widened BOTH triggers to every branch — so the same rule applies to both.
+  // What the gate still refuses: a missing trigger, and a trigger narrowed to
+  // branches that do not include `main`.
   const hasMainPullRequest =
-    Array.isArray(pullRequestBranches) && pullRequestBranches.includes("main");
+    pullRequest !== undefined &&
+    (pullRequestBranches === undefined ||
+      (Array.isArray(pullRequestBranches) &&
+        pullRequestBranches.includes("main")));
+  // An unfiltered push trigger covers every branch, main included, so it
+  // satisfies the "push for main" requirement without naming main.
   const hasMainPush =
-    Array.isArray(pushBranches) && pushBranches.includes("main");
+    push !== undefined &&
+    (pushBranches === undefined ||
+      (Array.isArray(pushBranches) && pushBranches.includes("main")));
 
   if (
     !hasMainPullRequest ||
@@ -266,6 +443,20 @@ function checkWorkflowTriggers(
       formatWorkflowFailure(
         workflowPath,
         "must trigger pull_request and push for main plus workflow_dispatch.",
+      ),
+    );
+  }
+
+  // The secret scan is the only lane that can see a credential committed to a
+  // task branch. Scoping its push trigger to `main` left every branch push
+  // unscanned, so a credential could reach main through a merge without any
+  // lane ever having looked at the branch. The scan must therefore run for a
+  // push to ANY branch, not only to the default one.
+  if (securityWorkflow && push && Array.isArray(pushBranches)) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "the secret scan must run on a push to any branch, so the push trigger must not be narrowed to a branch list.",
       ),
     );
   }
@@ -352,6 +543,197 @@ function checkCiWorkflow(workflowPath, workflow, failures) {
     },
     failures,
   );
+
+  checkPythonQualityJob(workflowPath, workflow, failures);
+  checkKnowledgebaseSuiteSingleOwner(workflowPath, workflow, failures);
+}
+
+// The Knowledgebase Python suite is a blocking gate with exactly one CI executor. It
+// used to also be a `verify` stage, which made every job that runs `verify` depend on
+// the Python toolchain — `CI / quality-gate` proved that unrunnable (it provisions
+// Node only, so the stage died at `uv: not found`). Requiring one named executor keeps
+// the suite from silently disappearing while the aggregate stays Node-only, and
+// rejects both a duplicated suite and a workflow that dropped it entirely.
+function checkKnowledgebaseSuiteSingleOwner(workflowPath, workflow, failures) {
+  const jobs = isObject(workflow.jobs) ? workflow.jobs : {};
+  const executors = [];
+  for (const [jobName, job] of Object.entries(jobs)) {
+    const steps = isObject(job) && Array.isArray(job.steps) ? job.steps : [];
+    if (runStepIndex(steps, "npm run test:knowledge") >= 0) {
+      executors.push(jobName);
+    }
+  }
+  if (executors.length !== 1 || executors[0] !== PYTHON_QUALITY_JOB) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `command \`npm run test:knowledge\` must be executed exactly once, by job ${PYTHON_QUALITY_JOB}.`,
+      ),
+    );
+  }
+}
+
+const PYTHON_QUALITY_JOB = "python-quality";
+
+// The Knowledgebase Python suite is a blocking gate, so the policy refuses to
+// accept a CI workflow where that job is absent, non-blocking, or no longer
+// runs the suite. Without this, deleting the job would silently return the
+// Python tier to unverified.
+function checkPythonQualityJob(workflowPath, workflow, failures) {
+  const steps = workflowSteps(
+    workflowPath,
+    workflow,
+    PYTHON_QUALITY_JOB,
+    failures,
+  );
+
+  if (!steps.length) {
+    return;
+  }
+
+  const job = workflow.jobs?.[PYTHON_QUALITY_JOB];
+  if (job?.["continue-on-error"] === true) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+      ),
+    );
+  }
+
+  if (actionStepIndex(steps, ACTIONS.setupPython) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must use pinned actions/setup-python.`,
+      ),
+    );
+  }
+
+  // The suite is invoked through `npm run test:knowledge`, and package.json
+  // pins devEngines.runtime to node >=24.15.0 <25 with onFail=error, so a job
+  // that loses the Node toolchain makes npm abort before pytest collects
+  // anything — the gate would report a pass it never earned. The pinned
+  // tokenizer fetch and its checksum are the same kind of dependency: seven
+  // Knowledgebase modules skip at import when KNOWLEDGE_TOKENIZER_PATH is
+  // unset, so losing the fetch turns the attribution gates into skips.
+  if (actionStepIndex(steps, ACTIONS.setupNode) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must use pinned actions/setup-node, because the suite is invoked through npm and package.json pins the Node runtime.`,
+      ),
+    );
+  }
+  if (runStepIndex(steps, "npm install --global npm@12.0.2") < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must install the pinned npm@12.0.2 bootstrap.`,
+      ),
+    );
+  }
+  if (toolchainAssertionIndex(steps) < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must assert the Node and npm versions.`,
+      ),
+    );
+  }
+  const tokenizerIndex = steps.findIndex(
+    (step) =>
+      isObject(step) &&
+      typeof step.run === "string" &&
+      /sha256sum --check --strict/u.test(step.run),
+  );
+  if (tokenizerIndex < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must fetch the pinned tokenizer and verify it with sha256sum --check --strict.`,
+      ),
+    );
+  }
+  const suiteStep = steps.find(
+    (step) => runStepIndex([step], "npm run test:knowledge") >= 0,
+  );
+  if (!suiteStep || suiteStep.env?.KNOWLEDGE_TOKENIZER_PATH === undefined) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must set KNOWLEDGE_TOKENIZER_PATH on the suite step, or the Knowledgebase attribution gates skip at import.`,
+      ),
+    );
+  }
+  const syncStep = steps.find(
+    (step) => runStepIndex([step], "uv sync --locked") >= 0,
+  );
+  if (!syncStep || syncStep["working-directory"] !== "apps/knowledge") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job ${PYTHON_QUALITY_JOB} must run uv sync --locked in working-directory apps/knowledge.`,
+      ),
+    );
+  }
+
+  const syncIndex = runStepIndex(steps, "uv sync --locked");
+  const suiteIndex = runStepIndex(steps, "npm run test:knowledge");
+  checkOrderedStepIndexes(
+    workflowPath,
+    PYTHON_QUALITY_JOB,
+    {
+      "command `uv sync --locked`": syncIndex,
+      "command `npm run test:knowledge`": suiteIndex,
+    },
+    failures,
+  );
+
+  // pdf-runtime is Linux/x86_64-only and pulls the torch/docling stack. It must
+  // stay an explicit NOT RUN in CI rather than being installed here or implied.
+  for (const step of steps) {
+    if (!isObject(step)) {
+      continue;
+    }
+    if (typeof step.run === "string") {
+      if (
+        step.run.includes("pdf-runtime") ||
+        step.run.includes("zink_pdf_runtime")
+      ) {
+        failures.push(
+          formatWorkflowFailure(
+            workflowPath,
+            `job ${PYTHON_QUALITY_JOB} must not install the pdf-runtime closure.`,
+          ),
+        );
+      }
+      // A step-level override would silently downgrade the gate to advisory
+      // even though the job itself still fails on a red suite.
+      if (
+        step.run.trim() === "npm run test:knowledge" &&
+        step["continue-on-error"] === true
+      ) {
+        failures.push(
+          formatWorkflowFailure(
+            workflowPath,
+            `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+          ),
+        );
+      }
+    }
+    if (
+      step.uses === ACTIONS.setupPython &&
+      step["continue-on-error"] === true
+    ) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          `job ${PYTHON_QUALITY_JOB} must block on failure.`,
+        ),
+      );
+    }
+  }
 }
 
 function checkSecurityWorkflow(workflowPath, workflow, failures) {
@@ -413,18 +795,24 @@ function checkSecurityWorkflow(workflowPath, workflow, failures) {
       ),
     );
   }
-  for (const name of [
-    "GITLEAKS_ENABLE_COMMENTS",
-    "GITLEAKS_ENABLE_UPLOAD_ARTIFACT",
-  ]) {
-    if (environment?.[name] !== "false") {
-      failures.push(
-        formatWorkflowFailure(
-          workflowPath,
-          `job secret-scan Gitleaks must set ${name} to the string false.`,
-        ),
-      );
-    }
+  if (environment?.GITLEAKS_ENABLE_COMMENTS !== "false") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job secret-scan Gitleaks must set GITLEAKS_ENABLE_COMMENTS to the string false.",
+      ),
+    );
+  }
+  // The report artifact is what makes a "zero leaks" claim re-inspectable
+  // instead of a sentence in a plan file: without it, nobody can look at what
+  // the scan actually found.
+  if (environment?.GITLEAKS_ENABLE_UPLOAD_ARTIFACT !== "true") {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job secret-scan Gitleaks must set GITLEAKS_ENABLE_UPLOAD_ARTIFACT to the string true so the scan report is a retained artifact.",
+      ),
+    );
   }
   if (Object.hasOwn(environment ?? {}, "GITLEAKS_LICENSE")) {
     failures.push(
@@ -506,6 +894,12 @@ function isSensitivePath(filePath) {
   const name = path.posix.basename(normalizedPath(filePath)).toLowerCase();
   return (
     name === ".env" ||
+    // F-521 (legacy `R10-L09-5`): `.gitignore` declares the whole `.env.*`
+    // family "Secrets and machine-specific environment files", so the guard must
+    // refuse the family by name and not only the bare basename. The names the
+    // template allowlist already declares (`.env.example`, `.env.template`) stay
+    // allowed downstream in `checkTrackedFilePolicies`.
+    name.startsWith(".env.") ||
     /^credentials[^/]*\.json$/.test(name) ||
     /\.license$/.test(name) ||
     /\.(key|pem|p12|pfx)$/.test(name)
@@ -534,7 +928,11 @@ function resolveTrackedPath(repositoryRoot, repositoryPath) {
   return filePath;
 }
 
-export function checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles) {
+export function checkWorkingTreeTextPolicy(
+  repositoryRoot,
+  trackedFiles,
+  editorConfig = readEditorConfig(repositoryRoot),
+) {
   const failures = [];
 
   for (const repositoryPath of trackedFiles) {
@@ -556,17 +954,322 @@ export function checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles) {
       );
     }
 
-    const lines = contents.toString("utf8").split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      if (/[ \t]+\r?$/.test(lines[index])) {
-        failures.push(
-          `Working-tree file has trailing whitespace: ${repositoryPath}:${index + 1}`,
-        );
+    // The editor-facing `.editorconfig` owns the trailing-whitespace rule
+    // for each file class and this gate defers to it. The two used to state
+    // opposite requirements for Markdown — `.editorconfig` declares a hard
+    // break legal, this gate rejected the same bytes — so which rule won
+    // depended on which surface the operator touched last.
+    if (editorConfig.trimsTrailingWhitespace(repositoryPath)) {
+      const lines = contents.toString("utf8").split("\n");
+      for (let index = 0; index < lines.length; index += 1) {
+        if (/[ \t]+\r?$/.test(lines[index])) {
+          failures.push(
+            `Working-tree file has trailing whitespace: ${repositoryPath}:${index + 1}`,
+          );
+        }
       }
     }
   }
 
   return failures;
+}
+
+/**
+ * The findings register is a machine-checked queue, not prose: every row
+ * carries the ten fields findings.md 0.1 defines and a status from the 0.3
+ * vocabulary. A row that drifts from that shape is a row no agent can read
+ * the same way, and the register had no executable reader at all.
+ */
+export function checkFindingsRegister(markdown) {
+  const failures = [];
+  const blocks = String(markdown ?? "")
+    .split(/^### /mu)
+    .slice(1);
+  if (!blocks.length) {
+    return ["The findings register carries no `### F-xxx` row block."];
+  }
+
+  for (const block of blocks) {
+    const header = block.split("\n", 1)[0].trim();
+    const id = /^F-\d+/u.exec(header)?.[0] ?? header;
+    for (const field of FINDINGS_REGISTER_FIELDS) {
+      const match = new RegExp(`^- ${field}:[ ]*(.*)$`, "mu").exec(block);
+      if (!match) {
+        failures.push(`Register row ${id} is missing the "${field}:" field.`);
+        continue;
+      }
+      if (field !== "Status" && match[1].trim().length === 0) {
+        failures.push(`Register row ${id} has an empty "${field}:" field.`);
+      }
+    }
+    // A row that carries a field the register does not define has drifted from
+    // the ten-field shape, and a reader cannot tell which field is the
+    // authoritative one. An eleventh field is a failure, not a new fact.
+    for (const match of block.matchAll(/^- ([A-Za-z][A-Za-z ]*):/gmu)) {
+      if (!FINDINGS_REGISTER_FIELDS.includes(match[1].trim())) {
+        failures.push(
+          `Register row ${id} carries a field the register does not define: "${match[1].trim()}".`,
+        );
+      }
+    }
+    const status = /^- Status:[ ]*([A-Z]+)/mu.exec(block)?.[1];
+    if (!status) {
+      failures.push(`Register row ${id} carries no Status: value.`);
+    } else if (!FINDINGS_STATUS_VOCABULARY.has(status)) {
+      failures.push(
+        `Register row ${id} uses a Status outside the register vocabulary: ${status}.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * A tracked document that still points at the retired register path must also
+ * name the current one, or the reader resolves to a file that does not exist.
+ *
+ * The frozen contracts under `docs/contracts/` are exempt: they are the
+ * immutable record of what a past band was told, and rewriting a citation
+ * inside them would falsify that record.
+ */
+export function checkRegisterCitations(repositoryRoot, trackedFiles) {
+  const failures = [];
+  for (const repositoryPath of trackedFiles) {
+    if (!repositoryPath.endsWith(".md")) continue;
+    if (repositoryPath.startsWith("docs/contracts/")) continue;
+    const filePath = resolveTrackedPath(repositoryRoot, repositoryPath);
+    if (!existsSync(filePath)) continue;
+    const contents = readFileSync(filePath, "utf8");
+    if (!contents.includes(RETIRED_REGISTER_PATH)) continue;
+    if (!contents.includes(CURRENT_REGISTER_PATH)) {
+      failures.push(
+        `Tracked document cites the retired register path without naming the current one: ${repositoryPath}`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The secret-scan allowlist suppresses whole directories, and nothing read it:
+ * the suppressed set could grow without any lane noticing. The scopes below
+ * are the recorded ones, and the total is capped, so a new suppressed
+ * directory or an unbounded growth fails the policy check.
+ */
+export function checkSecretScanAllowlist(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const configPath = path.join(repositoryRoot, ".gitleaks.toml");
+  if (!existsSync(configPath)) {
+    return ["The secret-scan allowlist file .gitleaks.toml is missing."];
+  }
+  const config = readFileSync(configPath, "utf8");
+  const allowlistBlock = /\[allowlist\]([\s\S]*?)(?=\n\[|$)/u.exec(config);
+  if (!allowlistBlock) {
+    return [
+      "The secret-scan allowlist file .gitleaks.toml has no [allowlist] block.",
+    ];
+  }
+  const patterns = [...allowlistBlock[1].matchAll(/'''([^']*)'''/gu)].map(
+    (match) => match[1],
+  );
+  if (!patterns.length) {
+    return ["The secret-scan allowlist declares no path pattern."];
+  }
+
+  // Every pattern must be ANCHORED and must be one the records name. An
+  // unanchored pattern matches a path the scope does not name - that is how
+  // the suppressed set grew to 224 tracked paths without a record - and an
+  // unrecorded pattern suppresses a scope nothing reviews.
+  const recordedPatterns = new Set(
+    SECRET_SCAN_ALLOWED_SCOPES.map((entry) => entry.pattern),
+  );
+  for (const pattern of patterns) {
+    if (!pattern.startsWith("^")) {
+      failures.push(
+        `The secret-scan allowlist pattern is not anchored: ${pattern}. An unanchored pattern matches paths its scope does not name, so the suppressed set grows without a record.`,
+      );
+    }
+    if (!recordedPatterns.has(pattern)) {
+      failures.push(
+        `The secret-scan allowlist suppresses a scope that no record names: ${pattern}. Record it in SECRET_SCAN_ALLOWED_SCOPES before it suppresses anything.`,
+      );
+    }
+  }
+  for (const entry of SECRET_SCAN_ALLOWED_SCOPES) {
+    if (!patterns.includes(entry.pattern)) {
+      failures.push(
+        `A recorded secret-scan scope has no allowlist pattern: ${entry.scope} (${entry.pattern}).`,
+      );
+    }
+  }
+
+  const suppressed = [];
+  for (const repositoryPath of trackedFiles) {
+    for (const pattern of patterns) {
+      let expression;
+      try {
+        expression = new RegExp(pattern, "u");
+      } catch {
+        failures.push(
+          `The secret-scan allowlist pattern is not a valid regular expression: ${pattern}`,
+        );
+        expression = null;
+      }
+      if (!expression) break;
+      if (expression.test(repositoryPath)) {
+        suppressed.push(repositoryPath);
+        break;
+      }
+    }
+  }
+
+  const outsideScope = suppressed.filter(
+    (repositoryPath) =>
+      !SECRET_SCAN_ALLOWED_SCOPES.some(
+        (entry) =>
+          repositoryPath.startsWith(entry.scope) ||
+          repositoryPath === entry.scope,
+      ),
+  );
+  for (const repositoryPath of outsideScope) {
+    failures.push(
+      `A tracked path is suppressed by the secret-scan allowlist outside every recorded scope: ${repositoryPath}`,
+    );
+  }
+  if (suppressed.length > SECRET_SCAN_SUPPRESSED_CEILING) {
+    failures.push(
+      `The secret-scan allowlist suppresses ${suppressed.length} tracked paths, above the recorded ceiling of ${SECRET_SCAN_SUPPRESSED_CEILING}.`,
+    );
+  }
+
+  // The fingerprint file is the per-file record of a suppression. Every
+  // fingerprint must name a file the repository still tracks, or the record
+  // points at nothing and the suppression it describes cannot be reviewed.
+  // A fingerprint whose file is inside a recorded pattern scope is already
+  // reviewed by that scope; every other fingerprint needs all four of its
+  // coordinates named in SECRET_SCAN_RECORDED_FINGERPRINTS, because the
+  // commit, rule and line are what distinguish the reviewed finding from the
+  // next finding in the same file.
+  const ignorePath = path.join(repositoryRoot, ".gitleaksignore");
+  if (existsSync(ignorePath)) {
+    const tracked = new Set(trackedFiles);
+    const entries = readFileSync(ignorePath, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((entry) => entry.length > 0 && !entry.startsWith("#"));
+    for (const entry of entries) {
+      const parts = entry.split(":");
+      if (parts.length !== 4 || parts.some((part) => part.length === 0)) {
+        failures.push(
+          `A secret-scan fingerprint is not in the <commit>:<file>:<rule>:<line> form: ${entry}`,
+        );
+        continue;
+      }
+      const [commit, file, rule, line] = parts;
+      if (!tracked.has(file)) {
+        failures.push(
+          `A secret-scan fingerprint names a file the repository does not track: ${entry}`,
+        );
+        continue;
+      }
+      const insideScope = SECRET_SCAN_ALLOWED_SCOPES.some((scope) =>
+        new RegExp(scope.pattern, "u").test(file),
+      );
+      if (insideScope) continue;
+      const recorded = SECRET_SCAN_RECORDED_FINGERPRINTS.some(
+        (item) =>
+          item.commit === commit &&
+          item.file === file &&
+          item.rule === rule &&
+          item.line === line,
+      );
+      if (!recorded) {
+        failures.push(
+          `A secret-scan fingerprint suppresses a finding outside every recorded scope and no recorded fingerprint names it: ${entry}. Record its commit, file, rule and line in SECRET_SCAN_RECORDED_FINGERPRINTS.`,
+        );
+      }
+    }
+    if (entries.length > SECRET_SCAN_FINGERPRINT_CEILING) {
+      failures.push(
+        `The secret-scan fingerprint file carries ${entries.length} entries, above the recorded ceiling of ${SECRET_SCAN_FINGERPRINT_CEILING}.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * A generated tree under a module path must not be stageable. The ignore
+ * rules for `backups/`, `logs/` and `temp/` were root-anchored, so a nested
+ * capture — a live-state snapshot that may carry credential-derived material
+ * — was invisible to `git status` and one `git add -A` away from history.
+ */
+export function checkNestedGeneratedTreesIgnored(repositoryRoot) {
+  const failures = [];
+  for (const nested of [
+    "apps/knowledge/backups/capture.json",
+    "integrations/openclaw/backups/capture.json",
+    "integrations/openclaw/logs/run.log",
+    "zink-tools/backups/capture.json",
+  ]) {
+    const result = runGit(repositoryRoot, ["check-ignore", "-q", "--", nested]);
+    if (result.status !== 0) {
+      failures.push(
+        `A generated tree under a module path is not ignored and can be staged: ${nested}`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * Read the trailing-whitespace policy `.editorconfig` declares per file
+ * class. `trim_trailing_whitespace = false` marks a class whose trailing
+ * spaces are meaningful (Markdown hard breaks).
+ */
+function readEditorConfig(repositoryRoot) {
+  const configPath = path.join(repositoryRoot, ".editorconfig");
+  const rules = [];
+  if (existsSync(configPath)) {
+    let section = null;
+    for (const line of readFileSync(configPath, "utf8").split(/\r?\n/u)) {
+      const sectionMatch = /^\s*\[([^\]]+)\]\s*$/u.exec(line);
+      if (sectionMatch) {
+        section = sectionMatch[1].trim();
+        continue;
+      }
+      const propertyMatch =
+        /^\s*trim_trailing_whitespace\s*=\s*(\S+)\s*$/u.exec(line);
+      if (propertyMatch && section) {
+        rules.push({ pattern: section, trims: propertyMatch[1] === "true" });
+      }
+    }
+  }
+
+  const matches = (repositoryPath, pattern) => {
+    const source = pattern
+      .split("/")
+      .map((part) =>
+        part === "**"
+          ? ".*"
+          : part.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*"),
+      )
+      .join("/");
+    return new RegExp(`^${source}($|/.*)$`, "u").test(repositoryPath);
+  };
+
+  return {
+    trimsTrailingWhitespace: (repositoryPath) => {
+      for (const rule of rules) {
+        if (matches(repositoryPath, rule.pattern)) {
+          return rule.trims;
+        }
+      }
+      return true;
+    },
+  };
 }
 
 export function checkRequiredFiles(repositoryRoot) {
@@ -595,12 +1298,15 @@ export function checkCommandDefinitions(packageJson, makefile) {
     }
   }
 
+  const verify = scripts.verify;
   if (
-    scripts.verify !==
-    "npm run format:check && npm run lint && npm test && npm run repo:check"
+    typeof verify !== "string" ||
+    verify !== REQUIRED_VERIFY_STAGES.join(" && ")
   ) {
     failures.push(
-      "npm script verify must run the documented fail-fast quality gate.",
+      `npm script verify must run the documented fail-fast quality gate in order: ${REQUIRED_VERIFY_STAGES.join(
+        " && ",
+      )}.`,
     );
   }
 
@@ -613,6 +1319,396 @@ export function checkCommandDefinitions(packageJson, makefile) {
     }
   }
 
+  return failures;
+}
+
+const TEST_FILE_ARGUMENT = /^tests\/[\w.+-]+\.test\.mjs$/u;
+
+// `format`/`format:check` hand prettier a list of glob patterns. Unquoted, the
+// *shell* expands them first — and `/bin/sh` has no `globstar`, so a `tests` +
+// double-star pattern degrades to one directory level and matches only helpers
+// and fixtures. CI runs that shell, which is how 110 test files ended up outside
+// their own format gate while four helper files stayed inside it. Quoting hands
+// the pattern to prettier, whose own matcher does understand the double star.
+//
+// Double quotes specifically: `cmd.exe` does not treat a single quote as a quote,
+// so a single-quoted pattern would reach prettier with the apostrophes intact and
+// match nothing. A single-quoted argument is therefore a failure here, not a
+// style choice.
+export function checkFormatGlobQuoting(packageJson) {
+  const failures = [];
+  for (const scriptName of ["format", "format:check"]) {
+    const command = packageJson?.scripts?.[scriptName];
+    if (typeof command !== "string") {
+      continue;
+    }
+    for (const token of command.split(/\s+/u)) {
+      if (!token.includes("*") && !token.includes("{")) {
+        continue;
+      }
+      if (token.startsWith('"') && token.endsWith('"')) {
+        continue;
+      }
+      failures.push(
+        `npm script ${scriptName} passes the glob ${token} unquoted or single-quoted, so the shell expands it before prettier sees it. Wrap it in double quotes.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * `npm test` names its files instead of globbing them, which is what lets a
+ * missing file fail loudly rather than silently shortening the run. The other
+ * direction has no such backstop: a test file added to disk but never listed is
+ * collected by no host and no CI run, so the suite looks greener the more tests
+ * it stops running. Reconciling the two sets is the only thing that closes that.
+ */
+export function checkTestListReconciliation(packageJson, testFiles) {
+  const command = packageJson?.scripts?.test;
+  if (typeof command !== "string") {
+    return [
+      "npm script test must be a string so it can be reconciled with tests/.",
+    ];
+  }
+
+  const listed = new Set(
+    command.split(/\s+/u).filter((token) => TEST_FILE_ARGUMENT.test(token)),
+  );
+  const onDisk = new Set(testFiles);
+  const failures = [];
+
+  for (const file of [...onDisk].sort()) {
+    if (!listed.has(file)) {
+      failures.push(
+        `Test file exists on disk but is not enumerated in the npm test script: ${file}. Add it, or this gate never runs it.`,
+      );
+    }
+  }
+  for (const entry of [...listed].sort()) {
+    if (!onDisk.has(entry)) {
+      failures.push(
+        `The npm test script enumerates a test file that does not exist: ${entry}.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+const GATE_REGISTRY_HEADER =
+  /^\|\s*Script\s*\|\s*What it checks\s*\|\s*Where it runs\s*\|\s*NOT RUN condition\s*\|/u;
+const GATE_REGISTRY_ROW = /^\|\s*`([^`]+)`\s*\|([^|]*)\|([^|]*)\|([^|]*)\|/u;
+
+// Actions a workflow runs to provision the runner rather than to check the
+// repository. Every other action is a blocking check surface, so it needs its
+// own registry row and its own NOT RUN condition.
+const TOOLCHAIN_ACTIONS = new Set([
+  "actions/checkout",
+  "actions/setup-node",
+  "actions/setup-python",
+]);
+
+const NPM_SCRIPT_INVOCATION = /\bnpm\s+run\s+([\w:@.-]+)/gu;
+const NPM_TEST_INVOCATION = /\bnpm\s+test\b/u;
+const NODE_SCRIPT_INVOCATION =
+  /\bnode\s+(?:--?[\w-]+(?:=\S+)?\s+)*([\w./@+-]+\.(?:mjs|cjs|js))/gu;
+const UV_PIN = /uv==(\d+\.\d+\.\d+)/gu;
+// The two sentences `docs/development/conventions.md` used to carry about the
+// secret-scan lane, each of which contradicted a shipped gate.
+const GITLEAKS_UPLOAD_DENIAL =
+  /does not[^.\n]*\bupload(?:s)? (?:an? )?artifacts?/iu;
+const GITLEAKS_NO_CONFIG = /\bhas no (?:license|custom configuration)/iu;
+
+/**
+ * The check surfaces a workflow runs and does not let fail softly.
+ *
+ * A step with `continue-on-error: true` reports and moves on, so it blocks
+ * nothing and needs no NOT RUN condition. Everything else — an npm script, a
+ * direct `node` invocation or an action — is a surface whose absence from the
+ * registry is a gate nobody can account for.
+ */
+function blockingCheckSurfaces(workflowPath, workflowText) {
+  const surfaces = new Map();
+  if (typeof workflowText !== "string" || workflowText.trim().length === 0) {
+    return surfaces;
+  }
+  let document;
+  try {
+    document = parseDocument(workflowText, { uniqueKeys: true });
+  } catch {
+    return surfaces;
+  }
+  // An unparseable workflow is checkWorkflowDefinitions' failure, not this
+  // check's: it would otherwise report every surface as missing.
+  if (document.errors.length > 0) return surfaces;
+  const jobs = document.toJS()?.jobs;
+  if (!isObject(jobs)) return surfaces;
+
+  for (const job of Object.values(jobs)) {
+    const steps = isObject(job) ? job.steps : undefined;
+    if (!Array.isArray(steps)) continue;
+    for (const step of steps) {
+      if (!isObject(step) || step["continue-on-error"] === true) continue;
+      if (typeof step.uses === "string") {
+        const action = step.uses.split("@")[0];
+        if (!TOOLCHAIN_ACTIONS.has(action) && !surfaces.has(action)) {
+          surfaces.set(action, { surface: action, workflowPath });
+        }
+        continue;
+      }
+      if (typeof step.run !== "string") continue;
+      const invoked = [
+        ...[...step.run.matchAll(NPM_SCRIPT_INVOCATION)].map(
+          (match) => match[1],
+        ),
+        ...[...step.run.matchAll(NODE_SCRIPT_INVOCATION)].map(
+          (match) => match[1],
+        ),
+      ];
+      if (NPM_TEST_INVOCATION.test(step.run)) invoked.push("test");
+      for (const surface of invoked) {
+        if (!surfaces.has(surface))
+          surfaces.set(surface, { surface, workflowPath });
+      }
+    }
+  }
+  return surfaces;
+}
+
+/**
+ * The prose beside the registry table must agree with the workflows it
+ * describes. Both contradictions measured here were live: the table block
+ * stated a uv pin the CI job does not install, and stated that the Gitleaks
+ * lane uploads no artifact and carries no custom configuration while
+ * `security.yml` sets the upload flag to `true` and `repo:check` fails when
+ * the tracked `.gitleaks.toml` is missing.
+ */
+function checkRegistryProse(registryMarkdown, workflowTexts) {
+  const failures = [];
+  const markdown = String(registryMarkdown ?? "");
+  const ci = typeof workflowTexts.ci === "string" ? workflowTexts.ci : "";
+  const security =
+    typeof workflowTexts.security === "string" ? workflowTexts.security : "";
+
+  const documentedPins = new Set(
+    [...markdown.matchAll(UV_PIN)].map((m) => m[1]),
+  );
+  const ciPins = new Set([...ci.matchAll(UV_PIN)].map((match) => match[1]));
+  if (documentedPins.size > 0 && ciPins.size > 0) {
+    for (const pin of [...documentedPins].sort()) {
+      if (!ciPins.has(pin)) {
+        failures.push(
+          `The gate registry documents uv==${pin}, while the CI workflow installs ${[
+            ...ciPins,
+          ]
+            .sort()
+            .map((entry) => `uv==${entry}`)
+            .join(", ")}. The registry must state the version CI installs.`,
+        );
+      }
+    }
+  }
+
+  const uploadsReport =
+    /GITLEAKS_ENABLE_UPLOAD_ARTIFACT:\s*["']?true["']?/u.test(security);
+  const claims = markdown
+    .split(/\r?\n/u)
+    .filter(
+      (line) => /gitleaks/iu.test(line) && !line.trimStart().startsWith("|"),
+    );
+  for (const line of claims) {
+    if (uploadsReport && GITLEAKS_UPLOAD_DENIAL.test(line)) {
+      failures.push(
+        "The gate registry states that the secret-scan lane does not upload artifacts, while .github/workflows/security.yml sets GITLEAKS_ENABLE_UPLOAD_ARTIFACT to true. The report artifact is what makes a zero-leak claim re-inspectable.",
+      );
+    }
+    if (
+      workflowTexts.gitleaksConfig === true &&
+      GITLEAKS_NO_CONFIG.test(line)
+    ) {
+      failures.push(
+        "The gate registry states that the secret-scan lane carries no custom configuration, while the repository tracks .gitleaks.toml and repo:check fails without it.",
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * What `npm run verify` reaches, one expansion deep per script.
+ *
+ * The registry's "Where it runs" column is a claim about EXECUTION, and the
+ * only thing that can contradict it is the script graph itself: a row that
+ * says "not in verify and not in CI" is false the moment `verify` runs the
+ * script, or runs `npm test` over a file its own body declares with a glob.
+ */
+function scriptsReachedFromVerify(packageJson) {
+  const scripts = isObject(packageJson?.scripts) ? packageJson.scripts : {};
+  const reachable = new Set();
+  const verify = scripts.verify;
+  if (typeof verify !== "string") return reachable;
+
+  const pending = [...verify.matchAll(NPM_SCRIPT_INVOCATION)].map(
+    (match) => match[1],
+  );
+  if (NPM_TEST_INVOCATION.test(verify)) pending.push("test");
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (reachable.has(name) || typeof scripts[name] !== "string") continue;
+    reachable.add(name);
+    const body = scripts[name];
+    for (const match of body.matchAll(NPM_SCRIPT_INVOCATION)) {
+      pending.push(match[1]);
+    }
+    if (NPM_TEST_INVOCATION.test(body)) pending.push("test");
+  }
+  return reachable;
+}
+
+/** The `tests/<glob>.test.mjs` population a script body declares, if any. */
+function declaredTestGlob(scriptBody) {
+  const match =
+    /\bnode\s+--test\s+(?:--?[\w-]+(?:=\S+)?\s+)*(tests\/[\w.*+-]+\.test\.mjs)/u.exec(
+      typeof scriptBody === "string" ? scriptBody : "",
+    );
+  return match ? match[1] : null;
+}
+
+function globExpression(glob) {
+  const source = glob
+    .split("*")
+    .map((part) => part.replace(/[.+^${}()|[\]\\]/gu, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}$`, "u");
+}
+
+/** The row claims the script does not run under `verify` or in CI. */
+const RUNS_OUTSIDE_VERIFY_AND_CI =
+  /không nằm trong[^\n]*verify|không chạy ở ci|not (?:run|executed) in ci|does not run in ci/iu;
+
+/**
+ * The second half of the registry's truth: columns 3 and 4 are claims about
+ * execution, not decoration. A row that documents a script as outside
+ * `verify` and outside CI while HEAD runs it there is exactly the shape that
+ * made the registry unreadable — the durable NOT RUN denominator said a gate
+ * was unexecuted on every CI job.
+ */
+function checkRegistryExecutionColumns(packageJson, rows) {
+  const failures = [];
+  const scripts = isObject(packageJson?.scripts) ? packageJson.scripts : {};
+  const reached = scriptsReachedFromVerify(packageJson);
+  const enumerated = new Set(
+    (typeof scripts.test === "string" ? scripts.test : "")
+      .split(/\s+/u)
+      .filter((token) => TEST_FILE_ARGUMENT.test(token)),
+  );
+
+  for (const row of rows) {
+    const claim = `${row.where} ${row.notRun}`;
+    if (!RUNS_OUTSIDE_VERIFY_AND_CI.test(claim)) continue;
+    if (reached.has(row.name)) {
+      failures.push(
+        `The gate registry documents ${row.name} as outside verify and CI, while npm run verify runs it. Correct the row, or the NOT RUN denominator claims a gate is unexecuted that runs on every CI job.`,
+      );
+      continue;
+    }
+    const glob = declaredTestGlob(scripts[row.name]);
+    if (!glob) continue;
+    const expression = globExpression(glob);
+    const matched = [...enumerated].filter((file) => expression.test(file));
+    if (matched.length > 0) {
+      failures.push(
+        `The gate registry documents ${row.name} as outside verify and CI, while npm test enumerates ${matched.length} file(s) its own glob ${glob} declares (for example ${matched[0]}), so verify runs it. Correct the row.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * `docs/development/conventions.md` holds the one durable enumeration of the
+ * gates, which is what gives a `NOT RUN` claim a denominator. A registry that
+ * can drift from the thing it describes is worse than none — it reads like an
+ * answer while the scripts quietly change — so the comparison runs in every
+ * direction that has a HEAD-side operand:
+ *
+ * - every npm script needs a row, and every row needs an npm script or a
+ *   blocking CI check surface behind it;
+ * - every blocking surface the parsed workflows run — npm script, direct
+ *   `node` invocation or action — needs a row, so a step added to either YAML
+ *   without one reddens the check;
+ * - columns 3 and 4 are compared with the script graph they describe;
+ * - the prose beside the table is compared with the workflows it describes.
+ */
+export function checkGateRegistry(
+  packageJson,
+  registryMarkdown,
+  workflowTexts = {},
+) {
+  const scripts = Object.keys(packageJson?.scripts ?? {});
+  const lines = String(registryMarkdown ?? "").split(/\r?\n/u);
+  const header = lines.findIndex((line) => GATE_REGISTRY_HEADER.test(line));
+  if (header < 0) {
+    return [
+      "Gate registry table is missing from docs/development/conventions.md, so the npm gates are enumerated nowhere.",
+    ];
+  }
+
+  const listed = new Set();
+  const rows = [];
+  for (let index = header + 2; index < lines.length; index += 1) {
+    const match = GATE_REGISTRY_ROW.exec(lines[index]);
+    if (!match) break;
+    listed.add(match[1]);
+    rows.push({
+      name: match[1],
+      where: match[3].trim(),
+      notRun: match[4].trim(),
+    });
+  }
+
+  const failures = checkRegistryProse(registryMarkdown, workflowTexts);
+  // Columns 3 and 4 are claims about CI placement, so the pass needs the CI
+  // workflow as its operand: a caller that supplies none is comparing names.
+  if (typeof workflowTexts.ci === "string") {
+    failures.push(...checkRegistryExecutionColumns(packageJson, rows));
+  }
+  for (const scriptName of [...scripts].sort()) {
+    if (!listed.has(scriptName)) {
+      failures.push(
+        `The gate registry does not enumerate the npm script: ${scriptName}.`,
+      );
+    }
+  }
+
+  const surfaces = new Map();
+  for (const [workflowPath, workflowText] of Object.entries({
+    [WORKFLOW_PATHS.ci]: workflowTexts.ci,
+    [WORKFLOW_PATHS.security]: workflowTexts.security,
+  })) {
+    for (const [surface, entry] of blockingCheckSurfaces(
+      workflowPath,
+      workflowText,
+    )) {
+      if (!surfaces.has(surface)) surfaces.set(surface, entry);
+    }
+  }
+  for (const [surface, entry] of [...surfaces].sort()) {
+    if (!listed.has(surface)) {
+      failures.push(
+        `The gate registry does not enumerate the blocking CI check surface: ${surface} (${entry.workflowPath}). A blocking step with no row has no NOT RUN condition anywhere.`,
+      );
+    }
+  }
+
+  for (const entry of [...listed].sort()) {
+    if (scripts.includes(entry)) continue;
+    if (surfaces.has(entry)) continue;
+    failures.push(
+      `The gate registry enumerates a gate that neither package.json nor the workflows declare: ${entry}.`,
+    );
+  }
   return failures;
 }
 
@@ -662,6 +1758,603 @@ export function checkGitWhitespace(repositoryRoot) {
   return failures;
 }
 
+/**
+ * F-365 (R7-IG-05): every recovery archive under backups/ must be recorded,
+ * with its digest, in a tracked ledger.
+ *
+ * The tree held three PostgreSQL dumps of the knowledge schema under
+ * backups/knowledge-t5/ with no tracked producer, no recorded digest and no
+ * expiry, and the only pointer that tied a directory to a run lived in
+ * ignored scratch. The tracked T5 driver now owns the archive name and
+ * writes the run's manifest beside the archive; the archives that predate it
+ * are recorded in the ledger, so their provenance, digest and expiry are
+ * defined too.
+ */
+export function compareArchiveLedger(recorded, present) {
+  const failures = [];
+  const recordedByPath = new Map(
+    (recorded ?? []).map((entry) => [entry.path, entry]),
+  );
+
+  for (const archive of present ?? []) {
+    const entry = recordedByPath.get(archive.path);
+    if (!entry) {
+      failures.push(
+        `The recovery archive ${archive.path} is not recorded in the tracked ledger, so it has no provenance, digest or expiry.`,
+      );
+      continue;
+    }
+    if (entry.sha256 !== archive.sha256) {
+      failures.push(
+        `The recovery archive ${archive.path} does not match the recorded digest (${entry.sha256} recorded, ${archive.sha256} on disk).`,
+      );
+    }
+    if (entry.bytes !== archive.bytes) {
+      failures.push(
+        `The recovery archive ${archive.path} does not match the recorded size (${entry.bytes} recorded, ${archive.bytes} on disk).`,
+      );
+    }
+  }
+
+  for (const entry of recorded ?? []) {
+    if (entry.status === "recovery-archive" && !(entry.bytes > 0)) {
+      failures.push(
+        `The recorded recovery archive ${entry.path} is zero-length, so it restores nothing.`,
+      );
+    }
+    if (typeof entry.retention !== "string" || !entry.retention.length) {
+      failures.push(
+        `The recorded recovery archive ${entry.path} states no retention.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * The tracked ledger of recovery archives, and the archives the tree actually
+ * holds, checked together.
+ */
+export function checkRecoveryArchiveProvenance(repositoryRoot) {
+  const failures = [];
+  const ledgerPath = path.join(repositoryRoot, RECOVERY_ARCHIVE_LEDGER_PATH);
+  if (!existsSync(ledgerPath)) {
+    failures.push(
+      `The recovery archive ledger is missing: ${RECOVERY_ARCHIVE_LEDGER_PATH}`,
+    );
+    return failures;
+  }
+
+  let ledger;
+  try {
+    ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  } catch (error) {
+    failures.push(
+      `The recovery archive ledger is unreadable: ${error.message}`,
+    );
+    return failures;
+  }
+  if (!Array.isArray(ledger?.archives)) {
+    failures.push(
+      `The recovery archive ledger carries no archives: ${RECOVERY_ARCHIVE_LEDGER_PATH}`,
+    );
+    return failures;
+  }
+
+  failures.push(
+    ...compareArchiveLedger(
+      ledger.archives,
+      listRecoveryArchives(
+        repositoryRoot,
+        path.join(repositoryRoot, "backups"),
+      ),
+    ),
+  );
+  return failures;
+}
+
+function listRecoveryArchives(repositoryRoot, directory) {
+  const archives = [];
+  if (!existsSync(directory)) return archives;
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".dump")) continue;
+      archives.push({
+        path: path.relative(repositoryRoot, full).replaceAll("\\", "/"),
+        bytes: statSync(full).size,
+        sha256: createHash("sha256").update(readFileSync(full)).digest("hex"),
+      });
+    }
+  };
+  walk(directory);
+  return archives;
+}
+
+/**
+ * F-241 (R7-D7-01): the shared network declaration must declare a network the
+ * compose files consume.
+ *
+ * The file used to be a placeholder whose own premise was already false: it
+ * said the shared definitions "will be added with the Compose implementation"
+ * while the Compose implementation existed and nothing read the file. The
+ * declaration is now real, and the compose files consume it by the shared
+ * name, so the two must not drift apart. A declared network that no compose
+ * file consumes is the same placeholder wearing a different name.
+ */
+export function compareSharedNetworks(sharedNetworks, composeNetworks) {
+  const failures = [];
+  const shared = sharedNetworks ?? {};
+  const compose = composeNetworks ?? {};
+  const consumed = new Set();
+
+  for (const [file, declared] of Object.entries(compose)) {
+    for (const [name, definition] of Object.entries(declared ?? {})) {
+      if (!Object.hasOwn(shared, name)) continue;
+      consumed.add(name);
+      const sharedDriver = shared[name]?.driver;
+      const declaredDriver = definition?.driver;
+      if (sharedDriver && declaredDriver && sharedDriver !== declaredDriver) {
+        failures.push(
+          `The compose file ${file} declares the shared network ${name} with driver ${declaredDriver}, while the shared declaration says ${sharedDriver}.`,
+        );
+      }
+    }
+  }
+
+  for (const name of Object.keys(shared)) {
+    if (!consumed.has(name)) {
+      failures.push(
+        `The shared network declaration defines ${name}, which no compose file consumes.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The shared network declaration, the compose files that consume it and the
+ * documented creation step, checked together.
+ */
+export function checkSharedNetworkDeclaration(repositoryRoot) {
+  const failures = [];
+  const declarationPath = path.join(
+    repositoryRoot,
+    "infrastructure",
+    "networking",
+    "networks.yml",
+  );
+  if (!existsSync(declarationPath)) {
+    failures.push(
+      "The shared network declaration is missing: infrastructure/networking/networks.yml",
+    );
+    return failures;
+  }
+
+  let shared;
+  try {
+    const document = parseDocument(readFileSync(declarationPath, "utf8"), {
+      uniqueKeys: true,
+    });
+    if (document.errors.length > 0) {
+      failures.push(
+        `The shared network declaration is not valid YAML: ${document.errors[0].message}`,
+      );
+      return failures;
+    }
+    shared = document.toJS()?.networks;
+  } catch (error) {
+    failures.push(
+      `The shared network declaration is unreadable: ${error.message}`,
+    );
+    return failures;
+  }
+  if (!shared || typeof shared !== "object" || !Object.keys(shared).length) {
+    failures.push(
+      "The shared network declaration carries no network, so it declares nothing.",
+    );
+    return failures;
+  }
+
+  const composeDirectory = path.join(
+    repositoryRoot,
+    "infrastructure",
+    "docker",
+    "compose",
+  );
+  const composeNetworks = {};
+  for (const name of existsSync(composeDirectory)
+    ? readdirSync(composeDirectory).sort()
+    : []) {
+    if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+    const filePath = path.join(composeDirectory, name);
+    try {
+      const document = parseDocument(readFileSync(filePath, "utf8"), {
+        uniqueKeys: true,
+      });
+      if (document.errors.length > 0) continue;
+      composeNetworks[name] = document.toJS()?.networks ?? {};
+    } catch {
+      composeNetworks[name] = {};
+    }
+  }
+  failures.push(...compareSharedNetworks(shared, composeNetworks));
+
+  const runbookDirectory = path.join(repositoryRoot, "docs", "runbooks");
+  const documented = existsSync(runbookDirectory)
+    ? readdirSync(runbookDirectory).some((name) => {
+        if (!name.endsWith(".md")) return false;
+        const text = readFileSync(path.join(runbookDirectory, name), "utf8");
+        return (
+          text.includes("infrastructure/networking/networks.yml") &&
+          text.includes("docker network create")
+        );
+      })
+    : false;
+  if (!documented) {
+    failures.push(
+      "No tracked runbook documents the shared network declaration and the step that creates it.",
+    );
+  }
+
+  return failures;
+}
+
+/**
+ * F-261 (R7-D12B-01): the working tree is the only authority, so exactly one
+ * worktree may be registered.
+ *
+ * A stale registered worktree inside the repository carries its own PLAN.md
+ * and AGENTS.md, and those documents declare themselves the durable source of
+ * truth. Every gate skips that tree - it is gitignored, so it is outside the
+ * tracked file set - while a cold resume that globs for those names reads a
+ * second, contradictory authority. The charter's "working tree is
+ * authoritative" rule is therefore enforced mechanically here: one registered
+ * worktree, and it is this one.
+ */
+export function evaluateWorktreeRegistry(porcelainOutput, repositoryRoot) {
+  const failures = [];
+  const entries = String(porcelainOutput ?? "")
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length).trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) {
+    failures.push(
+      "Git reports no registered worktree, so the authoritative working tree cannot be established.",
+    );
+    return failures;
+  }
+  if (entries.length > 1) {
+    failures.push(
+      `Git reports ${entries.length} registered worktrees; only the primary working tree may be registered: ${entries.join(", ")}.`,
+    );
+  }
+
+  const primary = path.resolve(repositoryRoot);
+  for (const entry of entries) {
+    const resolved = path.resolve(entry);
+    const same =
+      process.platform === "win32"
+        ? resolved.toLowerCase() === primary.toLowerCase()
+        : resolved === primary;
+    if (!same) {
+      failures.push(
+        `A registered worktree is not the primary working tree: ${entry} (expected ${primary}).`,
+      );
+    }
+  }
+  return failures;
+}
+
+export function checkWorktreeRegistry(repositoryRoot) {
+  const result = runGit(repositoryRoot, ["worktree", "list", "--porcelain"]);
+  if (result.status !== 0) {
+    const details = `${result.stdout}${result.stderr}`.trim();
+    return [`Git worktree list failed: ${details}`];
+  }
+  return evaluateWorktreeRegistry(result.stdout, repositoryRoot);
+}
+
+/**
+ * Every script a doc or a runbook tells a human to run must be covered by a
+ * verify stage.
+ *
+ * The operator entry points live where the Docker work put them
+ * (`infrastructure/docker/scripts/`), not under `scripts/`, so no prettier
+ * glob and no eslint target ever saw them: the runbook told the owner to run
+ * `backup.ps1` and no lane in this repository could execute, lint or even
+ * read it. The rule here is that a cited script is READ by at least one file
+ * the `npm test` gate runs, and that the cited path exists at all - a doc that
+ * points at a script nothing carries is the same defect with a shorter path.
+ *
+ * The citation population is derived, not typed: the first channel is every
+ * tracked executable a tracked doc names by path, the second is every path a
+ * doc puts in command position (behind an interpreter, or prefixed with
+ * `./`). A hand-typed alternation of directory prefixes only ever checked the
+ * two families somebody remembered, so the operator drivers under
+ * `integrations/openclaw/` were cited by README and never entered the map.
+ */
+const EXECUTABLE_FILE_SUFFIX = /\.(?:mjs|cjs|js|mts|sh|bash|ps1|py)$/u;
+const INTERPRETER_COMMAND_CITATION =
+  /\b(?:node|python3?|bash|sh|pwsh|powershell|deno|bun)\s+(?:--?[\w-]+(?:=\S+)?\s+)*((?:\.\/)?(?:[\w@+-]+\/)+[\w@+-]+\.(?:mjs|cjs|js|mts|sh|bash|ps1|py))/gu;
+const RELATIVE_COMMAND_CITATION =
+  /(?:^|[\s`"'(])(\.\/(?:[\w@+-]+\/)+[\w@+-]+\.(?:mjs|cjs|js|mts|sh|bash|ps1|py))/gu;
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function documentNamesPath(contents, repositoryPath) {
+  const pattern = new RegExp(
+    `(?:^|[^\\w./@+-])${escapeRegExp(repositoryPath)}(?![\\w./@+-])`,
+    "u",
+  );
+  return pattern.test(contents);
+}
+
+function declaredSuiteDirectories(packageJson) {
+  const directories = new Set();
+  for (const body of Object.values(packageJson?.scripts ?? {})) {
+    if (typeof body !== "string" || !/\bpytest\b/u.test(body)) continue;
+    const directory = /--directory\s+([\w./-]+)/u.exec(body)?.[1];
+    if (!directory) continue;
+    directories.add(`${directory.replace(/\/+$/u, "")}/tests`);
+  }
+  return [...directories];
+}
+
+export function checkDocumentedScriptsAreCovered(
+  repositoryRoot,
+  packageJson,
+  trackedFiles,
+) {
+  const failures = [];
+  const command = packageJson?.scripts?.test;
+  if (typeof command !== "string") {
+    return [
+      "npm script test must be a string so the covered scripts can be reconciled.",
+    ];
+  }
+  const gateFiles = [
+    ...new Set(
+      command.split(/\s+/u).filter((token) => TEST_FILE_ARGUMENT.test(token)),
+    ),
+  ];
+  const gateSources = new Map();
+  for (const gateFile of gateFiles) {
+    // The checker must not cover itself: this suite names script paths as
+    // synthetic fixtures, and a fixture is not coverage.
+    if (gateFile === "tests/repository-policy.test.mjs") continue;
+    const gatePath = resolveTrackedPath(repositoryRoot, gateFile);
+    if (!existsSync(gatePath)) continue;
+    gateSources.set(gateFile, readFileSync(gatePath, "utf8"));
+  }
+
+  const docFiles = trackedFiles.filter(
+    (repositoryPath) =>
+      repositoryPath === "README.md" ||
+      (repositoryPath.startsWith("docs/runbooks/") &&
+        repositoryPath.endsWith(".md")),
+  );
+  const docContents = new Map();
+  for (const docFile of docFiles) {
+    const docPath = resolveTrackedPath(repositoryRoot, docFile);
+    if (!existsSync(docPath)) continue;
+    docContents.set(docFile, readFileSync(docPath, "utf8"));
+  }
+
+  const cited = new Map();
+  const cite = (scriptPath, docFile) => {
+    if (!cited.has(scriptPath)) cited.set(scriptPath, new Set());
+    cited.get(scriptPath).add(docFile);
+  };
+  // Channel one: the population of tracked executables, filtered by whether
+  // a tracked doc names the path. A doc cannot cite a file nobody ships into
+  // this channel, so the population grows with the tree instead of with an
+  // editor's memory of which prefixes exist.
+  for (const scriptPath of trackedFiles.filter((repositoryPath) =>
+    EXECUTABLE_FILE_SUFFIX.test(repositoryPath),
+  )) {
+    for (const [docFile, contents] of docContents) {
+      if (documentNamesPath(contents, scriptPath)) cite(scriptPath, docFile);
+    }
+  }
+  // Channel two: command position, which also reaches a path no doc tracks -
+  // the instruction to run something the repository does not carry is the
+  // defect the not-tracked failure exists for.
+  for (const [docFile, contents] of docContents) {
+    for (const citation of [
+      INTERPRETER_COMMAND_CITATION,
+      RELATIVE_COMMAND_CITATION,
+    ]) {
+      for (const match of contents.matchAll(citation)) {
+        cite(match[1].replace(/^\.\//u, ""), docFile);
+      }
+    }
+  }
+
+  const suiteDirectories = declaredSuiteDirectories(packageJson);
+  for (const [scriptPath, docFiles_] of [...cited].sort()) {
+    const citing = [...docFiles_].sort().join(", ");
+    if (!trackedFiles.includes(scriptPath)) {
+      failures.push(
+        `A tracked document tells the operator to run a script that is not tracked: ${scriptPath} (cited by ${citing}).`,
+      );
+      continue;
+    }
+    // An enumerated gate file covers itself. A pytest suite declared by an
+    // npm script covers the cases it collects. Otherwise a gate file names
+    // the script by its file name (the tests assemble the path from parts).
+    const scriptName = path.posix.basename(scriptPath);
+    const readByBasename = [...gateSources.values()].some((source) =>
+      source.includes(scriptName),
+    );
+    const readBySuite = suiteDirectories.some((directory) =>
+      scriptPath.startsWith(`${directory}/`),
+    );
+    if (!gateFiles.includes(scriptPath) && !readByBasename && !readBySuite) {
+      failures.push(
+        `A tracked document tells the operator to run a script that no verify stage reads: ${scriptPath} (cited by ${citing}).`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * An advertised `scripts/` category directory must carry tracked content.
+ *
+ * The four category directories under `scripts/` were empty on disk and
+ * untrackable by git, so a fresh clone had none of them and the repository
+ * advertised four script families it does not ship.
+ */
+export function checkNoEmptyScriptCategory(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const scriptsRoot = path.join(repositoryRoot, "scripts");
+  if (!existsSync(scriptsRoot)) return failures;
+  for (const name of readdirSync(scriptsRoot, { withFileTypes: true })) {
+    if (!name.isDirectory()) continue;
+    const prefix = `scripts/${name.name}/`;
+    const tracked = trackedFiles.filter((repositoryPath) =>
+      repositoryPath.startsWith(prefix),
+    );
+    if (!tracked.length) {
+      failures.push(
+        `The scripts category directory scripts/${name.name} carries no tracked file. Remove it, or add the scripts it advertises.`,
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * F-188 (R5-E09-06): the shipped dependency-audit job must compare the live
+ * audit with the recorded baseline.
+ *
+ * A bare `npm audit --audit-level=high` returns the same non-zero exit for
+ * the recorded 5-high baseline and for a newly added high-severity
+ * dependency, so the job cannot say which one happened. The comparison step
+ * is the gate: green while the baseline holds, red the moment a count grows.
+ * The bare audit step therefore must not block the job before the comparison
+ * has run, and the comparison itself must block.
+ */
+export function checkAuditBaselineWorkflow(repositoryRoot) {
+  const failures = [];
+  const workflowPath = WORKFLOW_PATHS.security;
+  const filePath = path.join(repositoryRoot, workflowPath);
+  if (!existsSync(filePath)) {
+    failures.push(
+      formatWorkflowFailure(workflowPath, "required workflow file is missing."),
+    );
+    return failures;
+  }
+
+  const document = parseDocument(readFileSync(filePath, "utf8"), {
+    uniqueKeys: true,
+    version: "1.2",
+  });
+  if (document.errors.length > 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `YAML is invalid: ${document.errors[0].message}`,
+      ),
+    );
+    return failures;
+  }
+
+  const steps = document.toJS()?.jobs?.["dependency-audit"]?.steps;
+  if (!Array.isArray(steps)) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job dependency-audit must define steps.",
+      ),
+    );
+    return failures;
+  }
+
+  const auditIndex = runStepIndex(steps, "npm audit --audit-level=high");
+  const comparisonIndex = steps.findIndex(
+    (step) =>
+      isObject(step) &&
+      typeof step.run === "string" &&
+      step.run.includes(AUDIT_BASELINE_SCRIPT),
+  );
+  if (comparisonIndex < 0) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        `job dependency-audit must compare the audit against the recorded baseline by running ${AUDIT_BASELINE_SCRIPT}.`,
+      ),
+    );
+    return failures;
+  }
+  if (steps[comparisonIndex]["continue-on-error"] === true) {
+    failures.push(
+      formatWorkflowFailure(
+        workflowPath,
+        "job dependency-audit must block on the baseline comparison.",
+      ),
+    );
+  }
+  if (auditIndex >= 0) {
+    if (steps[auditIndex]["continue-on-error"] !== true) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          "job dependency-audit must mark the bare audit step continue-on-error so the recorded baseline does not block the job before the comparison runs.",
+        ),
+      );
+    }
+    if (comparisonIndex <= auditIndex) {
+      failures.push(
+        formatWorkflowFailure(
+          workflowPath,
+          "job dependency-audit must run the baseline comparison after the audit it compares.",
+        ),
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The recorded audit baseline must exist, be tracked and carry the six counts
+ * the comparison reads. A baseline that is not tracked is a threshold nobody
+ * reviews, and a missing one turns the comparison into a gate that cannot
+ * answer anything.
+ */
+export function checkAuditBaseline(repositoryRoot, trackedFiles) {
+  const failures = [];
+  const filePath = path.join(repositoryRoot, AUDIT_BASELINE_PATH);
+  if (!existsSync(filePath)) {
+    failures.push(
+      `The npm audit baseline file is missing: ${AUDIT_BASELINE_PATH}`,
+    );
+    return failures;
+  }
+  if (!trackedFiles.includes(AUDIT_BASELINE_PATH)) {
+    failures.push(
+      `The npm audit baseline file is not tracked: ${AUDIT_BASELINE_PATH}`,
+    );
+  }
+  try {
+    readAuditBaseline(repositoryRoot);
+  } catch (error) {
+    failures.push(error.message);
+  }
+  return failures;
+}
+
 export function collectRepositoryFailures(repositoryRoot) {
   const failures = checkRequiredFiles(repositoryRoot);
   failures.push(...checkWorkflowDefinitions(repositoryRoot));
@@ -670,6 +2363,26 @@ export function collectRepositoryFailures(repositoryRoot) {
   failures.push(...checkTrackedFilePolicies(trackedFiles));
   failures.push(...checkWorkingTreeTextPolicy(repositoryRoot, trackedFiles));
   failures.push(...checkGitWhitespace(repositoryRoot));
+  failures.push(...checkWorktreeRegistry(repositoryRoot));
+  failures.push(...checkSharedNetworkDeclaration(repositoryRoot));
+  failures.push(...checkRecoveryArchiveProvenance(repositoryRoot));
+
+  // The register is the queue every band reads, so it must be tracked: an
+  // untracked register gives every row edit no commit, no author and no diff.
+  if (!trackedFiles.includes(FINDINGS_REGISTER_PATH)) {
+    failures.push(
+      `The findings register is not tracked: ${FINDINGS_REGISTER_PATH}`,
+    );
+  }
+  const registerPath = path.join(repositoryRoot, FINDINGS_REGISTER_PATH);
+  if (existsSync(registerPath)) {
+    failures.push(...checkFindingsRegister(readFileSync(registerPath, "utf8")));
+  }
+  failures.push(...checkRegisterCitations(repositoryRoot, trackedFiles));
+  failures.push(...checkSecretScanAllowlist(repositoryRoot, trackedFiles));
+  failures.push(...checkNestedGeneratedTreesIgnored(repositoryRoot));
+  failures.push(...checkAuditBaseline(repositoryRoot, trackedFiles));
+  failures.push(...checkAuditBaselineWorkflow(repositoryRoot));
 
   const packagePath = path.join(repositoryRoot, "package.json");
   const makefilePath = path.join(repositoryRoot, "Makefile");
@@ -677,7 +2390,50 @@ export function collectRepositoryFailures(repositoryRoot) {
     const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
     const makefile = readFileSync(makefilePath, "utf8");
     failures.push(...checkCommandDefinitions(packageJson, makefile));
+    failures.push(...checkFormatGlobQuoting(packageJson));
+
+    const registryPath = path.join(
+      repositoryRoot,
+      "docs",
+      "development",
+      "conventions.md",
+    );
+    const workflowTexts = {};
+    for (const [name, workflowPath] of Object.entries(WORKFLOW_PATHS)) {
+      const filePath = path.join(repositoryRoot, workflowPath);
+      if (existsSync(filePath)) {
+        workflowTexts[name] = readFileSync(filePath, "utf8");
+      }
+    }
+    workflowTexts.gitleaksConfig = existsSync(
+      path.join(repositoryRoot, ".gitleaks.toml"),
+    );
+    failures.push(
+      ...checkGateRegistry(
+        packageJson,
+        existsSync(registryPath) ? readFileSync(registryPath, "utf8") : "",
+        workflowTexts,
+      ),
+    );
+
+    const testsDirectory = path.join(repositoryRoot, "tests");
+    if (existsSync(testsDirectory)) {
+      const testFiles = readdirSync(testsDirectory)
+        .filter((name) => name.endsWith(".test.mjs"))
+        .map((name) => `tests/${name}`);
+      failures.push(...checkTestListReconciliation(packageJson, testFiles));
+    }
+
+    failures.push(
+      ...checkDocumentedScriptsAreCovered(
+        repositoryRoot,
+        packageJson,
+        trackedFiles,
+      ),
+    );
   }
+
+  failures.push(...checkNoEmptyScriptCategory(repositoryRoot, trackedFiles));
 
   return failures;
 }

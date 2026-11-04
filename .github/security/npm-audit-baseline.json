@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "recorded_at": "2026-10-25",
+  "recorded_from": "npm audit --json",
+  "vulnerabilities": {
+    "info": 0,
+    "low": 3,
+    "moderate": 2,
+    "high": 1,
+    "critical": 0,
+    "total": 6
+  },
+  "advisories": [
+    {
+      "id": "GHSA-238p-pmpm-9mq7",
+      "package": "katex",
+      "severity": "low",
+      "range": ">=0.11.0 <0.18.2"
+    },
+    {
+      "id": "GHSA-gfr2-rv44-r23c",
+      "package": "markdown-it",
+      "severity": "high",
+      "range": ">=15.0.0 <15.0.3"
+    },
+    {
+      "id": "GHSA-r4xh-jqrq-34v2",
+      "package": "smol-toml",
+      "severity": "moderate",
+      "range": "<=1.8.0"
+    },
+    {
+      "id": "GHSA-r7fv-28h4-cvq7",
+      "package": "markdown-it",
+      "severity": "high",
+      "range": ">=15.0.0 <15.0.2"
+    },
+    {
+      "id": "GHSA-vfgh-jcmw-g37q",
+      "package": "markdown-it",
+      "severity": "low",
+      "range": ">=15.0.0 <15.0.3"
+    }
+  ],
+  "note": "The counts are the repository's own measured audit result on 2026-10-25: 6 vulnerable packages (3 low, 2 moderate, 1 high) carrying 5 advisories. `advisories` is the identity set taken from the same report the comparison parses: advisory id, package, vulnerable range and severity. The dependency-audit gate is green while every observed advisory is in that set and no count grows, and red the moment an advisory the record does not carry appears, even when it replaces a recorded advisory of the same severity and the counts do not move. A count that falls, or an advisory that disappears, is an improvement and stays green."
+}

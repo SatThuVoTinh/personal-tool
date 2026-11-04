@@ -9,8 +9,35 @@ import {
   parseIdentifiers,
   assertNoSymlinkComponents,
 } from "../../../lib/policy.mjs";
+import {
+  KNOWN_REFUSAL_REASONS,
+  assertSameRefusalClasses,
+  refusalOutput,
+} from "./refusal-classifier.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal. The operator
+// names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
+// refuses to run without one, exactly like live-governance-probe.mjs: a
+// driver that silently points at one operator's machine root says nothing
+// about any other, and a hardcoded root is what let these files drift.
+//
+// M12/T9 F-560 (R10-T07-6): the TYPED argument outranks an inherited
+// environment value, so a stale export cannot redirect the preflight away from
+// the root the operator named, and the record this driver prints names the
+// resolved root by digest (`operator-state-root.mjs` states the rule once for
+// every operator driver).
+const stateRoot = resolveStateRoot({ argv: process.argv.slice(2) });
+const stateDir = stateRoot.stateDir;
+const stateRootSource = stateRoot.source;
+if (!stateDir) {
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
+  process.exit(2);
+}
 const input = path.join(stateDir, "operator/m7-t2/discord-identifiers.json");
 let stage = "identifiers";
 try {
@@ -45,27 +72,76 @@ try {
     maxBuffer: 65536,
   });
   process.stdout.write(
-    `${JSON.stringify({ identifiers: "VALID", builder_preflight: "PASS", installed_mutation: false })}\n`,
+    `${JSON.stringify({
+      identifiers: "VALID",
+      builder_preflight: "PASS",
+      installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
   );
 } catch (error) {
   // Classify only known static diagnostics; unknown output stays undisclosed.
-  const output = String(error.stderr ?? "");
+  //
+  // M12/T9 F-159: the MATCHING RULE is shared with the apply driver
+  // (`refusal-classifier.mjs`), and the class SET is asserted equal to the
+  // shared set at load time, so the two drivers can never drift apart.
+  //
+  // Both drivers exec the same builder child, so the identical refusal used
+  // to resolve to a different code (or to no code at all) depending on which
+  // driver reported it: eighteen diagnostics were named only here and
+  // degraded to `PREFLIGHT_REJECTED` on the apply path, while the apply
+  // driver degraded this driver's `INVALID_IDENTIFIER_FILE` to
+  // `APPLY_REJECTED`.
+  //
+  // The list below stays HERE (this driver is the reader's statement of what
+  // it names) and the shared classifier is the authority; the equality check
+  // fails closed on the first byte of drift, so a hand-maintained copy can
+  // never become a second truth.
   const known = [
     "governance instructions drift",
+    "Agent governance instructions drift",
     "Governance plugin asset",
     "Governance plugin entrypoint",
     "Governance plugin manifest",
+    "Governance plugin package",
+    "Gemini stream hotfix utility",
+    "Password-store resolver",
+    "Auth order plan",
+    "Auth SecretRef plan",
+    "Systemd drop-in",
+    "Governance identity key",
+    "T2 backup manifest",
+    "BACKUP_NESTED_LEDGER_ROOT_PRESENT",
+    "ROUTER_HOST_UNAVAILABLE",
+    "ROUTER_PORT_UNAVAILABLE",
+    "ROUTER_API_KEY_UNAVAILABLE",
+    "must be a numeric Discord snowflake",
+    "surface IDs must be distinct",
+    "Existing config must be canonical JSON",
+    "Ledger corruption",
+    "INVALID_IDENTIFIER_FILE",
+    "GATEWAY_NOT_ACTIVE",
+    "GATEWAY_UNIT_NOT_RELOADED",
+    "symlink",
+    "mode drift",
     "Policy drift",
     "EXECUTION_STATE_UNKNOWN",
     "permission",
     "EACCES",
     "ENOENT",
   ];
+  assertSameRefusalClasses(known, KNOWN_REFUSAL_REASONS);
   const reason =
-    known.find((entry) => output.includes(entry) || error.code === entry) ??
+    known.find((entry) => refusalOutput(error).includes(entry)) ??
     "PREFLIGHT_REJECTED";
   process.stdout.write(
-    `${JSON.stringify({ stage, status: "FAIL", reason, installed_mutation: false })}\n`,
+    `${JSON.stringify({
+      stage,
+      status: "FAIL",
+      reason,
+      installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
   );
   process.exitCode = 1;
 }

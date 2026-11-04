@@ -7,12 +7,63 @@ import {
   closeSync,
   fsyncSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
-import os from "node:os";
-import { TASK_STATES } from "./authority.mjs";
+import { TASK_STATES, isExecutableCoordinator } from "./authority.mjs";
 import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
+import {
+  assertNoSymlinkComponents,
+  projectGovernedCapabilities,
+  QUEUE_STORE_FILE,
+  resolveGovernedStoreRoot,
+} from "./policy.mjs";
+
+/**
+ * M7-073: coordinator must be o1/o2 for executable queue work.
+ *
+ * The predicate itself lives in `lib/authority.mjs` (the canonical authority
+ * module) so the queue projection, the dispatch derivation and the spawn
+ * policy cannot answer "is this an executable coordinator?" differently. It
+ * is re-exported here because the queue is where the queue-side callers
+ * already import it from.
+ */
+export { isExecutableCoordinator };
+
+/**
+ * Remove a temp file this process created but could not rename. The codes are
+ * the verdicts `topology/lib/ledger.mjs` documents for the same job: `EPERM` and
+ * `EISDIR` mean something else owns the path, and `ENOENT` is the same outcome as
+ * a successful removal — including the ordinary case, a failure that happened
+ * before the temp existed. Anything else is a real fault and propagates.
+ *
+ * It lives here rather than being imported from the ledger because the deployed
+ * plugin flattens `topology/lib/*` into `lib/*` only for the targets named in
+ * `PACKAGE_REWRITES`, and neither writer is one of them; a `../topology/lib/...`
+ * import would be packaged verbatim and fail to resolve at load time.
+ */
+function removeWriterResidue(tempPath) {
+  try {
+    unlinkSync(tempPath);
+  } catch (error) {
+    if (!["EPERM", "EISDIR", "ENOENT"].includes(error?.code)) throw error;
+  }
+}
+
+/**
+ * Errnos that mean the queue's own directory cannot be written at all. They can
+ * only come from lock acquisition, never from a mutation, and they are reported
+ * with the same code `save()` uses for a failed durable write.
+ */
+const ACQUISITION_STORAGE_ERRORS = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "EROFS",
+  "ENOSPC",
+]);
 
 /**
  * Persistent Observable Queue Manager
@@ -34,6 +85,12 @@ import { withFileLockSync, lockDirFor } from "./file-lock.mjs";
  *   is a routing aid (M8-057: ANY-match), never the final authorization.
  * - M7-028/M7-029/M7-030: heartbeat/finish/reclaim require the current
  *   leaseId fence; finish additionally requires agentId + attempt.
+ * - M12/T9-R4 F-407: one expiry predicate governs the fence, the finish, the
+ *   heartbeat and the claimTaskById reclaim; none of them revives a lapsed
+ *   lease by rewriting its expiry.
+ * - M10/T2-R2: withExecutionFence() is the queue's current-execution-authority
+ *   seam. It runs an authoritative commit inside the queue critical section so
+ *   a lease revoked by stale recovery cannot interleave with that commit.
  * - M8-054: finishExecution binds an explicit resultDigest over the result.
  */
 
@@ -54,6 +111,33 @@ const QUEUE_TERMINAL_STATES = Object.freeze([
 
 function sha256hex(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+/**
+ * M12/T9-R4 F-407 (R9-T02-4): the ONE lease-expiry predicate.
+ *
+ * Four mutators can move or extend an EXECUTING item — the fence, the finish,
+ * the heartbeat, and the `claimTaskById` reclaim that delegates to the
+ * heartbeat. Each validated identity fields (`status`, `claimedBy`, `leaseId`,
+ * `attempt`) that all still match after the clock passed `leaseExpiresAt`, so
+ * enforcing the expiry at only the fence let a lapsed owner finish governed
+ * work and let a heartbeat rewrite the expiry forward, erasing the lapse.
+ * Every one of them asks this function, so they cannot answer differently.
+ *
+ * An absent or unparsable expiry is not expired: it is not a lease this queue
+ * issued, and the item's identity fields still decide. That is the tolerance
+ * the fence has always had, kept here so the shared predicate changes only
+ * the three paths that lacked a check.
+ */
+function assertLeaseNotExpired(item, taskId) {
+  if (typeof item?.leaseExpiresAt !== "string") return;
+  const expiresAt = Date.parse(item.leaseExpiresAt);
+  if (Number.isNaN(expiresAt)) return;
+  if (expiresAt <= Date.now()) {
+    throw new Error(
+      `EXECUTION_FENCE_EXPIRED: ${taskId} lease expired at ${item.leaseExpiresAt}`,
+    );
+  }
 }
 
 /**
@@ -82,13 +166,6 @@ export function mapLedgerStatusToQueue(ledgerTask) {
 }
 
 /**
- * M7-073: coordinator must be o1/o2 for executable queue work.
- */
-export function isExecutableCoordinator(rootAgentId) {
-  return rootAgentId === "o1" || rootAgentId === "o2";
-}
-
-/**
  * M7-010: the claimant must be the designated coordinator or a listed
  * required capability. Returns true when the binding holds.
  */
@@ -99,35 +176,212 @@ export function isAssignedClaimant(item, agentId) {
   return (item?.requiredCapabilities ?? []).includes(agentId);
 }
 
-function resolveDefaultStoragePath() {
-  const dir = path.join(os.homedir(), ".openclaw-zink");
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  return path.join(dir, "task-queue.json");
+/**
+ * M12/T9 F-002: the task queue lives under the ONE configured governance store
+ * root, and there is no home-directory default.
+ *
+ * The queue used to default to `~/.openclaw-zink/task-queue.json` while the
+ * ledger event journal and the snapshot lived under the configured
+ * `ledgerRoot`: two roots for one governance state, and a module-level
+ * singleton whose map was filled ONCE at import, so the queue a process
+ * answered from was not the queue it wrote to.
+ *
+ * The root is configured explicitly (`configureGovernedStoreRoot` in
+ * `lib/policy.mjs`) by whoever owns the configuration, and an unconfigured
+ * store is a named refusal rather than a guessed path.
+ */
+export function resolveQueueStoragePath(root = null) {
+  const base = root === null ? resolveGovernedStoreRoot() : root;
+  return path.join(base, QUEUE_STORE_FILE);
 }
 
 export class QueueManager {
-  constructor({ storagePath = resolveDefaultStoragePath() } = {}) {
-    this.storagePath = storagePath;
+  constructor({ storagePath = null } = {}) {
+    // M12/T9 F-002: the store path is EXPLICIT or it is resolved from the ONE
+    // configured governance store root. There is no home-directory default and
+    // no import-time file access, so importing this module never creates or
+    // reads a directory.
+    this._explicitStoragePath =
+      typeof storagePath === "string" && storagePath.trim().length > 0
+        ? storagePath
+        : null;
     this.queue = new Map();
     this._projectionVersion = 0;
-    this.load();
+    // M12/T9 F-154: how many queue critical sections THIS instance currently
+    // holds. The lock itself is a directory on disk and is NOT reentrant, so a
+    // `save()` issued from inside `withLock()` must not try to take it again -
+    // it would deadlock against the lock its own caller holds. The counter
+    // records that the caller already holds it, so `save()` writes inside the
+    // held section instead of competing for it.
+    this._lockDepth = 0;
+    if (this._explicitStoragePath) this.load();
+  }
+
+  /**
+   * The durable location of this projection.
+   *
+   * With no explicit path it is resolved from the configured governance store
+   * root on every access, so a projection that is configured late still reads
+   * and writes the ONE configured root.
+   */
+  get storagePath() {
+    return this._explicitStoragePath ?? resolveQueueStoragePath();
+  }
+
+  set storagePath(value) {
+    this._explicitStoragePath =
+      typeof value === "string" && value.trim().length > 0 ? value : null;
   }
 
   withLock(fn) {
-    if (!this.storagePath) {
-      return fn();
-    }
-    const lockDir = lockDirFor(
-      path.dirname(this.storagePath),
-      `${path.basename(this.storagePath)}.lock`,
-    );
+    const dir = path.dirname(this.storagePath);
+    const lockDir = lockDirFor(dir, `${path.basename(this.storagePath)}.lock`);
+    // The lock lives beside the queue file, so the directory `save()` creates on
+    // its first write has to exist before acquisition.
+    let bodyReached = false;
     try {
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
       return withFileLockSync(lockDir, () => {
+        bodyReached = true;
         this.load();
-        return fn();
+        // M12/T9 F-154: the critical section is entered here, so `save()` calls
+        // made from the body must write INSIDE it rather than take the lock
+        // again. The counter is released in a `finally` so a throwing body
+        // never leaves the instance believing it still holds the lock.
+        this._lockDepth += 1;
+        try {
+          return fn();
+        } finally {
+          this._lockDepth -= 1;
+        }
       });
+    } catch (err) {
+      if (err?.code === "FILE_LOCK_BUSY") {
+        throw new Error(
+          "QUEUE_LOCK_TIMEOUT: Failed to acquire queue file lock",
+          { cause: err },
+        );
+      }
+      // M11/T3 A4: an unwritable queue directory fails here, before any
+      // mutation ran. It is the same durable-write failure `save()` reports, so
+      // it keeps that host-visible code instead of surfacing a raw errno that
+      // every caller would have to reclassify on its own.
+      if (!bodyReached && ACQUISITION_STORAGE_ERRORS.has(err?.code)) {
+        throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+          cause: err,
+        });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * M12/T9 F-002: read the durable projection and REPLACE the in-memory view.
+   *
+   * The load is a replacement, not an accumulation, and every read path calls
+   * it first: the map this projection holds is a cache of the file, never the
+   * authority on its own.
+   *
+   * The replacement happens IN PLACE. A captured reference to `this.queue`
+   * stays the live map, so a caller that read a row and then wrote it back
+   * cannot lose the write to a map object that is no longer current — which
+   * is exactly the shape the plugin's notification seam uses.
+   */
+  load() {
+    // Resolved OUTSIDE the read: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the file is unreadable".
+    const storagePath = this.storagePath;
+    let rebuilt;
+    try {
+      if (existsSync(storagePath)) {
+        const raw = readFileSync(storagePath, "utf8");
+        const data = JSON.parse(raw);
+        if (!Array.isArray(data)) {
+          throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
+        }
+        rebuilt = new Map();
+        for (const item of data) {
+          if (!item || typeof item.taskId !== "string" || !item.taskId) {
+            throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
+          }
+          rebuilt.set(item.taskId, item);
+        }
+      } else {
+        rebuilt = new Map();
+      }
+    } catch (err) {
+      throw new Error(`QUEUE_STORAGE_READ_FAILED: ${err?.message}`, {
+        cause: err,
+      });
+    }
+    this.queue.clear();
+    for (const [taskId, item] of rebuilt) {
+      this.queue.set(taskId, item);
+    }
+  }
+
+  /**
+   * M12/T9 F-002: re-read the durable projection.
+   *
+   * Every read path calls this first, so an answer is always derived from the
+   * file on disk and never from a map that was populated at import time.
+   */
+  refresh() {
+    this.load();
+    return this;
+  }
+
+  /**
+   * M12/T9 F-154: the durable writer takes the queue lock ITSELF.
+   *
+   * It used to rely on every caller wrapping its work in `withLock()`, and one
+   * shipped caller did not: the plugin's notification seam set the projection
+   * and called `save()` bare, so its write could land INSIDE another writer's
+   * critical section and erase a committed row. `decision-ledger.mjs` already
+   * self-locks; the queue now does the same, so a concurrent unlocked writer is
+   * serialised against the critical section instead of interleaving with it.
+   *
+   * The lock is a directory on disk and is NOT reentrant, so this method does
+   * not take it when the caller already holds it: `withLock()` counts the
+   * sections this instance holds, and a `save()` issued from inside one writes
+   * inside that section. That is the same discipline the nested-lock refusal
+   * pins: the lock is still not reentrant, only the writer knows when it is
+   * already inside it.
+   *
+   * Contention surfaces as the pre-existing QUEUE_LOCK_TIMEOUT, so an
+   * unlocked writer is REFUSED rather than silently losing its write to a
+   * concurrent one.
+   */
+  save() {
+    // Resolved OUTSIDE the write: an unconfigured store is a configuration
+    // refusal and keeps its own name, never "the file could not be written".
+    const storagePath = this.storagePath;
+    const dir = path.dirname(storagePath);
+    const tempPath = `${storagePath}.tmp-${process.pid}-${Date.now()}`;
+    if (this._lockDepth > 0) {
+      // The caller already holds this instance's queue critical section.
+      return this._saveUnlocked(storagePath, tempPath);
+    }
+    // The link guard runs BEFORE the lock is taken: the lock directory lives
+    // beside the queue file, so acquiring it first would create a directory
+    // inside the very linked path the guard exists to refuse.
+    try {
+      assertNoSymlinkComponents(tempPath);
+    } catch (err) {
+      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+        cause: err,
+      });
+    }
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const lockDir = lockDirFor(dir, `${path.basename(storagePath)}.lock`);
+    try {
+      return withFileLockSync(lockDir, () =>
+        this._saveUnlocked(storagePath, tempPath),
+      );
     } catch (err) {
       if (err?.code === "FILE_LOCK_BUSY") {
         throw new Error(
@@ -139,50 +393,40 @@ export class QueueManager {
     }
   }
 
-  load() {
-    if (!this.storagePath) return;
-    try {
-      if (existsSync(this.storagePath)) {
-        const raw = readFileSync(this.storagePath, "utf8");
-        const data = JSON.parse(raw);
-        if (!Array.isArray(data)) {
-          throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
-        }
-        const rebuilt = new Map();
-        for (const item of data) {
-          if (!item || typeof item.taskId !== "string" || !item.taskId) {
-            throw new Error("QUEUE_STORAGE_SCHEMA_INVALID");
-          }
-          rebuilt.set(item.taskId, item);
-        }
-        this.queue = rebuilt;
-      } else {
-        this.queue = new Map();
-      }
-    } catch (err) {
-      throw new Error(`QUEUE_STORAGE_READ_FAILED: ${err?.message}`, {
-        cause: err,
-      });
-    }
-  }
-
-  save() {
-    if (!this.storagePath) return;
+  /**
+   * The write itself, with the queue lock already held by the caller.
+   *
+   * Every mutator reaches this through `withLock()`, which reloads the durable
+   * projection first; `save()` reaches it through the lock it takes itself.
+   * Splitting it out is what lets `save()` self-lock without deadlocking the
+   * `withLock(() => { ... save() })` paths.
+   */
+  _saveUnlocked(storagePath = this.storagePath, tempPath = null) {
+    // M12/T2.2-R2 B-12: `.tmp-<pid>-<ms>` is predictable, so the temp has to be
+    // created (`"wx"`) rather than adopted from whatever is already at that path,
+    // and a failed attempt has to remove what it made. `topology/lib/ledger.mjs`
+    // already wrote its snapshot this way; this is the same discipline, not a new
+    // atomic writer.
+    const temp = tempPath ?? `${storagePath}.tmp-${process.pid}-${Date.now()}`;
     let fd = null;
+    let tempIsOurs = false;
     try {
-      const dir = path.dirname(this.storagePath);
+      const dir = path.dirname(storagePath);
+      // Before anything is created: `mkdirSync(recursive)` would otherwise happily
+      // materialize the queue through a symlinked ancestor.
+      assertNoSymlinkComponents(temp);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
       const nextProjectionVersion = this._projectionVersion + 1;
       const data = Array.from(this.queue.values());
-      const tempPath = `${this.storagePath}.tmp-${process.pid}-${Date.now()}`;
-      fd = openSync(tempPath, "w", 0o600);
+      fd = openSync(temp, "wx", 0o600);
+      tempIsOurs = true;
       writeFileSync(fd, JSON.stringify(data, null, 2) + "\n", "utf8");
       fsyncSync(fd);
       closeSync(fd);
       fd = null;
-      renameSync(tempPath, this.storagePath);
+      renameSync(temp, storagePath);
       // M7-066: fsync the parent directory after rename so the rename itself
       // is durable, matching the ledger writer guarantee (win32-tolerant).
       try {
@@ -196,15 +440,29 @@ export class QueueManager {
         if (
           process.platform !== "win32" ||
           !/^(EPERM|EISDIR|EINVAL|ENOTSUP)$/u.test(error?.code ?? "")
-        )
-          throw error;
+        ) {
+          // M12/T9-R4 F-417 (R9-T03-4): the rename ABOVE already committed the
+          // record, so this is a durability warning about the directory entry,
+          // not a failed write. It used to be rethrown and relabelled as
+          // `QUEUE_STORAGE_WRITE_FAILED` by the catch below, whose residue
+          // cleanup then ran against a temp the rename had already moved away
+          // and whose caller rolled its in-memory projection back BEHIND a disk
+          // that held the newer record. The sibling writer in this family
+          // (`decision-ledger.mjs`, M12/T9 F-260) already classifies the
+          // identical fault as a committed-but-uncertain commit; the queue now
+          // does the same, and the catch below reloads the projection from the
+          // disk that holds it.
+          const uncertain = new Error(
+            `QUEUE_COMMIT_UNCERTAIN: the record was committed but the directory entry could not be fsynced (${error?.code ?? "unknown error"})`,
+            { cause: error },
+          );
+          uncertain.code = "QUEUE_COMMIT_UNCERTAIN";
+          uncertain.committed = true;
+          throw uncertain;
+        }
       }
       this._projectionVersion = nextProjectionVersion;
     } catch (err) {
-      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
-        cause: err,
-      });
-    } finally {
       if (fd !== null) {
         try {
           closeSync(fd);
@@ -212,6 +470,22 @@ export class QueueManager {
           /* preserve the original write failure */
         }
       }
+      // Closed first, so the removal can succeed on Windows as well as POSIX.
+      // Only ever a temp this process created, and only while it is still
+      // there: F-417 — after the rename the temp name is gone, and an unlink
+      // aimed at a path this writer no longer created is a side effect, not a
+      // cleanup.
+      if (tempIsOurs && existsSync(temp)) removeWriterResidue(temp);
+      if (err?.committed === true) {
+        // F-417: the record IS on disk. Reload the projection so memory and
+        // disk agree again, and report the uncertain commit under its own name
+        // instead of relabelling it as a refused write.
+        this.load();
+        throw err;
+      }
+      throw new Error(`QUEUE_STORAGE_WRITE_FAILED: ${err?.message}`, {
+        cause: err,
+      });
     }
   }
 
@@ -234,58 +508,70 @@ export class QueueManager {
     if (!primaryCoordinator || !["o1", "o2"].includes(primaryCoordinator)) {
       throw new Error("PRIMARY_COORDINATOR_REQUIRED: Must be o1 or o2");
     }
-
-    const existing = this.queue.get(taskId);
-    if (existing && existing.status === TASK_STATES.EXECUTING) {
-      throw new Error(
-        "TASK_ALREADY_EXECUTING: Cannot re-enqueue an active task",
-      );
-    }
-
-    const item = {
-      taskId,
-      planVersion,
-      primaryCoordinator,
-      requiredCapabilities,
-      payload,
-      ownerPrincipalRef:
-        typeof ownerPrincipalRef === "string" && ownerPrincipalRef
-          ? ownerPrincipalRef
-          : null,
-      status: TASK_STATES.QUEUED,
-      queueReason,
-      enqueuedAt: new Date().toISOString(),
-      // H05: fence fields â€” set on claim, validated on finish/heartbeat
-      claimedBy: null,
-      claimedAt: null,
-      leaseId: null, // H05: unique per claim/attempt
-      attempt: existing ? existing.attempt + 1 : 1,
-      lastHeartbeatAt: null,
-      leaseExpiresAt: null,
-      history: existing ? [...existing.history] : [],
-    };
-
-    item.history.push({
-      status: TASK_STATES.QUEUED,
-      at: item.enqueuedAt,
-      reason: queueReason,
-    });
-
-    const previousItem = existing;
-    this.queue.set(taskId, item);
-    try {
-      this.save();
-    } catch (err) {
-      // A failed durable write must not leave an in-memory task that was never
-      // committed to the authoritative queue projection.
-      if (previousItem) {
-        this.queue.set(taskId, previousItem);
-      } else {
-        this.queue.delete(taskId);
+    // M11/T3 A4: the queue is shared durable state and withLock reloads the
+    // projection before mutating. enqueueTask was the one mutator that wrote
+    // without it, so a concurrent claimTask lease could be clobbered by a stale
+    // in-memory projection.
+    return this.withLock(() => {
+      const existing = this.queue.get(taskId);
+      if (existing && existing.status === TASK_STATES.EXECUTING) {
+        throw new Error(
+          "TASK_ALREADY_EXECUTING: Cannot re-enqueue an active task",
+        );
       }
-      throw err;
-    }
-    return item;
+
+      const item = {
+        taskId,
+        planVersion,
+        primaryCoordinator,
+        requiredCapabilities,
+        payload,
+        ownerPrincipalRef:
+          typeof ownerPrincipalRef === "string" && ownerPrincipalRef
+            ? ownerPrincipalRef
+            : null,
+        status: TASK_STATES.QUEUED,
+        queueReason,
+        enqueuedAt: new Date().toISOString(),
+        // H05: fence fields â€” set on claim, validated on finish/heartbeat
+        claimedBy: null,
+        claimedAt: null,
+        leaseId: null, // H05: unique per claim/attempt
+        attempt: existing ? existing.attempt + 1 : 1,
+        lastHeartbeatAt: null,
+        leaseExpiresAt: null,
+        history: existing ? [...existing.history] : [],
+      };
+
+      item.history.push({
+        status: TASK_STATES.QUEUED,
+        at: item.enqueuedAt,
+        reason: queueReason,
+      });
+
+      const previousItem = existing;
+      this.queue.set(taskId, item);
+      try {
+        this.save();
+      } catch (err) {
+        // A failed durable write must not leave an in-memory task that was never
+        // committed to the authoritative queue projection.
+        //
+        // F-417: a COMMITTED-but-uncertain write is not that case. The rename
+        // landed, `save()` reloaded the projection from the disk that holds it,
+        // and restoring the pre-write item here would put memory behind disk
+        // again — which is exactly the state the next successful save used to
+        // serialise over the record the disk already had.
+        if (err?.committed === true) throw err;
+        if (previousItem) {
+          this.queue.set(taskId, previousItem);
+        } else {
+          this.queue.delete(taskId);
+        }
+        throw err;
+      }
+      return item;
+    });
   }
 
   /**
@@ -375,6 +661,8 @@ export class QueueManager {
         if (item.claimedBy === agentId) {
           // M7-030: reclaim/renew requires the current lease fence.
           // Possessing only task ID + agent ID is not enough.
+          // F-407: the reclaim renews the lease, so it is governed by the
+          // shared expiry predicate inside the heartbeat it delegates to.
           return this._heartbeatInner({
             taskId,
             agentId,
@@ -382,15 +670,26 @@ export class QueueManager {
             leaseSeconds,
           });
         }
-        throw new Error(
+        // M12/T9 F-553 (R10-T06-5): the refusal carries its CODE as a member,
+        // not only as message prose. The pickup seam classified this error by
+        // running a regex over the message, so a reword of this line silently
+        // changed the owner-visible class. The message is unchanged.
+        const denied = new Error(
           `CONCURRENT_CLAIM_DENIED: Task ${taskId} is already claimed by ${item.claimedBy}`,
         );
+        denied.code = "CONCURRENT_CLAIM_DENIED";
+        throw denied;
       }
 
       if (item.status !== TASK_STATES.QUEUED) {
-        throw new Error(
+        // M12/T9 F-553 (R10-T06-5): same code-member rule as the concurrent
+        // refusal above — the pickup seam classifies by `code` first, and the
+        // message prefix survives only as the foreign-error fallback.
+        const invalid = new Error(
           `INVALID_STATE_TRANSITION: Cannot claim task in state ${item.status}`,
         );
+        invalid.code = "INVALID_STATE_TRANSITION";
+        throw invalid;
       }
 
       // M7-010: bind the claim to the authoritative assignment.
@@ -439,10 +738,171 @@ export class QueueManager {
       this.save();
       return result;
     } catch (err) {
-      if (snapshot === undefined) {
-        this.queue.delete(taskId);
-      } else {
-        this.queue.set(taskId, snapshot);
+      // M12/T9-R4 F-417 (R9-T03-4): a COMMITTED-but-uncertain durable write is
+      // not a failed one. The rename landed, `save()` reloaded the projection
+      // from the disk that holds it, and restoring the pre-mutation copy here
+      // would put memory behind disk again — the state the next successful save
+      // used to serialise over the committed record.
+      if (err?.committed !== true) {
+        if (snapshot === undefined) {
+          this.queue.delete(taskId);
+        } else {
+          this.queue.set(taskId, snapshot);
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * M10/T2-R2: run `operation` inside the queue critical section, and only
+   * while the named execution still holds CURRENT execution authority.
+   *
+   * Why this exists. A queue lease answers "does this execution still possess
+   * current execution authority?", which is a different question from the one a
+   * ledger binding answers ("which task/run did this session belong to?").
+   * Stale recovery revokes the lease and increments the attempt generation, but
+   * the historical binding survives as audit history — so a governance consumer
+   * that trusted the binding alone kept authorizing governed mutation for a run
+   * whose authority had already been revoked.
+   *
+   * Why the operation runs HERE and not in a caller-side pre-check. A pre-check
+   * is a TOCTOU hole: recovery could revoke the lease between the check and the
+   * authoritative write. `withExecutionFence` therefore holds the SAME queue
+   * file lock that `claimTaskById` and `detectAndRecoverStaleTasks` hold, and it
+   * runs the caller's authoritative commit inside that critical section, so a
+   * revocation cannot interleave with the commit. This is the existing
+   * cross-process mechanism, not a new lock or service.
+   *
+   * Lock ordering: queue lock is always taken BEFORE the ledger writer lock
+   * (the operation it wraps commits a ledger event). No path in this repository
+   * takes the ledger writer lock and then the queue lock, so the ordering has no
+   * cycle.
+   *
+   * `withLock` reloads the projection from durable storage first, so a revoked
+   * or superseded lease can never be observed as live through a stale in-memory
+   * copy. Every failure mode denies: an absent task, a non-EXECUTING status, a
+   * different claimant, a mismatched or absent lease, a superseded attempt
+   * generation, and an elapsed lease expiry. Contention surfaces as the
+   * pre-existing QUEUE_LOCK_TIMEOUT, which is also a denial.
+   *
+   * @param {{taskId: string, claimedBy: string, leaseId: string, attempt: number}} fence
+   * @param {() => unknown} operation
+   */
+  withExecutionFence(fence, operation) {
+    if (typeof operation !== "function") {
+      throw new TypeError(
+        "QUEUE_FENCE_CONTRACT_INVALID: operation is required",
+      );
+    }
+    const taskId = fence?.taskId;
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new TypeError("QUEUE_FENCE_CONTRACT_INVALID: taskId is required");
+    }
+    return this.withLock(() => {
+      const item = this.queue.get(taskId);
+      if (!item) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is absent from the queue projection`,
+        );
+      }
+      // The attempt generation is checked first: it is the fence that
+      // supersession actually moves, and a higher generation means this
+      // execution is history no matter what the rest of the item still says.
+      if (
+        !Number.isSafeInteger(fence.attempt) ||
+        item.attempt !== fence.attempt
+      ) {
+        throw new Error(
+          `EXECUTION_FENCE_SUPERSEDED: ${taskId} is at attempt ${item.attempt}, not ${fence.attempt}`,
+        );
+      }
+      if (item.status !== TASK_STATES.EXECUTING) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is ${item.status}, not EXECUTING`,
+        );
+      }
+      if (item.claimedBy !== fence.claimedBy) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} is claimed by ${item.claimedBy}, not ${fence.claimedBy}`,
+        );
+      }
+      if (
+        typeof fence.leaseId !== "string" ||
+        fence.leaseId.length === 0 ||
+        item.leaseId !== fence.leaseId
+      ) {
+        throw new Error(
+          `EXECUTION_FENCE_REVOKED: ${taskId} no longer holds the presented lease`,
+        );
+      }
+      // F-407: the same predicate every other lease mutator asks.
+      assertLeaseNotExpired(item, taskId);
+      // F-056 (legacy R1-A06-01): the lease clock moved only through
+      // `heartbeat()`, and `heartbeat()` had no production caller, so
+      // `lastHeartbeatAt` stood at `claimedAt` for the whole life of every
+      // EXECUTING item. The lease therefore expired DEFAULT_LEASE_SECONDS
+      // after the CLAIM rather than after the owner's last activity, and the
+      // stale detector - which keys on heartbeat age - could not tell a live
+      // execution from a dead one.
+      //
+      // Committing a governed mutation under this fence IS the owner's proof
+      // of liveness: it presented the current leaseId, the current attempt
+      // and the current claimant, and every one of them was just verified
+      // against durable state inside the queue's own critical section. So the
+      // lease is renewed here, from that proof.
+      //
+      // What this deliberately does not do:
+      //  - it never extends an EXPIRED lease: the check above throws
+      //    EXECUTION_FENCE_EXPIRED first, so a resurrected owner cannot
+      //    reclaim a lease it already lost;
+      //  - it never revives a REVOKED or SUPERSEDED lease: the attempt,
+      //    status, claimant and leaseId checks above throw first;
+      //  - it never mints a lease, an attempt or an owner: only the two
+      //    timestamps of the lease that is already held move;
+      //  - it never requeues anything: recovery stays the only path back to
+      //    QUEUED, and a live execution is no longer mistaken for a dead one.
+      this._renewLeaseUnderFence(item);
+      return operation(item);
+    });
+  }
+
+  /**
+   * F-056 (legacy R1-A06-01): renew the lease of the execution that has just
+   * proved, under the current-execution fence, that it is still alive.
+   *
+   * The lease window is read back from the lease the item already holds
+   * (`leaseExpiresAt - lastHeartbeatAt`), so this introduces no second source
+   * of truth for how long a lease lasts and cannot lengthen it: a dead owner
+   * still loses its authority exactly DEFAULT_LEASE_SECONDS after its last
+   * action.
+   *
+   * Anything that would make the renewal ambiguous leaves the lease exactly as
+   * it was. An item whose two timestamps are missing or unparsable is not a
+   * lease this queue issued, and guessing a window for it would be worse than
+   * not renewing.
+   */
+  _renewLeaseUnderFence(item) {
+    const expiresAt = Date.parse(item?.leaseExpiresAt ?? "");
+    const lastBeat = Date.parse(item?.lastHeartbeatAt ?? "");
+    if (!Number.isFinite(expiresAt) || !Number.isFinite(lastBeat)) return;
+    const windowMs = expiresAt - lastBeat;
+    if (!Number.isFinite(windowMs) || windowMs <= 0) return;
+    const now = Date.now();
+    item.lastHeartbeatAt = new Date(now).toISOString();
+    item.leaseExpiresAt = new Date(now + windowMs).toISOString();
+    try {
+      this.save();
+    } catch (err) {
+      // A durable write that failed must not leave process memory ahead of
+      // persisted authority, and the caller's commit must not run against a
+      // lease that only exists in memory. Reloading restores the projection
+      // and the failed write denies the mutation.
+      try {
+        this.load();
+      } catch {
+        // The projection could not be re-read either. The original write
+        // failure is the one that matters, so it is the one that is reported.
       }
       throw err;
     }
@@ -482,6 +942,10 @@ export class QueueManager {
           `INVALID_STATE: Task is not executing (status: ${item.status})`,
         );
       }
+
+      // F-407: a heartbeat may extend authority that is still held, never
+      // revive it; the rewrite below would erase the lapse otherwise.
+      assertLeaseNotExpired(item, taskId);
 
       const now = Date.now();
       item.lastHeartbeatAt = new Date(now).toISOString();
@@ -531,6 +995,9 @@ export class QueueManager {
             "ATTEMPT_MISMATCH: Finish attempt does not match current attempt",
           );
         }
+        // F-407: finishing is a governed mutation under the lease the fence
+        // checks, so a lapsed lease is not authority here either.
+        assertLeaseNotExpired(item, taskId);
 
         const now = new Date().toISOString();
         const summary = typeof resultSummary === "string" ? resultSummary : "";
@@ -542,12 +1009,17 @@ export class QueueManager {
         item.resultAttempt = item.attempt;
         // M8-051: the ordered artifact set and its single digest are part of
         // the authoritative result record, not a singular path.
-        if (Array.isArray(artifactSet) && artifactSet.length > 0) {
-          item.resultArtifacts = artifactSet.map((artifact) => ({
-            ...artifact,
-          }));
-          item.artifactSetDigest = artifactSetDigest ?? null;
-        }
+        // F-504: every result generation FULLY REPLACES the prior record. The
+        // write used to sit inside an `artifactSet.length > 0` guard, so a
+        // finish with an empty or omitted set left the previous generation's
+        // artifacts and digest on the record — a stale generation readable as
+        // the current one.
+        const nextResultArtifacts = Array.isArray(artifactSet)
+          ? artifactSet.map((artifact) => ({ ...artifact }))
+          : [];
+        item.resultArtifacts = nextResultArtifacts;
+        item.artifactSetDigest =
+          nextResultArtifacts.length > 0 ? (artifactSetDigest ?? null) : null;
         // M8-054: the digest is part of the validated result record. When
         // the caller supplies no digest, bind a digest over the summary +
         // attempt so the record is never digest-less.
@@ -580,12 +1052,39 @@ export class QueueManager {
    * Complete task - only from a verified user ACCEPT decision tied to the
    * current result (M7-012). The queue never invents completion authority:
    * the caller proves the user principal and the current result digest.
+   *
+   * M12/T9 F-026: completion is bound to the AUTHORITATIVE owner and to a
+   * result digest the queue itself recorded.
+   *
+   * Before this, the identity check ran only when `item.ownerPrincipalRef` was
+   * non-empty, so a task with no recorded owner accepted ANY non-empty
+   * principal: the queue recorded an identity instead of verifying one. Now a
+   * task with no authoritative owner is refused outright - an owner that was
+   * never projected from the ledger cannot be presented by anyone.
+   *
+   * The digest half is bound the same way. The digest must be the one the
+   * queue recorded when the execution finished (`finishExecution` wrote both
+   * the digest and the finish timestamp, and no other path writes either), so a
+   * caller cannot satisfy the check with a value it minted, and the recorded
+   * digest must belong to the CURRENT attempt rather than a superseded one.
+   *
+   * M12/T9-R4 F-406: the TERMINAL STATE is the accepted OUTCOME, not a
+   * constant. The write used to be an unconditional COMPLETE, so an owner's
+   * ACCEPT of a PARTIAL/FAILED result closed the queue item as a completed
+   * task and the queue then disagreed with the ledger about what was accepted.
+   * A governed caller passes the outcome the ledger accepted; it is projected
+   * through the queue's own ledger mapping and must land on a terminal queue
+   * state, so an outcome the queue cannot represent is refused rather than
+   * flattened into COMPLETE. `outcome` is optional only because the queue
+   * cannot see the ledger: a caller that omits it is asserting the default
+   * COMPLETE, and the governed ACCEPT path always supplies it.
    */
   completeTask({
     taskId,
     userConfirmationRef,
     userPrincipalRef,
     resultDigest,
+    outcome = null,
   }) {
     return this.withLock(() =>
       this._mutateWithRollback(taskId, (item) => {
@@ -601,19 +1100,6 @@ export class QueueManager {
             "USER_PRINCIPAL_REQUIRED: Completion requires a verified user principal",
           );
         }
-        // Lane H2: when the authoritative owner principal is projected onto
-        // this task, completion must present THAT principal. A non-empty string
-        // is not an identity, so the queue verifies the identity it was given
-        // rather than merely recording it.
-        if (
-          typeof item.ownerPrincipalRef === "string" &&
-          item.ownerPrincipalRef &&
-          userPrincipalRef !== item.ownerPrincipalRef
-        ) {
-          throw new Error(
-            "USER_PRINCIPAL_MISMATCH: Completion principal is not the authoritative task owner",
-          );
-        }
         // M7-012: fake or stale confirmation references are denied. The
         // digest must equal the current authoritative result digest.
         if (typeof item.resultDigest !== "string" || !item.resultDigest) {
@@ -621,26 +1107,77 @@ export class QueueManager {
             "RESULT_DIGEST_REQUIRED: No authoritative result digest is recorded for this task",
           );
         }
+        // M12/T9 F-026: the digest must be the one the queue's OWN finish path
+        // recorded. `finishExecution` writes the digest together with the
+        // finish timestamp and the attempt it belongs to, so a digest that is
+        // not accompanied by that record was not produced by the authoritative
+        // execution, and a digest bound to a superseded attempt is history.
+        if (
+          typeof item.executionFinishedAt !== "string" ||
+          !item.executionFinishedAt
+        ) {
+          throw new Error(
+            "RESULT_DIGEST_REQUIRED: No authoritative finished execution is recorded for this task",
+          );
+        }
+        if (
+          Number.isSafeInteger(item.resultAttempt) &&
+          item.resultAttempt !== item.attempt
+        ) {
+          throw new Error(
+            "RESULT_MISMATCH: The recorded result digest belongs to a superseded attempt",
+          );
+        }
         if (resultDigest !== item.resultDigest) {
           throw new Error(
             "RESULT_MISMATCH: Confirmation does not reference the current authoritative result",
           );
         }
+        // M12/T9 F-026: Lane H2. The authoritative owner principal is projected
+        // onto this task from the ledger; when it is ABSENT there is nobody to
+        // verify against, so completion is refused rather than accepted from
+        // whoever presented a non-empty string. When it is present, the
+        // presented principal must BE it.
+        if (
+          typeof item.ownerPrincipalRef !== "string" ||
+          !item.ownerPrincipalRef
+        ) {
+          throw new Error(
+            "OWNER_PRINCIPAL_REQUIRED: Completion requires an authoritative task owner",
+          );
+        }
+        if (userPrincipalRef !== item.ownerPrincipalRef) {
+          throw new Error(
+            "USER_PRINCIPAL_MISMATCH: Completion principal is not the authoritative task owner",
+          );
+        }
 
         const now = new Date().toISOString();
-        item.status = TASK_STATES.COMPLETE;
+        // F-406: the queue records what was ACCEPTED. The outcome is projected
+        // through the queue's own ledger mapping, so an unrecognised outcome
+        // cannot masquerade as COMPLETE.
+        const acceptedStatus =
+          outcome === null
+            ? TASK_STATES.COMPLETE
+            : mapLedgerStatusToQueue({ workflow_status: outcome });
+        if (!QUEUE_TERMINAL_STATES.includes(acceptedStatus)) {
+          throw new Error(
+            `RESULT_MISMATCH: The accepted outcome ${String(outcome)} is not a terminal queue state`,
+          );
+        }
+        item.status = acceptedStatus;
         item.completedAt = now;
         item.userConfirmationRef = userConfirmationRef;
         item.completedBy = userPrincipalRef;
 
         item.history.push({
-          status: TASK_STATES.COMPLETE,
+          status: acceptedStatus,
           at: now,
           userConfirmationRef,
           completedBy: userPrincipalRef,
         });
 
-        return { success: true, status: TASK_STATES.COMPLETE };
+        return { success: true, status: acceptedStatus };
       }),
     );
   }
@@ -773,11 +1310,23 @@ export class QueueManager {
     });
   }
 
+  /**
+   * M12/T9 F-002: the durable queue item for one task id, or `null`.
+   *
+   * The read re-reads the file, so this never answers from a map that was
+   * populated when the instance was created — the projection a process reads
+   * is the projection every writer wrote.
+   */
   getTask(taskId) {
+    this.refresh();
     return this.queue.get(taskId) || null;
   }
 
+  /**
+   * M12/T9 F-002: the durable active-task set, read from the file.
+   */
   listActiveTasks() {
+    this.refresh();
     // M7-031: every terminal state is excluded; RESULT_PENDING_REVIEW stays.
     return Array.from(this.queue.values()).filter(
       (t) => !QUEUE_TERMINAL_STATES.includes(t.status),
@@ -832,10 +1381,28 @@ export class QueueManager {
           // Ledger authority overrides diverging queue projection (H03)
           if (existing.status !== mappedStatus) {
             existing.status = mappedStatus;
+            // F-504: when the override re-opens the entry for NEW work, the
+            // result record it carries belongs to a superseded generation and
+            // must not stay readable as the current one — the attempt fence in
+            // completeTask cannot fire here because this path never bumps
+            // `attempt`. Terminal and result-bearing states keep the record:
+            // there the result IS the thing being reconciled.
+            const reopensWork =
+              mappedStatus === TASK_STATES.QUEUED ||
+              mappedStatus === TASK_STATES.EXECUTING ||
+              mappedStatus === "REVISING";
+            if (reopensWork) {
+              existing.resultArtifacts = [];
+              existing.artifactSetDigest = null;
+              existing.resultDigest = null;
+              existing.resultSummary = "";
+              existing.resultAttempt = null;
+            }
             existing.history.push({
               status: mappedStatus,
               at: new Date().toISOString(),
               reason: "LEDGER_RECONCILIATION_OVERRIDE",
+              ...(reopensWork ? { resultRecordInvalidated: true } : {}),
             });
             updated++;
           }
@@ -869,18 +1436,7 @@ export class QueueManager {
           const fencedAttempt = liveRuns
             .map((run) => run.attempt)
             .find((value) => Number.isSafeInteger(value));
-          const capabilities = [
-            ...new Set(
-              (ledgerTask.nodes ?? [])
-                .map((node) => node?.agent_id)
-                .filter(
-                  (agentId) =>
-                    typeof agentId === "string" &&
-                    // Coordinators are the assignment, not a capability.
-                    !isExecutableCoordinator(agentId),
-                ),
-            ),
-          ].sort();
+          const capabilities = projectGovernedCapabilities(ledgerTask.nodes);
           let status = mappedStatus;
           let leaseId = null;
           let attempt = Number.isSafeInteger(fencedAttempt) ? fencedAttempt : 1;
@@ -937,9 +1493,22 @@ export class QueueManager {
   }
 
   clear() {
-    this.queue.clear();
-    this.save();
+    // M11/T3 A4: serialized like every other queue mutator, so a concurrent
+    // writer cannot have its durable projection erased from a stale copy.
+    this.withLock(() => {
+      this.queue.clear();
+      this.save();
+    });
   }
 }
 
+/**
+ * M12/T9 F-002: the process-wide queue projection.
+ *
+ * It is NOT a load-once singleton any more: the instance holds no state until
+ * the governance store root is configured, it touches no file at import, and
+ * every read re-reads the durable file. Until the root is configured, every
+ * use is a named refusal (`GOVERNANCE_STORE_ROOT_UNCONFIGURED`) rather than a
+ * silent home-directory default.
+ */
 export const defaultQueueManager = new QueueManager();

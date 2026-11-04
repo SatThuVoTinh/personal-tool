@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "knowledge-t5-common.ps1")
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\.env" }
 
@@ -72,8 +73,16 @@ function Wait-T5Run {
 }
 
 function Invoke-T5Sql {
-  param([string]$Sql)
-  Invoke-T5Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--command", $Sql)
+  param([string]$Sql, [hashtable]$Variables = @{})
+  # F-293 (R7-C4-06): a provider-derived value reaches the database as a psql
+  # variable, never as an interpolated literal, so a quote in the response
+  # cannot terminate the literal and start a second statement.
+  $arguments = @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align")
+  foreach ($variableName in @($Variables.Keys | Sort-Object)) {
+    $arguments += "--set=$variableName=$($Variables[$variableName])"
+  }
+  $arguments += @("--command", $Sql)
+  Invoke-T5Compose @arguments
 }
 
 function Start-T5FullRebuild {
@@ -117,7 +126,10 @@ ORDER BY 1;
 try {
   if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) { throw "Runtime environment file is missing: $EnvironmentFile" }
   Assert-T5CleanRepository
-  $candidateSha = Get-T5RepositorySha
+  # F-292 (R7-C4-05): the candidate describes the tree this script packages,
+  # so the revision is read from that tree and the tree itself is recorded.
+  $candidateSha = Assert-T5RepositoryIdentity
+  $evidence.repository_root = $script:T5RepositoryRoot
   $env:KNOWLEDGE_IMAGE_REVISION = $candidateSha
   if ($Mode -eq "Fixture") {
     $fixtureCopyRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m4-t5-fixture-$runId"
@@ -163,7 +175,7 @@ try {
   Assert-T5NetworkBoundary $knowledgeId $nginxId $publishedPort
   Assert-T5RuntimeIsolation $knowledgeId $nginxId
   $ledgerBefore = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerBefore -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Knowledge migration ledger is invalid." }
+  if (($ledgerBefore -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "Knowledge migration ledger is invalid." }
   $schemaFingerprintBefore = Get-T5SchemaCatalogFingerprint
 
   $oldRun = Start-T5FullRebuild
@@ -171,11 +183,11 @@ try {
   $orphanRunId = [guid]::NewGuid().ToString()
   $recoverySql = @"
 INSERT INTO knowledge.indexes (id, status, embedding_model_name, embedding_model_digest, embedding_dimensions)
-VALUES ('$orphanIndexId', 'BUILDING', '$($candidate.embedding.name)', '$($candidate.embedding.digest)', $($candidate.embedding.dimension));
+VALUES ('$orphanIndexId', 'BUILDING', '$($candidate.embedding.name)', :'model_digest', $($candidate.embedding.dimension));
 INSERT INTO knowledge.index_runs (id, index_id, kind, status)
 VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
 "@
-  Invoke-T5Sql $recoverySql | Out-Null
+  Invoke-T5Sql -Sql $recoverySql -Variables @{ model_digest = $candidate.embedding.digest } | Out-Null
   $recoveryRestartBefore = Get-T5CgroupSnapshot $knowledgeId
   Invoke-T5Compose @("restart", "knowledge")
   Wait-T5Ready
@@ -229,7 +241,7 @@ VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
   $restartAfter = Get-T5CgroupSnapshot $knowledgeId
   $restartEvidence = Get-T5ResourceWindow $restartBefore $restartAfter "restart"
   $ledgerAfter = @(Invoke-T5Sql "SELECT version FROM knowledge.schema_migrations ORDER BY version;") | Where-Object { $_ }
-  if (($ledgerAfter -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "Migration was reapplied after restart." }
+  if (($ledgerAfter -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "Migration was reapplied after restart." }
   $schemaFingerprintAfter = Get-T5SchemaCatalogFingerprint
   if ($schemaFingerprintBefore -ne $schemaFingerprintAfter) { throw "Knowledge schema catalog changed after restart/rebuild." }
   $afterRestartSearch = Invoke-T5Api "POST" "/v1/search" ($request | ConvertTo-Json -Compress)
@@ -269,21 +281,26 @@ catch {
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
   $prefix = if ($Mode -eq "Fixture") { "fixture" } else { "realvault" }
-  $finalizationError = $null
-  try { Write-T5Evidence $prefix $runId $evidence | Out-Null } catch { $finalizationError = $_.Exception }
-  try {
+  # F-291 (R7-C4-04): the shared finalisation contract runs the cleanup, records
+  # every condition it raises in the evidence, and names them in the output.
+  # The finalisation failure is raised after the body, so the body's own
+  # failure is never replaced by a teardown complaint, and a teardown failure
+  # on a run whose body already failed is still reported.
+  Invoke-AcceptanceFinalization -Label "M4/T5" -RunId $runId -Evidence $evidence -EvidenceWriter { Write-T5Evidence $prefix $runId $evidence | Out-Null } -Cleanup {
+    Remove-Item Env:KNOWLEDGE_T5_RUN_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_IMAGE_REVISION -ErrorAction SilentlyContinue
+    if ($fixtureCopyRoot) { Remove-Item -LiteralPath $fixtureCopyRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if ($started) {
       $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
       try { Remove-T5TemporaryResources $runId } finally { $ErrorActionPreference = $previous }
     }
   }
-  catch {
-    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
-  }
-  Remove-Item Env:KNOWLEDGE_T5_RUN_ID -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_IMAGE_REVISION -ErrorAction SilentlyContinue
-  if ($fixtureCopyRoot) { Remove-Item -LiteralPath $fixtureCopyRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($null -ne $finalizationError -and -not $script:bodyFailed) { throw "M4/T5 evidence finalization or temporary-resource cleanup failed." }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T5 evidence finalization or temporary-resource cleanup failed: $finalizationError"
+}
+
 Write-Output "M4/T5 $Mode acceptance passed."

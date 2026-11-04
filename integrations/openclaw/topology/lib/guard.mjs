@@ -14,7 +14,11 @@ import {
   SCHEMA_VERSION,
 } from "./canonical.mjs";
 import { readSnapshot, recordWorkflowEvent, BUDGETS } from "./ledger.mjs";
-import { findSession, ownerRunIds } from "./workflow.mjs";
+import {
+  findSession,
+  findBoundCoordinatorRun,
+  ownerRunIds,
+} from "./workflow.mjs";
 import {
   validateContract,
   validateContractSchema,
@@ -22,6 +26,8 @@ import {
   checkSchema,
   stableJson,
   typeMatches,
+  TOOL_CALL_ENVELOPE_MAX_BYTES,
+  TOOL_RESULT_ENVELOPE_MAX_BYTES,
 } from "./schema.mjs";
 import {
   createTrustedResultEnvelope,
@@ -29,21 +35,24 @@ import {
   sanitizeDelegationText,
   validateAgentClaim,
   normalizeAgentOutcome,
+  truncateUtf8,
 } from "./runtime.mjs";
 import { withFileLockSync, lockDirFor } from "../../lib/file-lock.mjs";
-// Spawn topology is a policy decision, so it is read from the one canonical
-// policy module. The deployed plugin flattens this to "./policy.mjs".
-import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
+// Spawn and stack topology are policy decisions, so both are read from the one
+// canonical policy module. The deployed plugin flattens this to "./policy.mjs".
+import { AGENT_SPAWN_POLICY, AGENT_STACK_POLICY } from "../../lib/policy.mjs";
 
 let policy;
 let AGENT_IDS = ["main", "o1", "o2", "excel", "power-bi", "sql", "python"];
-let STACK_IDS = [
-  "semantic",
-  "intelligence",
-  "decision",
-  "infrastructure",
-  "data_plant",
-];
+// A-2 / R1-A04-05: the stack protocol registry lives in policy.mjs ONLY, the
+// same single-authority rule already documented below for the built-in tool
+// projection. There is no module-level copy: the previous five-member local
+// list was overwritten by `policy.STACK_IDS` on every successful policy load
+// anyway, so it was dead code, and while it existed the two lists disagreed
+// about both membership and order. An empty list is the fail-closed state, not
+// a permissive one: with no loaded policy no stack is a member of the registry
+// and the delegation scope check denies.
+let STACK_IDS = [];
 // M8-067: the delegation-run ceiling is reduced by one for the legacy
 // m7-t2-r12 governance version. The CEILING itself is canonical (BUDGETS in
 // ledger.mjs); only this version-specific delta is declared here, so there is
@@ -95,6 +104,125 @@ function requireQuotaDep() {
 let depsLoaded = false;
 let depsPromise = null;
 
+/**
+ * M12/T9 F-051: the PATH-SHAPED INPUT FIELDS of every governed tool.
+ *
+ * The old check was keyed by tool id (`candidateToolId === "zink_excel"`,
+ * `=== "zink_python"`), so a path-shaped field on ANY other governed tool was
+ * never examined and the block was skipped SILENTLY rather than failing
+ * closed. The published tool-call envelope names every governed tool and
+ * `$ref`s that tool's `$defs.input`, so the field set of every governed tool
+ * is derivable from the contract the call was already validated against - and
+ * the path-shaped subset of it is declared HERE, once.
+ *
+ * Only a field that names a FILESYSTEM path belongs in this set. A knowledge
+ * `path_prefix` is a filter over ingested documents, and a power-bi
+ * `datasource` is a model binding: neither is a filesystem path, and running
+ * either through the logical-path validator would refuse a legitimate call.
+ *
+ * Every governed tool MUST have an entry, even an empty one: a tool that is
+ * added to the envelope without a declaration fails closed at runtime, which
+ * is the point - the check can no longer be skipped by adding a tool.
+ */
+export const PATH_SHAPED_INPUT_FIELDS = Object.freeze({
+  zink_excel: Object.freeze(["file_path", "template_path"]),
+  zink_python: Object.freeze(["entrypoint"]),
+  zink_sql: Object.freeze([]),
+  zink_n8n: Object.freeze([]),
+  zink_power_bi: Object.freeze([]),
+  zink_skill_search: Object.freeze([]),
+  zink_knowledge_search: Object.freeze([]),
+  zink_skill_propose: Object.freeze([]),
+});
+
+let pathShapedInputFieldCache = null;
+
+/**
+ * Every property name an input schema declares, across its branches.
+ *
+ * A tool's input is often a `oneOf` over the operation variants (the excel
+ * contract declares one per operation), so the field set is the UNION of the
+ * branches: a field is path-shaped for that tool if ANY variant carries it.
+ */
+function collectSchemaPropertyNames(node, names = new Set(), depth = 0) {
+  if (!node || typeof node !== "object" || depth > 12) return names;
+  if (Array.isArray(node)) {
+    for (const item of node) collectSchemaPropertyNames(item, names, depth + 1);
+    return names;
+  }
+  if (node.properties && typeof node.properties === "object")
+    for (const key of Object.keys(node.properties)) names.add(key);
+  for (const keyword of ["oneOf", "anyOf", "allOf"])
+    if (node[keyword])
+      collectSchemaPropertyNames(node[keyword], names, depth + 1);
+  return names;
+}
+
+/**
+ * Resolve a `$ref` of the form `file.schema.json#/$defs/input` against the
+ * published contracts. The file part names a canonical tool contract, the
+ * pointer part names the member inside it.
+ */
+function resolveContractRef(ref) {
+  const [file, pointer] = String(ref).split("#");
+  if (!file || !pointer) return null;
+  const schema = loadContractSchema(file);
+  if (!schema) return null;
+  let cursor = schema;
+  for (const segment of pointer.split("/").filter(Boolean)) {
+    if (!cursor || typeof cursor !== "object") return null;
+    cursor = cursor[segment];
+  }
+  return cursor ?? null;
+}
+
+/**
+ * The path-shaped input fields of every governed tool, DERIVED from the
+ * published contracts and CROSS-CHECKED against the declaration above.
+ *
+ * It fails closed - by throwing, which the caller turns into a refusal - when
+ * the field set cannot be enumerated: an envelope without branches, a branch
+ * without a tool id or an input `$ref`, a contract that does not resolve, a
+ * governed tool with no declaration, or a declaration naming a field the
+ * contract does not declare.
+ */
+function pathShapedInputFields() {
+  if (pathShapedInputFieldCache) return pathShapedInputFieldCache;
+  const envelope = loadContractSchema("tool-call");
+  const branches = envelope?.oneOf;
+  if (!Array.isArray(branches) || branches.length === 0)
+    throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+  const derived = new Map();
+  for (const branch of branches) {
+    const toolId = branch?.properties?.tool_id?.const;
+    const ref = branch?.properties?.input?.$ref;
+    if (typeof toolId !== "string" || typeof ref !== "string")
+      throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+    const input = resolveContractRef(ref);
+    if (!input) throw new Error("GOVERNANCE_PATH_SCOPE_UNENUMERABLE");
+    const declared = PATH_SHAPED_INPUT_FIELDS[toolId];
+    if (!Array.isArray(declared))
+      throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+    const available = collectSchemaPropertyNames(input);
+    for (const field of declared)
+      if (!available.has(field))
+        throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+    derived.set(toolId, Object.freeze([...declared]));
+  }
+  pathShapedInputFieldCache = derived;
+  return derived;
+}
+
+/**
+ * The path-shaped input fields of ONE governed tool. A tool the envelope does
+ * not name is not a governed tool and has no scope.
+ */
+function pathShapedInputFieldsFor(toolId) {
+  const scope = pathShapedInputFields().get(toolId);
+  if (!scope) throw new Error("GOVERNANCE_PATH_SCOPE_UNDECLARED");
+  return scope;
+}
+
 async function ensureDependencies() {
   if (depsLoaded) return;
   if (!depsPromise) {
@@ -109,8 +237,15 @@ async function ensureDependencies() {
       for (const candidate of policyCandidates) {
         try {
           const href = candidate.startsWith(".")
-            ? pathToFileURL(path.resolve(pathToFileURL(_moduleDir), candidate))
-                .href
+            ? // M10/T2-R10: `_moduleDir` is already a filesystem path
+              // (`path.dirname(fileURLToPath(import.meta.url))`). Wrapping it in
+              // `pathToFileURL` handed `path.resolve` a URL object, which throws
+              // `ERR_INVALID_ARG_TYPE`; the throw was swallowed here, the
+              // package-relative candidate always died, and production (gateway
+              // cwd `/home/hoang_vinh`) fell through to nothing — leaving every
+              // capability registry empty and every built-in tool call failing
+              // with RUNTIME_CAPABILITY_MISMATCH. Resolve the path directly.
+              pathToFileURL(path.resolve(_moduleDir, candidate)).href
             : pathToFileURL(candidate).href;
           const loaded = await import(href);
           if (loaded?.BUILT_IN_TOOL_POLICY) {
@@ -183,22 +318,12 @@ async function ensureDependencies() {
       // first, then the working directory. Machine-specific absolute paths are
       // prohibited. Every dependency is fail-closed: a missing validator is
       // GOVERNANCE_DEPENDENCY_MISSING, never a no-op allow.
-      const loadShared = async (relativePath) => {
-        const shared = [
-          path.resolve(_moduleDir, "../../../../" + relativePath),
-          path.resolve(process.cwd(), relativePath),
-        ];
-        for (const candidate of shared) {
-          try {
-            const loaded = await import(pathToFileURL(candidate).href);
-            if (loaded) return loaded;
-          } catch {
-            /* next candidate */
-          }
-        }
-        return null;
-      };
-
+      // M12/T9 F-024: ONE resolver for the shared zink-tools modules. The
+      // guard and the plugin used to have two different ones, so the same
+      // dependency could be loaded from two different trees and the two
+      // copies could disagree. See `loadSharedGovernanceModule` below.
+      const loadShared = (relativePath) =>
+        loadSharedGovernanceModule(relativePath);
       const pathSafety = await loadShared("zink-tools/common/path-safety.mjs");
       validateArtifactLogicalPath =
         typeof pathSafety?.validateArtifactLogicalPath === "function"
@@ -221,10 +346,84 @@ async function ensureDependencies() {
       N8nAdapterError = n8nAdapter?.N8nAdapterError ?? Error;
       depsN8nLoaded = invokeN8n !== null;
 
-      depsLoaded = true;
+      // M12/T9 F-024: the ready flag used to be set UNCONDITIONALLY, so
+      // `whenGovernanceDependenciesReady()` answered `ready: true` while
+      // `validateSqlQuery` was still null, and the guard-gated tools failed
+      // closed as GOVERNANCE_DEPENDENCY_MISSING. Ready now means what it says:
+      // path-safety, the SQL validator and the n8n adapter all loaded.
+      depsLoaded = computeGovernanceReadiness({
+        pathSafetyLoaded: depsPathSafetyLoaded,
+        sqlLoaded: depsSqlLoaded,
+        n8nLoaded: depsN8nLoaded,
+      });
     })();
   }
   await depsPromise;
+}
+
+/**
+ * M12/T9 F-024: the readiness rule, as a pure function so it is provable
+ * without a broken installation. Ready means: path-safety, the SQL validator
+ * and the n8n adapter all actually loaded.
+ */
+export function computeGovernanceReadiness({
+  pathSafetyLoaded = false,
+  sqlLoaded = false,
+  n8nLoaded = false,
+} = {}) {
+  return pathSafetyLoaded === true && sqlLoaded === true && n8nLoaded === true;
+}
+
+/**
+ * M12/T9 F-024: ONE resolver for the shared zink-tools modules.
+ *
+ * The guard and the plugin used to have two different resolvers for the same
+ * dependencies — the guard resolved from its own module directory plus the
+ * working directory, the plugin from a repo-root walk plus a machine-specific
+ * absolute path — so the same module could be loaded from two different
+ * trees, and the two copies could disagree. Both now use this one, and the
+ * candidate order is the same for both.
+ *
+ * The working directory is still the LAST resort: it is the only candidate
+ * that works in the flattened installed tree. It is never the first.
+ */
+export function resolveSharedGovernanceModulePath(
+  relativePath,
+  { roots = [] } = {},
+) {
+  const candidates = [
+    ...roots
+      .filter((root) => typeof root === "string" && root.length > 0)
+      .map((root) => path.resolve(root, relativePath)),
+    path.resolve(_moduleDir, "../../../../" + relativePath),
+    path.resolve(process.cwd(), relativePath),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export async function loadSharedGovernanceModule(
+  relativePath,
+  { roots = [] } = {},
+) {
+  const candidates = [
+    ...roots
+      .filter((root) => typeof root === "string" && root.length > 0)
+      .map((root) => path.resolve(root, relativePath)),
+    path.resolve(_moduleDir, "../../../../" + relativePath),
+    path.resolve(process.cwd(), relativePath),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const loaded = await import(pathToFileURL(candidate).href);
+      if (loaded) return loaded;
+    } catch {
+      /* next candidate */
+    }
+  }
+  return null;
 }
 
 /**
@@ -235,7 +434,14 @@ async function ensureDependencies() {
  */
 export async function whenGovernanceDependenciesReady() {
   await ensureDependencies();
-  return Object.freeze({ ready: depsLoaded, policyLoaded: depsPolicyLoaded });
+  return Object.freeze({
+    // M12/T9 F-024: `ready` now means every shared module actually loaded.
+    ready: depsLoaded,
+    policyLoaded: depsPolicyLoaded,
+    pathSafetyLoaded: depsPathSafetyLoaded,
+    sqlLoaded: depsSqlLoaded,
+    n8nLoaded: depsN8nLoaded,
+  });
 }
 
 function fail(code) {
@@ -340,12 +546,17 @@ export function bindInvocationApproval({
   }
   const record = resolveAuthenticatedApproval(paths, approvalId);
   if (!record || typeof record !== "object") fail("AUTH_APPROVAL_INVALID");
-  if (originPrincipalRef) {
-    assert(
+  // M12/T9 F-245: the principal assertion was wrapped in a conditional, and
+  // the caller derives the reference from a three-deep fallback chain — so a
+  // task that names no principal silently lost the "who approved this"
+  // binding while every other check still passed. The reference is now
+  // REQUIRED: an approval that cannot name its principal is invalid.
+  assert(
+    typeof originPrincipalRef === "string" &&
+      originPrincipalRef.length > 0 &&
       record.owner_principal_ref === originPrincipalRef,
-      "AUTH_APPROVAL_INVALID",
-    );
-  }
+    "AUTH_APPROVAL_INVALID",
+  );
   assert(record.task_id === taskId, "AUTH_APPROVAL_INVALID");
   assert(
     String(record.brief_revision) === String(briefRevision),
@@ -499,33 +710,8 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
   // (A record that exists but fails the contract is a hard denial above, not a
   // fall-through to a later source.)
   if (paths && paths.root) {
-    const approvalsFile = path.join(paths.root, "approvals.json");
-    if (existsSync(approvalsFile)) {
-      let data;
-      try {
-        data = JSON.parse(readFileSync(approvalsFile, "utf8"));
-      } catch {
-        data = undefined;
-      }
-      if (data && data[approvalId]) {
-        // An approval record that EXISTS but does not satisfy the canonical
-        // contract is an explicit invalid-approval denial, not an absent one:
-        // silently degrading it to "not found" hides a tampered record behind a
-        // generic refusal.
-        validateApprovalRecord8Fields(data[approvalId]);
-        return data[approvalId];
-      }
-    }
-    const individualApprovalFile = path.join(
-      paths.root,
-      "approvals",
-      `${approvalId}.json`,
-    );
-    if (existsSync(individualApprovalFile)) {
-      const rec = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
-      validateApprovalRecord8Fields(rec);
-      return rec;
-    }
+    const fromFiles = readApprovalRecordFromFiles(paths, approvalId);
+    if (fromFiles) return fromFiles;
     let snapshot;
     try {
       snapshot = readSnapshot(paths);
@@ -540,6 +726,75 @@ export function resolveAuthenticatedApproval(paths, approvalId) {
     }
   }
   return null;
+}
+
+/**
+ * Read one approval from the two file-based stores under the ledger's
+ * `writer.lock`.
+ *
+ * M11/T3 B5: `consumeApprovalAtomically` consumes under that same lock, so an
+ * unlocked read here could observe `approvals.json` mid-write and then consume
+ * a record whose durable form the consumer never saw. Contention is a DENIAL
+ * (`null`), never an error: this is a read, and a new host-visible failure code
+ * on the approval path would be a larger change than the defect.
+ *
+ * A record that exists but violates the contract still throws
+ * `AUTH_APPROVAL_INVALID` — `withFileLockSync` propagates the callback's own
+ * errors and translates only acquisition failures.
+ *
+ * Deliberately NOT inside this lock: the ledger-sourced read in the caller.
+ * `readSnapshot` takes `writer.lock` itself and this primitive is single-attempt
+ * and non-reentrant, so wrapping it would turn every ledger-sourced approval into
+ * a contention denial.
+ */
+function readApprovalRecordFromFiles(paths, approvalId) {
+  const lock = lockDirFor(paths.root, "writer.lock");
+  let found;
+  try {
+    withFileLockSync(lock, () => {
+      const approvalsFile = path.join(paths.root, "approvals.json");
+      if (existsSync(approvalsFile)) {
+        let data;
+        try {
+          data = JSON.parse(readFileSync(approvalsFile, "utf8"));
+        } catch {
+          data = undefined;
+        }
+        if (data && data[approvalId]) {
+          // An approval record that EXISTS but does not satisfy the canonical
+          // contract is an explicit invalid-approval denial, not an absent one:
+          // silently degrading it to "not found" hides a tampered record behind a
+          // generic refusal.
+          validateApprovalRecord8Fields(data[approvalId]);
+          found = data[approvalId];
+          return;
+        }
+      }
+      const individualApprovalFile = path.join(
+        paths.root,
+        "approvals",
+        `${approvalId}.json`,
+      );
+      if (existsSync(individualApprovalFile)) {
+        // M11/T3 B5: the sibling store above already fails closed on an
+        // unparseable record. Parser text is not a governed denial — and on
+        // Node 20+ a `SyntaxError` message quotes the offending input, so
+        // leaving it raw could echo persisted content to the caller.
+        let record;
+        try {
+          record = JSON.parse(readFileSync(individualApprovalFile, "utf8"));
+        } catch {
+          return;
+        }
+        validateApprovalRecord8Fields(record);
+        found = record;
+      }
+    });
+  } catch (err) {
+    if (err?.code === "FILE_LOCK_BUSY") return null;
+    throw err;
+  }
+  return found ?? null;
 }
 
 function validateApprovalRecord8Fields(record) {
@@ -579,6 +834,12 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
   }
   const memConsumed = globalThis[consumedKey];
 
+  // M11/T3 B5 — documented limitation, kept intentionally: with no ledger root
+  // there is no durable store to record consumption against, so replay
+  // protection here is in-memory and single-process only. A second process, a
+  // restart, or the gateway's worker pool can each re-consume the same approval.
+  // Fixing it requires a durable consumption store, which is out of this task's
+  // scope; the behavior is recorded here rather than left to be rediscovered.
   if (!paths || !paths.root) {
     if (memConsumed.has(approvalId)) {
       return false;
@@ -630,11 +891,68 @@ export function consumeApprovalAtomically(paths, approvalId, claimScope) {
   }
 }
 
+/**
+ * M12/T9 F-114: evaluate a PROSPECTIVE root task.
+ *
+ * The claim is the caller's own statement of the task it is about to open. It
+ * is accepted only when it names the run that is being admitted - the same
+ * agent, the same session, the same run - and when it is a brief that may be
+ * entered at all (`brief_state: "ACTIVE"`). A claim that names another
+ * identity is refused with LINEAGE_MISMATCH, and the refusal keeps the
+ * original findSession failure as its cause.
+ *
+ * Nothing is written: the task is opened by the caller AFTER this verdict, so
+ * a refused admission leaves the ledger's sequence and task count untouched.
+ */
+function evaluateProspectiveTask(task, context, cause) {
+  const refuse = (code) => {
+    const error = new Error(code);
+    if (cause instanceof Error && error.cause === undefined)
+      error.cause = cause;
+    throw error;
+  };
+  if (!task || typeof task !== "object") refuse("LINEAGE_MISMATCH");
+  if (typeof task.task_id !== "string" || task.task_id.length === 0)
+    refuse("LINEAGE_MISMATCH");
+  if (task.brief_state !== "ACTIVE") refuse("INVALID_STATE_TRANSITION");
+  if (!Number.isSafeInteger(task.brief_revision) || task.brief_revision < 1)
+    refuse("INVALID_STATE_TRANSITION");
+  if (task.root_agent_id !== context.agentId)
+    refuse("INVALID_STATE_TRANSITION");
+  if (task.root_session_key !== context.sessionKey) refuse("LINEAGE_MISMATCH");
+  if (task.root_run_id !== context.runId) refuse("LINEAGE_MISMATCH");
+  return {
+    task_id: task.task_id,
+    task: {
+      task_id: task.task_id,
+      workflow_status: "ACTIVE",
+      brief_state: "ACTIVE",
+      brief_revision: task.brief_revision,
+      root_agent_id: task.root_agent_id,
+      root_session_key: task.root_session_key,
+      root_run_id: task.root_run_id,
+      nodes: [],
+      delegations: {},
+      continuations: {},
+    },
+    delegation: null,
+  };
+}
+
 export function createGovernanceGuard({
   paths,
   manifestFor,
   _snapshotOverride,
   quotaStore = null,
+  // M10/T2-R2: the queue is the lease authority, so current execution authority
+  // is established through the queue's own critical section rather than through
+  // the ledger. Production binds `(fence, operation) => queueManager
+  // .withExecutionFence(fence, operation)`. It is REQUIRED for coordinator
+  // mutation and deliberately absent for every other caller: a bound
+  // coordinator can mutate nothing without it, and delegation/root parents are
+  // unaffected. It is injected rather than imported so this module keeps no
+  // dependency edge to the queue projection.
+  queueExecutionFence = null,
 }) {
   const getSnapshot = () => _snapshotOverride || readSnapshot(paths);
   // T2/T3: process-local, agent-scoped. Never persisted; the host runtime owns
@@ -646,6 +964,41 @@ export function createGovernanceGuard({
     snapshots: new Map(),
     latches: new Map(),
   };
+
+  /**
+   * M10/T2-R2: commit one coordinator-originated governed mutation under CURRENT
+   * execution authority.
+   *
+   * A ledger binding is HISTORICAL IDENTITY: it survives stale recovery so the
+   * run can still be attributed. It is not execution authority. The queue lease
+   * is execution authority, and the queue is the only store that can revoke it,
+   * so the commit is executed inside the queue critical section itself. A lease
+   * revoked between identity resolution and this commit therefore cannot land:
+   * recovery takes the same lock and either precedes the whole fenced commit or
+   * follows it.
+   *
+   * Without an available authority seam the answer is a denial, never a
+   * fallback: an unestablished fence is EXECUTION_STATE_UNKNOWN, exactly like
+   * every other unresolvable governed state in this module.
+   */
+  function commitCoordinatorMutation(owner, commit) {
+    if (typeof queueExecutionFence !== "function") {
+      fail("EXECUTION_STATE_UNKNOWN");
+    }
+    const binding = owner.coordinatorRun;
+    return queueExecutionFence(
+      {
+        taskId: owner.task_id,
+        claimedBy: binding.coordinator,
+        // The lease and the attempt come from the BINDING, not from the caller:
+        // a caller can therefore only present the authority its own binding
+        // recorded, and the queue decides whether that authority is still live.
+        leaseId: binding.lease_id,
+        attempt: binding.attempt,
+      },
+      commit,
+    );
+  }
 
   /**
    * T2: record one provider-usage snapshot for the agent that owns it.
@@ -681,7 +1034,9 @@ export function createGovernanceGuard({
     requireQuotaDep();
     const owner = findSession(getSnapshot(), sessionKey, runId);
     assert(
-      (owner.delegation?.agent_id ?? owner.task.root_agent_id) === agentId,
+      (owner.delegation?.agent_id ??
+        owner.coordinatorRun?.coordinator ??
+        owner.task.root_agent_id) === agentId,
       "LINEAGE_MISMATCH",
     );
     return quotaTelemetry.resolveRuntimeModel({ store: quota, agentId, now });
@@ -731,19 +1086,35 @@ export function createGovernanceGuard({
       sanitizeDelegationText(brief.inputs) === brief.inputs,
       "POLICY_DENIED",
     );
-    if (context.agentId !== "main") {
-      const permitted =
-        context.agentId === "o1"
-          ? ["semantic", "intelligence", "decision"]
-          : context.agentId === "o2"
-            ? ["infrastructure", "data_plant"]
-            : [];
-      assert(
-        new Set(brief.nodes.map((node) => node.stack_id)).size === 1 &&
-          brief.nodes.every((node) => permitted.includes(node.stack_id)),
-        "UNAUTHORIZED_TARGET",
-      );
-    }
+    // A non-main author's permitted stacks used to be copied here by hand, with a
+    // one-stack-per-brief test; the copy had drifted to the inverse of
+    // AGENT_STACK_POLICY for o1/o2, refusing nodes the reducer had just admitted.
+    assert(
+      brief.nodes.every((node) =>
+        (AGENT_STACK_POLICY[node.agent_id] ?? []).includes(node.stack_id),
+      ),
+      "UNAUTHORIZED_TARGET",
+    );
+    // M10/T2-R14: the spawn-target authorization is asserted HERE, before the
+    // irreversible ledger write below, not only ~120 lines later at the
+    // `AGENT_SPAWN_POLICY` check. The later check is real but too late:
+    // `WORKFLOW_BRIEF_ACTIVATED` had already committed the nodes, and the
+    // reducer pins `brief_revision` to 1 whenever `task.nodes` is empty, so a
+    // brief naming an agent the caller may not spawn (e.g. Main naming
+    // `excel`, while `AGENT_SPAWN_POLICY.main` is `["o1","o2"]`) produced a
+    // task that could never be dispatched and had no revision path out — every
+    // retry re-matched the same node at `node.agent_id === params.agentId` and
+    // was denied `UNAUTHORIZED_TARGET` again. Failing BEFORE the commit turns
+    // an unrecoverable wedge into a plain refusal the caller can correct.
+    //
+    // This is the SAME canonical table the later check uses, so it grants
+    // nothing new; it only moves the verdict ahead of the durable effect.
+    assert(
+      brief.nodes.every((node) =>
+        (AGENT_SPAWN_POLICY[context.agentId] ?? []).includes(node.agent_id),
+      ),
+      "UNAUTHORIZED_TARGET",
+    );
     const nodes = brief.nodes.map((node) => {
       for (const field of ["inputs", "constraints", "validation_criteria"])
         assert(
@@ -827,12 +1198,33 @@ export function createGovernanceGuard({
         context.sessionKey,
         context.runId,
       );
+      // M10/T2: a bound coordinator end that reaches the guard directly (past
+      // the plugin's recognition path) is denied explicitly. Coordinator ends
+      // are never task-completion claims here — completion ingestion is a
+      // separate future task — so there is no valid branch for them in this
+      // function, only a clear denial instead of a misleading comparison
+      // against Main/root.
+      if (owner.coordinatorRun) fail("LINEAGE_MISMATCH");
       assert(
         (owner.delegation?.agent_id ?? owner.task.root_agent_id) ===
           context.agentId,
         "LINEAGE_MISMATCH",
       );
-      if (owner.delegation || event.yielded === true) return { allow: true };
+      if (owner.delegation) return { allow: true };
+      // F-088: a yield is not a success, but a run that yielded has made NO
+      // completion claim at all: `success` is absent, which is the documented
+      // path for a run that asked something and is waiting for the owner. That
+      // path is admitted, and the task stays open.
+      //
+      // What must never pass is an EXPLICIT failure carried on the yield flag.
+      // The flag used to short-circuit the success assertion below, so a
+      // FAILED run passed the run-end gate and recorded no terminal event at
+      // all: the ledger then showed an open task the owner had been told had
+      // finished.
+      if (event.yielded === true) {
+        if (event.success === false) fail("EXECUTION_STATE_UNKNOWN");
+        return { allow: true };
+      }
       assert(event.success === true, "EXECUTION_STATE_UNKNOWN");
       // M7-020: the root result closes governed work, so it requires an active
       // brief. The approval requirement belongs on the spawn RESERVATION, which
@@ -917,24 +1309,35 @@ export function createGovernanceGuard({
       if (typeof payload.output !== "string") {
         payload.output = String(payload.output ?? "");
       }
-      if (payload.output.length > 16384) {
-        payload.output = payload.output.slice(0, 16384);
-      }
+      // M10/T2-R15: byte-budgeted, because `agent-result-payload.schema.json` bounds
+      // `output` with `maxLength: 16384` and `schema.mjs` measures it with
+      // `Buffer.byteLength`. This slice counted CHARACTERS, so its own output
+      // failed the validator that runs two lines later — measured: 16384
+      // Vietnamese characters became 32768 bytes and were rejected as
+      // SCHEMA_VALIDATION_FAILED, with no recovery since the same slice repeats
+      // on every retry.
+      payload.output = truncateUtf8(payload.output, 16384);
       payload.output = sanitizeDelegationText(payload.output);
       payload.agent_self_validation = sanitizeDelegationText(
         payload.agent_self_validation,
       );
-      if (payload.agent_self_validation.length > 4096) {
-        payload.agent_self_validation = payload.agent_self_validation.slice(
-          0,
-          4096,
-        );
-      }
+      // M10/T2-R15: byte-budgeted for the same reason as `output` above — the contract
+      // bounds this field at `maxLength: 4096` BYTES. Measured: 4096 Vietnamese
+      // characters became 8192 bytes and were rejected.
+      payload.agent_self_validation = truncateUtf8(
+        payload.agent_self_validation,
+        4096,
+      );
+      // M10/T2-R15: these two were only sanitized and never bounded, while the
+      // contract limits every item to `maxLength: 4096` BYTES and the array to
+      // `maxItems: 16`. An over-long assumption therefore failed the whole
+      // result with no truncation and no recovery. Byte-budgeted here for the
+      // same reason as `output`.
       payload.assumptions = payload.assumptions.map((a) =>
-        sanitizeDelegationText(String(a)),
+        truncateUtf8(sanitizeDelegationText(String(a)), 4096),
       );
       payload.limitations = payload.limitations.map((l) =>
-        sanitizeDelegationText(String(l)),
+        truncateUtf8(sanitizeDelegationText(String(l)), 4096),
       );
 
       validateAgentClaim(payload);
@@ -964,58 +1367,126 @@ export function createGovernanceGuard({
       return { allow: true };
     },
 
-    beforeRun(_event, context) {
+    /**
+     * M12/T9 F-114: run admission with a PROSPECTIVE root task.
+     *
+     * `options.prospectiveTask` is the root task the caller is about to open:
+     * `{ task_id, brief_revision, brief_state, root_agent_id,
+     * root_session_key, root_run_id }`. It is evaluated ONLY when the ledger
+     * cannot resolve the run - the ledger is authoritative whenever it holds
+     * the task - and it is evaluated WITHOUT writing anything, so a refused
+     * admission leaves the sequence and the task count untouched.
+     *
+     * The options may be passed as the fourth argument or, when the third
+     * argument is not an abort signal, as the third.
+     */
+    beforeRun(_event, context, signalOrOptions, runOptions = {}) {
+      const prospectiveTask =
+        runOptions?.prospectiveTask ??
+        (signalOrOptions &&
+        typeof signalOrOptions === "object" &&
+        "prospectiveTask" in signalOrOptions
+          ? signalOrOptions.prospectiveTask
+          : null);
       const snapshot = getSnapshot();
       let owner;
       try {
         owner = findSession(snapshot, context.sessionKey, context.runId);
-      } catch {
-        const candidates = Object.entries(snapshot.tasks).filter(([, task]) => {
-          const entry = task.continuations?.[context.runId];
-          return (
-            entry && !entry.started && entry.session_key === context.sessionKey
+      } catch (findErr) {
+        // M12/T9 F-114: the prospective root task is the admission of a run
+        // whose task has NOT been opened yet. The plugin used to open the task
+        // INSIDE the admission predicate, so a refused admission left a task
+        // whose whole event history was one WORKFLOW_OPENED. The task is now
+        // opened after this verdict, and the verdict is taken against the
+        // claim the caller makes here - which is checked against the run's own
+        // identity, so a claim that names another session, run or agent is
+        // refused rather than admitted.
+        const prospective = prospectiveTask
+          ? evaluateProspectiveTask(prospectiveTask, context, findErr)
+          : null;
+        if (prospective) {
+          owner = prospective;
+        } else {
+          // M10/T2: a gateway-started coordinator run owns no root or delegation
+          // session, so findSession cannot resolve it. The ledger binding recorded
+          // at pickup time is the only legitimate alternative identity: it must
+          // match session, run AND agent exactly, otherwise the original failure
+          // stands and admission stays refused.
+          const bound = findBoundCoordinatorRun(
+            snapshot,
+            context.sessionKey,
+            context.runId,
+            context.agentId,
           );
-        });
-        assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
-        const [task_id, task] = candidates[0];
-        const entry = task.continuations?.[context.runId];
-        assert(
-          entry &&
-            context.inputProvenance?.kind === "inter_session" &&
-            context.inputProvenance.sourceTool === "subagent_announce" &&
-            context.inputProvenance.sourceSessionKey ===
-              entry.source_session_key,
-          "LINEAGE_MISMATCH",
-        );
-        // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
-        const trigger = Object.values(task.delegations || {}).find(
-          (run) => run.native_run_id === entry.trigger_run_id,
-        );
-        if (entry.trigger_run_id !== entry.previous_run_id) {
-          assert(
-            trigger && trigger.accepted_payload_digest,
-            "LINEAGE_MISMATCH",
-          );
-          if (context.inputProvenance.senderDigest) {
-            assert(
-              context.inputProvenance.senderDigest ===
-                trigger.accepted_payload_digest,
-              "LINEAGE_MISMATCH",
+          if (bound) {
+            owner = bound;
+          } else {
+            const candidates = Object.entries(snapshot.tasks).filter(
+              ([, task]) => {
+                const entry = task.continuations?.[context.runId];
+                return (
+                  entry &&
+                  !entry.started &&
+                  entry.session_key === context.sessionKey
+                );
+              },
             );
+            // F-059: the original findSession failure is the CAUSE of this
+            // refusal, and it used to be discarded (`void findErr`), so the
+            // operator saw a bare code with no reason attached. The refusal code
+            // names the symptom; the cause names the reason.
+            try {
+              assert(candidates.length === 1, "EXECUTION_STATE_UNKNOWN");
+              const [task_id, task] = candidates[0];
+              const entry = task.continuations?.[context.runId];
+              assert(
+                entry &&
+                  context.inputProvenance?.kind === "inter_session" &&
+                  context.inputProvenance.sourceTool === "subagent_announce" &&
+                  context.inputProvenance.sourceSessionKey ===
+                    entry.source_session_key,
+                "LINEAGE_MISMATCH",
+              );
+              // E13: Cryptographically bind inter-session trust to the trigger sender event & accepted payload digest
+              const trigger = Object.values(task.delegations || {}).find(
+                (run) => run.native_run_id === entry.trigger_run_id,
+              );
+              if (entry.trigger_run_id !== entry.previous_run_id) {
+                assert(
+                  trigger && trigger.accepted_payload_digest,
+                  "LINEAGE_MISMATCH",
+                );
+                if (context.inputProvenance.senderDigest) {
+                  assert(
+                    context.inputProvenance.senderDigest ===
+                      trigger.accepted_payload_digest,
+                    "LINEAGE_MISMATCH",
+                  );
+                }
+              }
+              const next = recordWorkflowEvent(
+                paths,
+                "WORKFLOW_CONTINUATION_STARTED",
+                {
+                  task_id,
+                  next_run_id: context.runId,
+                  session_key: context.sessionKey,
+                  source_session_key: context.inputProvenance.sourceSessionKey,
+                  agent_id: context.agentId,
+                },
+              );
+              owner = findSession(next, context.sessionKey, context.runId);
+            } catch (cause) {
+              // F-059: the original findSession failure is the CAUSE of this
+              // refusal. The refusal code still names the symptom; the cause
+              // names the reason. The refusal itself is re-thrown unchanged -
+              // only the discarded reason is attached underneath it.
+              if (cause instanceof Error && cause.cause === undefined)
+                cause.cause = findErr;
+              throw cause;
+            }
           }
         }
-        const next = recordWorkflowEvent(
-          paths,
-          "WORKFLOW_CONTINUATION_STARTED",
-          {
-            task_id,
-            next_run_id: context.runId,
-            session_key: context.sessionKey,
-            source_session_key: context.inputProvenance.sourceSessionKey,
-            agent_id: context.agentId,
-          },
-        );
-        owner = findSession(next, context.sessionKey, context.runId);
       }
       // M7-020: this is RUN ADMISSION, not work authorization. A native run may
       // enter a task whether or not the work has been approved; the approval
@@ -1027,9 +1498,13 @@ export function createGovernanceGuard({
         ) && owner.task.brief_state === "ACTIVE",
         "INVALID_STATE_TRANSITION",
       );
+      // M10/T2: a bound coordinator resolves to its bound coordinator identity,
+      // never to Main/root. The fallback order is load-bearing: delegation first,
+      // then binding, then root.
       assert(
-        (owner.delegation?.agent_id ?? owner.task.root_agent_id) ===
-          context.agentId,
+        (owner.delegation?.agent_id ??
+          owner.coordinatorRun?.coordinator ??
+          owner.task.root_agent_id) === context.agentId,
         "INVALID_STATE_TRANSITION",
       );
       assert(
@@ -1110,25 +1585,18 @@ export function createGovernanceGuard({
           owner = findSession(snapshot, context.sessionKey, context.runId);
         }
         const task = owner.task;
+        // M10/T2: same load-bearing fallback order as admission: a bound
+        // coordinator resolves to its bound coordinator identity, never to
+        // Main/root.
         assert(
-          (owner.delegation?.agent_id ?? task.root_agent_id) ===
-            context.agentId,
+          (owner.delegation?.agent_id ??
+            owner.coordinatorRun?.coordinator ??
+            task.root_agent_id) === context.agentId,
           "LINEAGE_MISMATCH",
         );
         // M7-020: a spawn reservation is a POST-approval event, matching the
-        // reducer. The pre-flight check states the same condition the
-        // authoritative reservation will enforce, so the two cannot disagree
-        // about whether the work was approved. Read-only session inspection is
-        // not governed work and is unaffected.
-        if (event.toolName === "sessions_spawn") {
-          assert(
-            typeof task.approved_at === "string" &&
-              !Number.isNaN(Date.parse(task.approved_at)) &&
-              ["QUEUED", "EXECUTING"].includes(task.workflow_status) &&
-              task.brief_state === "ACTIVE",
-            "AUTH_APPROVAL_REQUIRED",
-          );
-        }
+        // reducer. Read-only session inspection is not governed work and is
+        // unaffected.
         if (owner.delegation)
           assert(
             owner.delegation.run_state === "RUNNING" &&
@@ -1239,6 +1707,11 @@ export function createGovernanceGuard({
             node.stack_id === owner.delegation.stack_id,
             "UNAUTHORIZED_TARGET",
           );
+        // M10/T2: a bound coordinator is root-like (top of its subtree, no
+        // parent delegation), so like a root spawn it carries no parent-stack
+        // constraint. Target containment stays enforced by the canonical
+        // AGENT_SPAWN_POLICY allowlist above, which is the same table the
+        // dispatch derivation already enforced before the claim.
         const handoff = {
           ...proposal,
           task_id: owner.task_id,
@@ -1270,9 +1743,14 @@ export function createGovernanceGuard({
                 : 0),
             delegated_runs:
               BUDGETS.maxTotalDelegatedRunsPerTask -
-              LEGACY_DELEGATED_RUN_CARVE_OUT[
+              // M10/T2-R12: versions without a legacy carve-out entry get zero,
+              // not NaN. Without `?? 0` any proposal whose governance_version
+              // is not in the map poisons the whole budget to NaN and every
+              // guard spawn dies here — previously masked because the approval
+              // check fired first.
+              (LEGACY_DELEGATED_RUN_CARVE_OUT[
                 proposal.governance_version ?? ""
-              ] -
+              ] ?? 0) -
               task.delegated_runs_used,
           },
           requested_output_schema: "agent-result-payload.schema.json",
@@ -1313,12 +1791,22 @@ export function createGovernanceGuard({
               node.validation_digest,
           "LINEAGE_MISMATCH",
         );
-        for (const ref of handoff.input_refs)
-          assert(
-            task.accepted_reference_digests?.[ref.ref_id] ===
-              canonicalHash("zink-reference-v1", ref),
-            "REFERENCE_INVALID",
-          );
+        // M12/T9 F-247: the task's reference-digest slot is GONE.
+        //
+        // The slot was declared by the published snapshot contract and read
+        // here, but NO event type carried reference digests and NO reducer
+        // branch wrote it, so the comparison was always
+        // `undefined === <hex>`: every handoff that carried an `input_refs`
+        // entry was refused with REFERENCE_INVALID, forever. The owner ruled
+        // on 2026-10-21 ("bỏ ô" - drop the field) that the unwritten slot is
+        // removed from the contract and from every reader, rather than a new
+        // event type and reducer branch being invented for it.
+        //
+        // The reference itself is still validated: the handoff is checked
+        // against the PUBLISHED `delegation-envelope` contract above, whose
+        // `input_refs` items are `$ref`s to `governed-reference.schema.json`.
+        // What is gone is only the comparison against a slot that no writer
+        // could ever fill.
         // M8-055: this governed route and the live adapter route both build
         // the reservation through the same canonical builder, so the
         // delegation id and request digest cannot diverge between them.
@@ -1339,7 +1827,35 @@ export function createGovernanceGuard({
           spec.delegation_id === handoff.delegation_id,
           "LINEAGE_MISMATCH",
         );
-        recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
+        // M10/T2-R2: the reservation is the authorization artifact, so this is
+        // the authoritative mutation boundary. A coordinator parent commits it
+        // under current execution authority; every other parent keeps the
+        // existing unfenced path, whose pre-approval, topology, budget and
+        // lineage rules are unchanged.
+        //
+        // M10/T2-R12: the approval precondition is evaluated HERE, after all
+        // params/node/topology/budget/lineage validation, immediately before
+        // the commit. It states the same condition the reducer enforces for
+        // WORKFLOW_SPAWN_RESERVED, so the two cannot disagree — and a denial
+        // with AUTH_APPROVAL_REQUIRED now structurally implies an otherwise
+        // valid request. Previously this check fired before validation, which
+        // let malformed requests report "needs approval" for work that could
+        // never be approved. Same condition, later position; no valid request
+        // changes verdict, and REQUESTED still never satisfies this gate.
+        assert(
+          typeof task.approved_at === "string" &&
+            !Number.isNaN(Date.parse(task.approved_at)) &&
+            ["QUEUED", "EXECUTING"].includes(task.workflow_status) &&
+            task.brief_state === "ACTIVE",
+          "AUTH_APPROVAL_REQUIRED",
+        );
+        const commitReservation = () =>
+          recordWorkflowEvent(paths, "WORKFLOW_SPAWN_RESERVED", spec);
+        if (owner.coordinatorRun) {
+          commitCoordinatorMutation(owner, commitReservation);
+        } else {
+          commitReservation();
+        }
         return {
           allow: true,
           spawnLabel: spec.delegation_id,
@@ -1371,7 +1887,13 @@ export function createGovernanceGuard({
 
       // 5. Zink Contract Schema Validation
       try {
-        validateContractSchema("tool-call", event.params);
+        // M12/T9 F-272: the budget is the one the module publishes, not the
+        // validator's old 64 KiB default.
+        validateContractSchema(
+          "tool-call",
+          event.params,
+          TOOL_CALL_ENVELOPE_MAX_BYTES,
+        );
       } catch {
         fail("SCHEMA_VALIDATION_FAILED");
       }
@@ -1387,26 +1909,26 @@ export function createGovernanceGuard({
       }
 
       // 6. Logical Artifact Path Validation
-      if (
-        candidateToolId === "zink_excel" &&
-        validatedParams.input?.file_path
-      ) {
-        requireDep(depsPathSafetyLoaded);
-        try {
-          validateArtifactLogicalPath(validatedParams.input.file_path);
-        } catch {
-          fail("SCHEMA_VALIDATION_FAILED");
-        }
-      }
-      if (
-        candidateToolId === "zink_python" &&
-        validatedParams.input?.entrypoint
-      ) {
-        requireDep(depsPathSafetyLoaded);
-        try {
-          validateArtifactLogicalPath(validatedParams.input.entrypoint);
-        } catch {
-          fail("SCHEMA_VALIDATION_FAILED");
+      //
+      // M12/T9 F-051: the check is SCHEMA-DRIVEN, not keyed by tool id. The
+      // published tool-call envelope names every governed tool and `$ref`s that
+      // tool's `$defs.input`, so the field set of every governed tool is
+      // derivable from the contract the call was already validated against. The
+      // path-shaped subset of those fields is declared once, below, and is
+      // cross-checked against the contracts at runtime: a governed tool with no
+      // declaration, or a declaration naming a field the contract does not
+      // declare, FAILS CLOSED instead of skipping the check.
+      {
+        const pathFields = pathShapedInputFieldsFor(candidateToolId);
+        for (const field of pathFields) {
+          const value = validatedParams.input?.[field];
+          if (value === undefined || value === null) continue;
+          requireDep(depsPathSafetyLoaded);
+          try {
+            validateArtifactLogicalPath(value);
+          } catch {
+            fail("SCHEMA_VALIDATION_FAILED");
+          }
         }
       }
 
@@ -1527,14 +2049,33 @@ export function createGovernanceGuard({
           ownerSession.task?.nodes?.find((n) => n.agent_id === del.agent_id)
             ?.stack_id ??
           "data_plant";
+        // A-2 / R1-A04-05: this assert answers "is this a stack the protocol
+        // knows?", which is a scope question, not an existence question. The
+        // delegations above it already established identity, so reporting a
+        // stack-scope refusal as AUTH_DELEGATION_NOT_FOUND told the operator a
+        // delegation could not be found when the guard had just read it. The
+        // code is the one this guard already uses for a scope mismatch.
         assert(
           typeof delStackId === "string" && STACK_IDS.includes(delStackId),
-          "AUTH_DELEGATION_NOT_FOUND",
+          "AUTH_SCOPE_MISMATCH",
         );
+        // M12/T9 F-371: the delegation's TOOL SCOPE comes from the canonical
+        // policy ceiling, not from a field the ledger never records. The
+        // published spawn-proposal contract forbids an `allowed_tools` member
+        // (its payload is `additionalProperties: false` and names exactly
+        // fourteen fields), so the ledger's delegation record could never carry
+        // one: the check could never be satisfied and EVERY delegated tool call
+        // was refused with AUTH_DELEGATION_NOT_FOUND before it could reach a
+        // specialist. The delegation says WHICH agent may run the call; the
+        // policy's TOOL_POLICY is the canonical upper authorization ceiling and
+        // says WHICH tools that agent may run, and the capability matrix (step
+        // 7) says at which level. The scope is therefore narrower than before,
+        // never wider: the ceiling and the matrix both still apply.
+        const delegationTools = policy.TOOL_POLICY?.[del.agent_id] ?? [];
         assert(
-          Array.isArray(del.allowed_tools) &&
-            new Set(del.allowed_tools).size === del.allowed_tools.length &&
-            del.allowed_tools.every(
+          Array.isArray(delegationTools) &&
+            new Set(delegationTools).size === delegationTools.length &&
+            delegationTools.every(
               (id) => typeof id === "string" && id in CALLABLE_TOOL_REGISTRY,
             ),
           "AUTH_DELEGATION_NOT_FOUND",
@@ -1582,10 +2123,7 @@ export function createGovernanceGuard({
           "AUTH_SCOPE_MISMATCH",
         );
         assert(runId === delRunId, "LINEAGE_MISMATCH");
-        assert(
-          del.allowed_tools.includes(candidateToolId),
-          "AUTH_POLICY_DENIED",
-        );
+        assert(delegationTools.includes(candidateToolId), "AUTH_POLICY_DENIED");
 
         if (candidateToolId === "zink_python") {
           assert(
@@ -1738,7 +2276,14 @@ export function createGovernanceGuard({
 
       // 12. Post-Dispatch Result Validation & Correlation
       try {
-        validateContractSchema("tool-result", rawResult);
+        // M12/T9 F-272: the budget is the one the module publishes, not the
+        // validator's old 64 KiB default, which was an order of magnitude
+        // below what the published tool-output contracts allow.
+        validateContractSchema(
+          "tool-result",
+          rawResult,
+          TOOL_RESULT_ENVELOPE_MAX_BYTES,
+        );
       } catch {
         fail("SCHEMA_VALIDATION_FAILED");
       }
@@ -1769,12 +2314,12 @@ export function createGovernanceGuard({
         run && run.parent_session_key === event.requesterSessionKey,
         "LINEAGE_MISMATCH",
       );
-      if (
-        run.run_state === "CANCELLED" ||
-        run.brief_revision !== owner.task.brief_revision ||
-        owner.task.brief_state !== "ACTIVE"
-      )
-        return { action: "discard" };
+      if (run.run_state === "CANCELLED")
+        return { action: "discard", reason: "AUTH_DELEGATION_INACTIVE" };
+      if (run.brief_revision !== owner.task.brief_revision)
+        return { action: "discard", reason: "REVISION_SUPERSEDED" };
+      if (owner.task.brief_state !== "ACTIVE")
+        return { action: "discard", reason: "SUPERSEDED_REVISION" };
       if (event.phase === "descendant_wake") {
         const children = Object.values(owner.task.delegations).filter((item) =>
           ownerRunIds(owner).includes(item.parent_run_id),
@@ -1840,7 +2385,8 @@ export function createGovernanceGuard({
       validateAgentClaim(payload);
       const digest = payloadDigest(payload);
       const duplicate = run.accepted_payload_digest === digest;
-      if (duplicate && !event.nextRunId) return { action: "discard" };
+      if (duplicate && !event.nextRunId)
+        return { action: "discard", reason: "STALE_RESULT" };
       const governance = manifest(run.agent_id);
       assert(
         governance.expected_governance_hash === run.expected_governance_hash,

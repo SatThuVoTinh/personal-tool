@@ -1,11 +1,31 @@
 import {
   buildSpawnProposal,
   canonicalHash,
+  deriveApprovalPlanDigest,
+  deriveLegacyDelegationId,
   deriveTaskId,
+  isTaskCodeForm,
+  normalizeGovernanceThreadId,
+  TASK_CODE_LENGTH,
+  TASK_CODE_PATTERN,
+  TASK_ID_PATTERN,
 } from "./canonical.mjs";
-import { validateContract } from "./schema.mjs";
-import { outcomeReasonAllowed, workflowAggregate } from "./runtime.mjs";
-import { AGENT_STACK_POLICY } from "../../lib/authority.mjs";
+import { validateContract, eventPayloadEnum } from "./schema.mjs";
+import {
+  isDeclaredReasonCode,
+  outcomeReasonAllowed,
+  workflowAggregate,
+  OUTCOME_STATUSES,
+} from "./runtime.mjs";
+import {
+  AGENT_STACK_POLICY,
+  DASHBOARD_CRAFT_AGENTS,
+} from "../../lib/authority.mjs";
+import { AGENT_SPAWN_POLICY } from "../../lib/policy.mjs";
+// B-7: the ceilings are declared once, in the ledger's canonical `BUDGETS`. `ledger.mjs:18`
+// imports this module in turn, so the cycle is real and safe only because every read below
+// happens inside a function body, after both modules have finished evaluating.
+import { BUDGETS } from "./ledger.mjs";
 
 // D11-D13: roles must match canonical AGENT_SPAWN_POLICY in policy.mjs.
 // main coordinates only through o1/o2; specialists have no spawn targets.
@@ -26,12 +46,218 @@ const terminal = new Set([
   "CANCELLED",
   "REJECTED",
 ]);
+
+// M12/T9 F-060: the coordinator-selection rule.
+//
+// The owner's ruling (2026-10-21): "Khi 1 việc được giao, main @Quản Lý làm
+// điều phối chính, riêng phần data sẽ chia nhỏ việc, main giao việc cho @O1
+// Điều phối 1 và @O2 Điều Phối 2. @O2 phụ trách điều phối và làm việc với các
+// agent chuyên môn liên quan đến data visualize, storytelling, @O1 phụ trách
+// điều phối và làm việc với các agent chuyên môn liên quan đến data etl,
+// data labeling".
+//
+// The owner RESTATED the rule the same day (2026-10-21): "tất cả những
+// công đoạn làm việc với dữ liệu ngoại trừ lập dashboard
+// và liên quan data visualization đều giao cho O1 vì dashboard + data
+// visualization thuộc O2" - EVERY work step that works WITH DATA belongs to
+// @O1, EXCEPT the dashboard and the data-visualization work, which belongs to
+// @O2.
+//
+// The rule is expressed over the CANONICAL tables, which are read here and
+// changed only by the owner's ruling:
+//
+//   AGENT_SPAWN_POLICY  main: [o1, o2]
+//                       o1: [excel, sql, python]
+//                       o2: [power-bi, python]
+//   AGENT_STACK_POLICY  main: [infrastructure, data_plant, semantic,
+//                              intelligence, decision]
+//                       o1: [infrastructure, data_plant, semantic]
+//                       o2: [intelligence, decision]
+//
+// THREE questions, THREE answers:
+//
+//   root    - WHO COORDINATES the task: the most specific member of the
+//             canonical spawn policy that can reach every REQUIRED node's
+//             agent_id. `main` is the answer whenever the work spans both
+//             coordinators, because main is the only agent that can spawn both
+//             o1 and o2.
+//   owners  - WHICH COORDINATOR OWNS EACH NODE: derived from the node's
+//             stack_id against the canonical stack policy, which the owner
+//             RESTATED on 2026-10-21. EVERY work step that works WITH DATA
+//             belongs to @O1 - the platform (infrastructure), the ETL and the
+//             labeling (data_plant) and the meaning layer (semantic: KPI,
+//             metric, schema meaning, business rules) - EXCEPT the dashboard
+//             and the data-visualization work, which belongs to @O2
+//             (intelligence: charts and dashboards; decision: the decision
+//             report). The STACK decides for `python`, which BOTH o1 and o2
+//             may spawn: python under data_plant is o1's, python under
+//             intelligence is o2's. And the DASHBOARD is recognised by its
+//             CRAFT: `power-bi` builds it wherever the plan puts it, so a
+//             `power-bi` step is o2's even on a stack o1 owns.
+//   primary - the coordinator that EXECUTES the task: the unique OWNER of the
+//             required nodes. More than one owner (a brief that spans both
+//             domains) or no owner at all (a stack no coordinator owns) leaves
+//             the field UNSET and the dispatch refuses the task with
+//             COORDINATOR_NOT_EXECUTABLE. The field is never defaulted, and it
+//             is never "main": main coordinates, it does not execute.
+//
+// The canonical spawn table is read here - not the local `roles` mirror above -
+// so the derivation can never disagree with the containment check the dispatch
+// derivation performs (lib/policy.mjs reads the same table).
+const EXECUTABLE_COORDINATORS = Object.freeze(["o1", "o2"]);
+
+/** The agents one agent can reach through the canonical spawn policy. */
+function spawnClosure(agentId) {
+  const seen = new Set();
+  const pending = [...(AGENT_SPAWN_POLICY[agentId] ?? [])];
+  while (pending.length > 0) {
+    const child = pending.pop();
+    if (seen.has(child)) continue;
+    seen.add(child);
+    pending.push(...(AGENT_SPAWN_POLICY[child] ?? []));
+  }
+  return seen;
+}
+
+const SPAWN_CLOSURES = Object.freeze(
+  Object.fromEntries(
+    Object.keys(AGENT_SPAWN_POLICY).map((agentId) => [
+      agentId,
+      Object.freeze([...spawnClosure(agentId)]),
+    ]),
+  ),
+);
+
+/**
+ * The coordinator that owns a stack, per the canonical stack policy.
+ *
+ * The two executable coordinators' stack sets are disjoint, so a canonical
+ * stack has exactly one owner. A stack no coordinator owns has NO owner: the
+ * caller fails closed rather than guessing.
+ */
+function coordinatorForStack(stackId) {
+  const owners = EXECUTABLE_COORDINATORS.filter((coordinator) =>
+    (AGENT_STACK_POLICY[coordinator] ?? []).includes(stackId),
+  );
+  return owners.length === 1 ? owners[0] : null;
+}
+
+/**
+ * The coordinator that owns a WORK STEP.
+ *
+ * The stack decides, from the ONE canonical table: the data work is @O1's and
+ * the dashboard and the data-visualization work is @O2's (M12/T9 F-060, the
+ * owner's restatement of 2026-10-21).
+ *
+ * One exception, and it is the owner's own rule rather than a guess: the
+ * DASHBOARD is recognised by its CRAFT as well as by its stack. `power-bi`
+ * builds the dashboard wherever the plan puts it - including on the `semantic`
+ * stack, the KPI and metric meaning behind the report - and @O1 cannot spawn
+ * `power-bi` at all, so a dashboard step is @O2's whatever the stack label
+ * says.
+ *
+ * A stack no coordinator owns has NO owner: the caller fails closed rather
+ * than guessing.
+ */
+function coordinatorForWorkStep(node) {
+  const stackOwner = coordinatorForStack(node?.stack_id);
+  if (stackOwner === null) return null;
+  if (stackOwner === "o1" && DASHBOARD_CRAFT_AGENTS.includes(node?.agent_id))
+    return "o2";
+  return stackOwner;
+}
+
+/**
+ * M12/T9 F-060: the coordinator-selection rule, applied to a task's nodes.
+ *
+ * Returns `{ root, primary, owners }`:
+ *
+ *   - `owners`  - the per-node owner (the canonical stack policy), in the
+ *     order of the REQUIRED nodes. `null` for a node whose stack no
+ *     coordinator owns.
+ *   - `root`    - the coordinator that coordinates the task, or `null` when
+ *     the answer is not unique.
+ *   - `primary` - the coordinator that EXECUTES the task: the unique owner of
+ *     the required nodes, otherwise `null`. `null` means the field stays unset
+ *     and the dispatch refuses the task; it never means "main" and it never
+ *     means a default.
+ */
+export function deriveTaskCoordinators(nodes) {
+  const required = (Array.isArray(nodes) ? nodes : []).filter(
+    (node) => node?.required === true,
+  );
+  const owners = required.map((node) => coordinatorForWorkStep(node));
+  const requiredAgentIds = [
+    ...new Set(
+      required
+        .map((node) => node?.agent_id)
+        .filter((agentId) => typeof agentId === "string" && agentId.length > 0),
+    ),
+  ];
+  if (requiredAgentIds.length === 0) {
+    return { root: null, primary: null, owners };
+  }
+  // The candidates: the COORDINATING agents - the members of the canonical
+  // spawn policy that can spawn at all (main, o1 and o2; the specialists have
+  // an empty spawn set and coordinate nothing) - that can reach EVERY
+  // required node. An agent reaches itself, so a required node that IS a
+  // coordinator names its owner.
+  const candidates = Object.keys(AGENT_SPAWN_POLICY).filter(
+    (agentId) =>
+      (AGENT_SPAWN_POLICY[agentId] ?? []).length > 0 &&
+      requiredAgentIds.every(
+        (requiredAgentId) =>
+          agentId === requiredAgentId ||
+          SPAWN_CLOSURES[agentId].includes(requiredAgentId),
+      ),
+  );
+  // The most specific candidate: a candidate that can reach ANOTHER candidate
+  // is the more general one (main reaches o1 and o2), so it is not the root.
+  const specific = candidates.filter(
+    (candidate) =>
+      !candidates.some(
+        (other) =>
+          other !== candidate && SPAWN_CLOSURES[candidate].includes(other),
+      ),
+  );
+  let root = null;
+  if (specific.length === 1) {
+    root = specific[0];
+  } else if (specific.length > 1) {
+    // The STACK decides the tie: `python` is spawnable by BOTH o1 and o2, so
+    // the domain the node belongs to decides who owns it.
+    const distinctOwners = [...new Set(owners.filter(Boolean))];
+    if (distinctOwners.length === 1 && specific.includes(distinctOwners[0])) {
+      root = distinctOwners[0];
+    }
+  }
+  // The EXECUTING coordinator: the unique owner of the required nodes, derived
+  // from the canonical stack policy. More than one owner (a brief that spans
+  // both domains) or no owner at all (a stack no coordinator owns) leaves the
+  // field UNSET, and the dispatch then refuses the task. The field is never
+  // defaulted and never "main": main coordinates, it does not execute.
+  const distinctOwners = [...new Set(owners)];
+  const primary =
+    distinctOwners.length === 1 && distinctOwners[0] !== null
+      ? distinctOwners[0]
+      : null;
+  return { root, primary, owners };
+}
+// M12/T9 F-082: the terminal vocabulary, exported so the ledger's
+// reconciliation reader and the reducer can never disagree about which status
+// is terminal. One declaration, two readers.
+export const TERMINAL_WORKFLOW_STATUSES = terminal;
 // D05: BLOCKED is not an active run — blocked runs must not count as active
 // for prerequisite checks (would cause deadlock). BLOCKED requires recovery.
 const activeRun = new Set(["PENDING", "SPAWN_UNKNOWN", "RUNNING", "UNKNOWN"]);
+// M12/T9 F-127: the cancellation reasons the published ledger-event CONTRACT
+// can carry, read from the contract itself rather than re-listed here.
+const CANCELLATION_REASON_CODES = Object.freeze(
+  eventPayloadEnum("ledger-event", "WORKFLOW_CANCELLED", "reason_code") ?? [],
+);
 // M8-056: the documented transient-failure class. Only these reasons justify a
 // retry; every other failure class has no automatic or operator retry path.
-const TRANSIENT_FAILURE_CLASS = new Set([
+export const TRANSIENT_FAILURE_CLASS = new Set([
   "TRANSIENT_RUNTIME_FAILURE",
   "RUN_TIMEOUT",
 ]);
@@ -84,6 +310,15 @@ function digest(value) {
     "SCHEMA_INVALID",
   );
 }
+// M12/T1-R1: a task identity is either the 64-hex id the live ledger was built
+// with or the 12-character code the owner made authoritative. Readers must accept
+// both or the existing events stop replaying; only the new shape is ever minted.
+function taskIdentity(value) {
+  requireCondition(
+    typeof value === "string" && new RegExp(TASK_ID_PATTERN, "u").test(value),
+    "SCHEMA_INVALID",
+  );
+}
 
 export function findSession(
   snapshot,
@@ -107,15 +342,69 @@ export function findSession(
             (delegation.previous_native_run_ids ?? []).includes(runId)))
       )
         matches.push({ task_id, task, delegation });
+    // M10/T2: bound coordinator runs resolve as a THIRD owner shape carrying
+    // coordinatorRun and deliberately NO delegation object. Consumers must
+    // handle this shape explicitly: falling back to
+    // `owner.delegation?.X ?? task.root_Y` would silently authorize a bound
+    // coordinator as Main/root, which is never correct.
+    for (const coordinatorRun of Object.values(task.coordinator_runs ?? {}))
+      if (
+        coordinatorRun.session_key === sessionKey &&
+        coordinatorRun.run_id === runId
+      )
+        matches.push({ task_id, task, coordinatorRun });
   }
   requireCondition(matches.length === 1, "EXECUTION_STATE_UNKNOWN");
   return matches[0];
 }
 
+/**
+ * M10/T2: resolve a gateway-started coordinator run to its ledger binding
+ * without requiring delegation lineage. Returns `{ task_id, task,
+ * coordinatorRun }` when exactly one binding matches the session/run pair and
+ * the bound coordinator equals the observed agent; otherwise null. Unlike
+ * findSession, this never throws: hook call sites use it as a recognition
+ * probe before deciding between the bound-run path and the existing
+ * fail-closed behavior. The agent check is part of recognition (not left to
+ * callers) so a session key alone can never attribute one coordinator's run
+ * to another agent.
+ */
+export function findBoundCoordinatorRun(snapshot, sessionKey, runId, agentId) {
+  if (
+    typeof sessionKey !== "string" ||
+    typeof runId !== "string" ||
+    typeof agentId !== "string"
+  ) {
+    return null;
+  }
+  let matched = null;
+  for (const [task_id, task] of Object.entries(snapshot?.tasks ?? {})) {
+    for (const coordinatorRun of Object.values(task.coordinator_runs ?? {})) {
+      if (
+        coordinatorRun.session_key === sessionKey &&
+        coordinatorRun.run_id === runId &&
+        coordinatorRun.coordinator === agentId
+      ) {
+        if (matched) return null;
+        matched = { task_id, task, coordinatorRun };
+      }
+    }
+  }
+  return matched;
+}
+
 // D07: ownerRunIds returns only the current run ID by default to prevent
 // generation-skip lineage matching. Pass includePrevious=true only when
 // explicit continuation history traversal is authorized (findSession does so).
+//
+// M10/T2: a bound coordinator run is identified by its own gateway-issued
+// run_id. It has no previous run identities: attempt isolation means a stale
+// run's identity must never satisfy a newer attempt, so there is deliberately
+// no previous_native_run_ids list for bindings.
 export function ownerRunIds(owner, includePrevious = true) {
+  if (!owner.delegation && owner.coordinatorRun) {
+    return [owner.coordinatorRun.run_id];
+  }
   if (owner.delegation) {
     return includePrevious
       ? [
@@ -148,14 +437,48 @@ function isSupersededAttempt(task, run) {
 // M7-041: the agent that owns a run identity. A run is owned by exactly one
 // agent, so an event claiming a different agent_id is a lineage violation, not
 // a presentation detail.
+//
+// M12/T9 F-076: a bound coordinator run owns its OWN turn. Without this branch
+// the owner of a coordinator-bound task was always reported as the ROOT agent,
+// so a question the coordinator actually asked was attributed to a run that
+// never asked it.
 function ownerRunAgentId(owner, task) {
+  if (owner.coordinatorRun) return owner.coordinatorRun.coordinator;
   return owner.delegation ? owner.delegation.agent_id : task.root_agent_id;
+}
+
+/**
+ * M12/T9 F-076: the LIVE coordinator binding of a task.
+ *
+ * A coordinator run is bound to a queue attempt by WORKFLOW_COORDINATOR_RUN_BOUND,
+ * and an attempt is single-use: the reducer refuses to bind an attempt below one
+ * that is already bound, so the HIGHEST bound attempt is the live generation and
+ * every older binding is audit history.
+ *
+ * A coordinator run has no delegation, so it cannot be read from the delegation
+ * projection the way a RUNNING delegation is. It is the third owner shape the
+ * ledger already declares (see findSession): a gateway-started run that owns the
+ * task's execution without delegation lineage.
+ */
+function liveCoordinatorRun(task) {
+  const bindings = Object.values(task.coordinator_runs ?? {});
+  if (bindings.length === 0) return null;
+  return bindings.reduce((live, candidate) =>
+    Number(candidate?.attempt) > Number(live?.attempt) ? candidate : live,
+  );
 }
 
 // M7-041: the canonical current run owner of a task. Exactly one run may be
 // live at a time: the single RUNNING delegation, otherwise the root run. Any
 // caller that must name the governing run takes it from here rather than from
 // caller-controlled data, and the reducer re-derives the same value.
+//
+// M12/T9 F-076: a bound coordinator run IS the live run of its task. The
+// gateway started that run and it is the one executing the task, so naming the
+// root run instead attributed a governed question to a run that did not ask
+// it. The order is unchanged for the other two shapes: a RUNNING delegation is
+// still the owner when one exists, because a specialist that is running is the
+// live turn.
 export function resolveCurrentRunOwner(task) {
   const running = Object.values(task.delegations ?? {}).filter(
     (run) => run.run_state === "RUNNING",
@@ -170,6 +493,15 @@ export function resolveCurrentRunOwner(task) {
       session_key: run.child_session_key,
       run_id: run.native_run_id,
       attempt: run.attempt,
+    };
+  }
+  const coordinator = liveCoordinatorRun(task);
+  if (coordinator) {
+    return {
+      agent_id: coordinator.coordinator,
+      session_key: coordinator.session_key,
+      run_id: coordinator.run_id,
+      attempt: coordinator.attempt,
     };
   }
   return {
@@ -211,15 +543,27 @@ export function applyWorkflowEvent(
   const next = globalThis.structuredClone(snapshot);
   const eventTime = eventTimestamp || new Date().toISOString();
   if (type === "WORKFLOW_OPENED") {
-    exactKeys(payload, [
-      "task_id",
-      "origin",
-      "origin_principal_ref",
-      "origin_message_id",
-      "root_agent_id",
-      "root_session_key",
-      "root_run_id",
-    ]);
+    exactKeys(
+      payload,
+      [
+        "task_id",
+        "origin",
+        "origin_principal_ref",
+        "origin_message_id",
+        "root_agent_id",
+        "root_session_key",
+        "root_run_id",
+      ],
+      // M10/T2-R12: the owner-facing task code, OPTIONAL on purpose — the 48 tasks
+      // already in the live ledger predate it, and replaying them must stay
+      // byte-identical, so a task without a code is valid and simply has none.
+      // Passing this as a REQUIRED key rejects every pre-existing event.
+      //
+      // F-057: the coordinator that owns this task's execution is OPTIONAL for
+      // the same reason — a task recorded before the field existed has none,
+      // and replaying it must stay byte-identical.
+      ["task_code", "primary_coordinator"],
+    );
     requireCondition(payload.origin === "discord", "POLICY_DENIED");
     requireCondition(
       /^[1-9][0-9]{16,19}$/u.test(payload.origin_message_id) &&
@@ -227,17 +571,63 @@ export function applyWorkflowEvent(
       "SCHEMA_INVALID",
     );
     digest(payload.origin_principal_ref);
-    digest(payload.task_id);
+    taskIdentity(payload.task_id);
     identifier(payload.root_run_id);
     identifier(payload.root_session_key);
     requireCondition(
       Object.hasOwn(roles, payload.root_agent_id),
       "UNAUTHORIZED_TARGET",
     );
-    requireCondition(
-      deriveTaskId(payload) === payload.task_id,
-      "LINEAGE_MISMATCH",
-    );
+    // F-057: the coordinator is taken from the ledger, never defaulted. Only
+    // o1/o2 are executable coordinators: main coordinates, the specialists
+    // execute, and no other value may be recorded as the owner of the work.
+    if (payload.primary_coordinator !== undefined) {
+      requireCondition(
+        payload.primary_coordinator === "o1" ||
+          payload.primary_coordinator === "o2",
+        "UNAUTHORIZED_TARGET",
+      );
+    }
+    // M12/T1-R1: a legacy 64-hex identity is re-derivable from its origin binding,
+    // so re-deriving it here is what proves a pre-existing record was not tampered
+    // with. The 12-character identity is minted at admission and is deliberately
+    // NOT a function of the message, so for it the binding fields themselves are the
+    // integrity check — they are the values replay protection now reads.
+    if (/^[a-f0-9]{64}$/u.test(payload.task_id)) {
+      requireCondition(
+        deriveTaskId(payload) === payload.task_id,
+        "LINEAGE_MISMATCH",
+      );
+    }
+    // M10/T2-R12: when a code IS supplied it must be exactly the ruled 12
+    // characters. Absent is allowed (legacy task); malformed is never allowed,
+    // because a code the owner is told to type must never be ambiguous.
+    if (payload.task_code !== undefined) {
+      requireCondition(
+        typeof payload.task_code === "string" &&
+          payload.task_code.length === TASK_CODE_LENGTH &&
+          new RegExp(TASK_CODE_PATTERN, "u").test(payload.task_code),
+        "SCHEMA_INVALID",
+      );
+      // Two live tasks must never share a code, or an owner approval could be
+      // attributed to the wrong task. Checked against every OTHER task.
+      requireCondition(
+        !Object.entries(next.tasks).some(
+          ([otherId, other]) =>
+            otherId !== payload.task_id &&
+            other.task_code === payload.task_code,
+        ),
+        "SCHEMA_INVALID",
+      );
+      // M12/T1-R1: once the code IS the identity, a task must not carry a second
+      // owner-visible token. Legacy 64-hex tasks keep an alias, because for them
+      // the code and the authority key are genuinely different values.
+      requireCondition(
+        !isTaskCodeForm(payload.task_id) ||
+          payload.task_code === payload.task_id,
+        "SCHEMA_INVALID",
+      );
+    }
     if (Object.hasOwn(next.tasks, payload.task_id)) {
       const existing = next.tasks[payload.task_id];
       const sameLineage =
@@ -248,7 +638,18 @@ export function applyWorkflowEvent(
         existing.root_session_key === payload.root_session_key &&
         existing.root_run_id === payload.root_run_id;
       requireCondition(sameLineage, "LINEAGE_MISMATCH");
+      // A re-delivered OPEN must not rewrite the code: the first writer owns it.
+      // Replaying the same lineage keeps the existing task byte-identical.
       return next;
+    }
+    for (const existing of Object.values(next.tasks)) {
+      if (
+        existing.origin === payload.origin &&
+        existing.origin_principal_ref === payload.origin_principal_ref &&
+        existing.origin_message_id === payload.origin_message_id
+      ) {
+        requireCondition(false, "ORIGIN_BINDING_CONFLICT");
+      }
     }
     next.tasks[payload.task_id] = {
       ...payload,
@@ -263,7 +664,7 @@ export function applyWorkflowEvent(
     };
     return next;
   }
-  digest(payload.task_id);
+  taskIdentity(payload.task_id);
   const task = next.tasks[payload.task_id];
   requireCondition(
     task?.workflow_status && task.brief_state,
@@ -290,13 +691,55 @@ export function applyWorkflowEvent(
         run.child_session_key === payload.child_session_key &&
         run.parent_session_key === payload.parent_session_key,
     );
-    requireCondition(matches.length === 1, "LINEAGE_MISMATCH");
+    // F-395: the report is validated BEFORE the abandoned-spawn lane can
+    // consume it. That lane reconciles the attempt from the report alone, so
+    // reading `outcome` after it meant the lane acted on an unvalidated value
+    // and — because it never read the outcome at all — journaled an ok child as
+    // a transient failure the retry gate then authorized re-executing.
     requireCondition(
       ["ok", "error", "timeout", "killed", "reset", "deleted"].includes(
         payload.outcome,
       ),
       "SCHEMA_INVALID",
     );
+    if (matches.length === 0) {
+      // M12/T9 F-078: a late report about a spawn whose receipt was lost.
+      // The ledger never learned this child's identity, so the report matches
+      // no delegation — and the refusal (LINEAGE_MISMATCH) named a lineage
+      // fault where the real condition is an abandoned attempt. When exactly
+      // one abandoned spawn of this parent exists, the report IS that
+      // attempt's terminal outcome: the attempt is reconciled to a terminal
+      // run_state and the report is consumed, so the task is no longer wedged
+      // and the late report no longer raises an unexplainable error. A report
+      // that matches nothing, and a report whose parent has more than one
+      // abandoned spawn, are still refused — the lineage check is unchanged
+      // wherever it can be.
+      const abandoned = Object.values(task.delegations).filter(
+        (run) =>
+          run.run_state === "SPAWN_UNKNOWN" &&
+          !run.native_run_id &&
+          run.parent_session_key === payload.parent_session_key,
+      );
+      if (abandoned.length === 1) {
+        const run = abandoned[0];
+        // F-395: an ok child is the SAME terminal success the matched lane
+        // records. Reconciling it to FAILED/TRANSIENT_RUNTIME_FAILURE told the
+        // ledger a successful execution had crashed, and that reason code is
+        // exactly the predicate the next-attempt gate reads.
+        if (payload.outcome === "ok") {
+          run.run_state = "COMPLETE";
+          run.reconciled_at = eventTime;
+          return next;
+        }
+        reconcileAbandonedSpawns(
+          task,
+          eventTime,
+          (candidate) => candidate === run,
+        );
+        return next;
+      }
+    }
+    requireCondition(matches.length === 1, "LINEAGE_MISMATCH");
     const run = matches[0];
     // M8-056: a superseded attempt's callback is late by definition. It must
     // not block the live attempt by forcing the task out of its state.
@@ -390,16 +833,51 @@ export function applyWorkflowEvent(
       ["task_id", "reason_code", "actor"],
       ["channel", "message_id"],
     );
+    // M12/T9 F-127: the cancellation reasons are DERIVED, not re-listed.
+    //
+    // The handler used to hardcode ["OWNER_CANCELLED", "PARENT_CANCELLED"]
+    // while the published reason-code matrix declares a third code under
+    // `outcome_compatibility.CANCELLED` (SUPERSEDED_REVISION), so a
+    // cancellation the policy declares was refused POLICY_DENIED by the
+    // reducer. The accepted set is now the matrix row, intersected with the
+    // enum the ledger-event CONTRACT declares for this payload: the policy
+    // says which reasons are legitimate, the contract says which ones a
+    // durable event can carry, and a reason only one of them declares is
+    // refused rather than accepted and then rejected at append time.
+    const cancellationReasons = CANCELLATION_REASON_CODES.filter((code) =>
+      outcomeReasonAllowed("CANCELLED", code),
+    );
     requireCondition(
-      ["OWNER_CANCELLED", "PARENT_CANCELLED"].includes(payload.reason_code),
+      cancellationReasons.includes(payload.reason_code),
       "POLICY_DENIED",
     );
     requireCondition(
       (payload.reason_code === "OWNER_CANCELLED" && payload.actor === "user") ||
-        (payload.reason_code === "PARENT_CANCELLED" &&
-          payload.actor === "main"),
+        (payload.reason_code !== "OWNER_CANCELLED" && payload.actor === "main"),
       "POLICY_DENIED",
     );
+    // M12/T9 F-030: the cancellation's SURFACE provenance, checked here as well
+    // as in the published contract.
+    //
+    // The contract pins `channel` to the two governed surfaces and `message_id`
+    // to the Discord snowflake pattern, exactly like the pinned verdict
+    // siblings. The reducer checks them too, because the reducer is the gate
+    // every write passes through: a cancel record that may claim any channel
+    // and any message id makes the owner-cancel / coordinator-cancel
+    // provenance unfalsifiable in the durable history.
+    if (payload.channel !== undefined) {
+      requireCondition(
+        payload.channel === "results" || payload.channel === "approvals",
+        "SCHEMA_INVALID",
+      );
+    }
+    if (payload.message_id !== undefined && payload.message_id !== null) {
+      requireCondition(
+        typeof payload.message_id === "string" &&
+          /^[1-9][0-9]{16,19}$/u.test(payload.message_id),
+        "SCHEMA_INVALID",
+      );
+    }
     requireCondition(!terminal.has(task.workflow_status));
     task.workflow_status = "CANCELLED";
     task.brief_state = "CLOSED";
@@ -442,6 +920,12 @@ export function applyWorkflowEvent(
     const current = Object.values(task.delegations).filter(
       (run) => run.brief_revision === task.brief_revision,
     );
+    // M12/T9 F-078: an abandoned spawn (a reservation whose receipt never
+    // arrived) is reconciled HERE, in the event that observes it, so the root
+    // result is no longer refused MISSING_PREREQUISITE by an attempt whose
+    // identity the ledger never learned. Only an attempt with NO identity is
+    // reconciled — a running child that reported itself still blocks.
+    reconcileAbandonedSpawns(task, eventTime);
     // D18: WORKFLOW_ROOT_RESULT_RECORDED must block while any run for the current
     // brief revision is still RUNNING (or in another active state). This gate
     // ensures no successful native children are abandoned mid-execution.
@@ -468,8 +952,28 @@ export function applyWorkflowEvent(
         workflowAggregate(nodes) === "COMPLETE",
         "MISSING_PREREQUISITE",
       );
+    // M12/T9 F-061: a CLAIMED task must be able to reach review.
+    //
+    // The claim (WORKFLOW_TASK_CLAIMED) moves the task to EXECUTING, and the
+    // reducer accepted a root result ONLY from ACTIVE. So the moment a
+    // coordinator picked the task up, the task's own result could no longer
+    // be recorded at all: the first successful pickup created a task that
+    // nothing could close, and the queue and the ledger diverged for ever.
+    //
+    // The exit is the ROOT agent's completion, which is a production path:
+    // the governance guard records WORKFLOW_ROOT_RESULT_RECORDED when the root
+    // run ends (topology/lib/guard.mjs), and the guard's own admission rule
+    // already admits a root result from ACTIVE, QUEUED or EXECUTING. The
+    // published projection agrees: `state-transitions.json` declares
+    // EXECUTING -> RESULT_PENDING_REVIEW a legal edge.
+    //
+    // QUEUED stays refused on purpose: a task that nobody has claimed yet
+    // must not be able to skip the claim, and the projection does not declare
+    // that edge. The pre-verdict (anchored legacy) resolution below keeps its
+    // own ACTIVE-only rule, so the read-back of an already-written legacy
+    // journal stays byte-identical.
     requireCondition(
-      task.workflow_status === "ACTIVE",
+      ["ACTIVE", "EXECUTING"].includes(task.workflow_status),
       "INVALID_STATE_TRANSITION",
     );
     // Pre-verdict-model resolution for anchored history (see the
@@ -482,6 +986,14 @@ export function applyWorkflowEvent(
     // under the current verdict model, which is what the current writer
     // produces and what the read-back must reproduce.
     if (replayAnchored && preVerdictRootResult) {
+      // F-061: the legacy resolution keeps its ACTIVE-only rule. A pre-R4
+      // journal was written by a reducer that refused a root result from any
+      // other state, so it can never contain the state this lane now admits,
+      // and the read-back of an already-written journal stays byte-identical.
+      requireCondition(
+        task.workflow_status === "ACTIVE",
+        "INVALID_STATE_TRANSITION",
+      );
       task.root_result = { ...payload };
       task.workflow_status = payload.outcome_status;
       task.reason_code = payload.reason_code;
@@ -501,7 +1013,14 @@ export function applyWorkflowEvent(
     exactKeys(
       payload,
       ["task_id", "actor", "channel", "decision"],
-      ["result_id", "result_digest", "message_id", "thread_id"],
+      [
+        "result_id",
+        "result_digest",
+        "message_id",
+        "thread_id",
+        // F-226: the outcome the owner accepted.
+        "outcome_status",
+      ],
     );
     requireCondition(payload.actor === "user", "POLICY_DENIED");
     requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
@@ -511,8 +1030,16 @@ export function applyWorkflowEvent(
       "INVALID_STATE_TRANSITION",
     );
     requireResultIdentityMatch(task, payload, replayAnchored);
-    task.workflow_status = "COMPLETE";
-    task.brief_state = "CLOSED";
+    // F-226: the post-ACCEPT status is DERIVED from the accepted outcome. It
+    // used to be stamped COMPLETE from the verdict alone, so a FAILED or
+    // PARTIAL run became a COMPLETE task the moment the owner clicked accept
+    // — the ledger then contradicted the outcome it had recorded.
+    const acceptedOutcome = resolveAcceptedOutcome(task, payload);
+    task.workflow_status = acceptedOutcome;
+    // A BLOCKED outcome stays RECOVERABLE, exactly as the sibling
+    // WORKFLOW_USER_RESULT_BLOCKED verdict keeps the brief open: closing the
+    // brief would strand a task the owner may still reconcile or cancel.
+    if (acceptedOutcome !== "BLOCKED") task.brief_state = "CLOSED";
     task.user_accepted_at = eventTime;
     return next;
   }
@@ -570,10 +1097,11 @@ export function applyWorkflowEvent(
     task.user_blocked_at = eventTime;
     task.rejection_reason = payload.reason;
     if (payload.reason_code !== undefined) {
+      // Every other reason in this reducer goes through the published vocabulary; this one
+      // accepted any non-empty string up to 128 characters, so an undeclared code became
+      // durable task state that no attribution rule could explain.
       requireCondition(
-        typeof payload.reason_code === "string" &&
-          payload.reason_code.length > 0 &&
-          payload.reason_code.length <= 128,
+        isDeclaredReasonCode(payload.reason_code),
         "SCHEMA_INVALID",
       );
       task.reason_code = payload.reason_code;
@@ -602,7 +1130,14 @@ export function applyWorkflowEvent(
     exactKeys(
       payload,
       ["task_id", "actor", "channel", "decision"],
-      ["message_id", "thread_id", "scope_digest", "reason"],
+      [
+        "message_id",
+        "thread_id",
+        "scope_digest",
+        "reason",
+        // F-023: the brief revision the owner approved.
+        "brief_revision",
+      ],
     );
     requireCondition(
       payload.decision === "APPROVE" ||
@@ -627,7 +1162,89 @@ export function applyWorkflowEvent(
       task.workflow_status === "ACTIVE" || task.workflow_status === "REVISING",
       "INVALID_STATE_TRANSITION",
     );
+    // M12/T9 F-043 (legacy R1-A07-04): the decision must come from the thread
+    // the card was surfaced in.
+    //
+    // The plugin already refuses a mismatch before it writes (index.mjs), but
+    // the REDUCER is the durable gate: a decision that reached the journal
+    // without naming the recorded thread produced a durable verdict for a card
+    // that was reposted, forwarded, or answered in an unrelated thread. An
+    // ABSENT thread id must not satisfy the comparison by being absent.
+    //
+    // The checks are keyed on data the DECISION carries, exactly like the
+    // plan-binding checks below (F-023): a decision produced by the current
+    // plugin always names its thread and its plan, and such a decision is
+    // bound to the recorded request and to the recorded thread. A decision
+    // that names none of them is the pre-F-023 shape, and it keeps replaying
+    // byte-identically - re-litigating it would make the live ledger
+    // unreadable, because an approval recorded before WORKFLOW_APPROVAL_REQUESTED
+    // and WORKFLOW_APPROVAL_SURFACED existed carries neither.
+    const boundDecision = Object.hasOwn(payload, "thread_id");
+    if (!replayAnchored && boundDecision) {
+      // M12/T9 F-032 (legacy R2-B01-03): an APPROVE must bind to a RECORDED
+      // approval request.
+      //
+      // WORKFLOW_OPENED sets workflow_status to ACTIVE, so "approvable" used to
+      // be inferable from any open task: the durable reducer admitted an
+      // owner's APPROVE for a plan that was never requested and never
+      // surfaced, and the owner's consent was recorded against a task whose
+      // plan the owner never saw. Only WORKFLOW_APPROVAL_REQUESTED may create
+      // an approval opportunity - the same rule the plugin's own
+      // APPROVAL_PENDING derivation already applies (index.mjs).
+      requireCondition(
+        Boolean(task.approval_requested_at),
+        "INVALID_STATE_TRANSITION",
+      );
+      if (task.approval_thread_id) {
+        const recordedThreadId = normalizeGovernanceThreadId(
+          task.approval_thread_id,
+        );
+        const decisionThreadId = normalizeGovernanceThreadId(payload.thread_id);
+        requireCondition(
+          recordedThreadId !== null &&
+            decisionThreadId !== null &&
+            decisionThreadId === recordedThreadId,
+          "INVALID_STATE_TRANSITION",
+        );
+      }
+    }
     if (payload.decision === "APPROVE") {
+      // F-023: the owner's APPROVE is bound to the PLAN it approved, not to
+      // the task id alone.
+      //
+      // The binding is checked against the task's OWN recorded brief, so it
+      // cannot be satisfied by a caller-supplied summary: a digest that does
+      // not match the plan the ledger holds is a wrong-scope consent and is
+      // refused, and a decision that names a superseded brief revision is a
+      // stale consent and is refused.
+      //
+      // Both checks are keyed on data the DECISION carries, so an approval
+      // recorded before this rule existed (no revision, no digest) still
+      // replays byte-identically.
+      if (
+        payload.brief_revision !== undefined &&
+        payload.brief_revision !== null
+      ) {
+        requireCondition(
+          Number.isSafeInteger(payload.brief_revision) &&
+            payload.brief_revision >= 1,
+          "SCHEMA_INVALID",
+        );
+        requireCondition(
+          payload.brief_revision === task.brief_revision,
+          "SUPERSEDED_REVISION",
+        );
+      }
+      if (payload.scope_digest !== undefined && payload.scope_digest !== null) {
+        requireCondition(
+          payload.scope_digest ===
+            deriveApprovalPlanDigest({
+              brief_revision: task.brief_revision,
+              nodes: task.nodes,
+            }),
+          "RESULT_MISMATCH",
+        );
+      }
       task.workflow_status = "QUEUED";
       task.approved_at = eventTime;
     } else if (payload.decision === "REJECT") {
@@ -637,6 +1254,25 @@ export function applyWorkflowEvent(
     } else {
       task.workflow_status = "REVISING";
       task.revision_requested_at = eventTime;
+      // M12/T9 F-180 (legacy R1-A07-02): the REVISION cycle must RE-ARM the
+      // approval.
+      //
+      // `approval_thread_id` was set once and never cleared, so the thread
+      // that carried the plan the owner just sent back stayed bound to the
+      // task: the next WORKFLOW_APPROVAL_SURFACED was refused as "a different
+      // thread for one recorded request" and the re-presented plan could never
+      // get a card. Clearing it here lets the fresh plan open a fresh thread.
+      //
+      // The REQUEST is re-armed for the same reason (and because F-032 binds an
+      // APPROVE to a recorded request): the request the owner rejected is not
+      // the request the re-presented plan needs, so the new plan must ask
+      // again. The slots are DELETED, not nulled - the published snapshot
+      // contract declares them as optional strings, so an absent slot is the
+      // only shape that validates.
+      delete task.approval_thread_id;
+      delete task.approval_requested_at;
+      delete task.approval_requested_by;
+      delete task.approval_requested_run_id;
     }
     return next;
   }
@@ -694,6 +1330,72 @@ export function applyWorkflowEvent(
     task.approval_requested_run_id = payload.run_id;
     return next;
   }
+  if (type === "WORKFLOW_APPROVAL_SURFACED") {
+    // M12/T2-R1: a request the owner was never shown is not an approval he can
+    // act on, and a thread nobody recorded is a duplicate waiting to happen. This
+    // projects the surfaced thread into the approval_thread_id slot the snapshot
+    // schema has declared since M7 with no writer — so "requested but never
+    // surfaced" becomes a durable, re-drivable state instead of a lost log line.
+    exactKeys(payload, ["task_id", "channel", "thread_id"]);
+    requireCondition(payload.channel === "approvals", "CHANNEL_MISMATCH");
+    requireCondition(
+      typeof payload.thread_id === "string" && payload.thread_id.length > 0,
+      "SCHEMA_INVALID",
+    );
+    requireCondition(
+      Boolean(task.approval_requested_at),
+      "INVALID_STATE_TRANSITION",
+    );
+    if (task.approval_thread_id) {
+      // A different thread for one recorded request is exactly the duplicate the
+      // owner forbade; the first surface keeps the record.
+      if (task.approval_thread_id !== payload.thread_id)
+        fail("INVALID_STATE_TRANSITION");
+      return next;
+    }
+    task.approval_thread_id = payload.thread_id;
+    return next;
+  }
+  if (type === "WORKFLOW_RESULT_SURFACED") {
+    // M12/T2-R1: the results forum had no publish path before this task, so
+    // nothing could prove an owner was ever shown the work he is being asked to
+    // accept. Idempotent by thread id for the same reason as the approval above.
+    exactKeys(payload, ["task_id", "channel", "thread_id"], ["result_digest"]);
+    requireCondition(payload.channel === "results", "CHANNEL_MISMATCH");
+    requireCondition(
+      typeof payload.thread_id === "string" && payload.thread_id.length > 0,
+      "SCHEMA_INVALID",
+    );
+    // M12/T9 F-396 (legacy R9-L02-6): the member was admitted and then dropped,
+    // so the same thread could be re-surfaced with a DIFFERENT result digest and
+    // both were accepted: durable state could not say which result the owner was
+    // shown. The digest is already durable (the task-level result records it and
+    // a root result carries it), so the surface is bound to the SAME identity a
+    // verdict must name (`requireResultIdentityMatch`) instead of projecting a
+    // second copy of it. The check runs BEFORE the idempotent same-thread return,
+    // which is exactly the replay the finding measured as silently accepted.
+    //
+    // A SURFACED that reaches the ledger before any result is recorded keeps its
+    // admission: there is no recorded identity to differ from yet, the journal
+    // still carries the digest it was given, and a later verdict is bound by the
+    // same expression this comparison uses.
+    if (payload.result_digest !== undefined) {
+      const recordedResultDigest =
+        task.root_result?.payload_digest ?? task.execution_payload_digest;
+      if (recordedResultDigest !== undefined)
+        requireCondition(
+          payload.result_digest === recordedResultDigest,
+          "RESULT_MISMATCH",
+        );
+    }
+    if (task.results_thread_id) {
+      if (task.results_thread_id !== payload.thread_id)
+        fail("INVALID_STATE_TRANSITION");
+      return next;
+    }
+    task.results_thread_id = payload.thread_id;
+    return next;
+  }
   if (type === "WORKFLOW_TASK_CLAIMED") {
     // D01/D02: CLAIM is only valid from the approved QUEUED state.
     // ACTIVE is not a valid pre-claim state — allowing it bypasses the
@@ -706,6 +1408,76 @@ export function applyWorkflowEvent(
     task.workflow_status = "EXECUTING";
     task.claimed_by = payload.agent_id;
     task.claimed_at = eventTime;
+    return next;
+  }
+  if (type === "WORKFLOW_COORDINATOR_RUN_BOUND") {
+    // M10/T2: binds a gateway-started coordinator run to an already-claimed
+    // queue task attempt. This is NOT a spawn event, NOT a delegation event,
+    // and NOT parent-child lineage: a coordinator run has no live parent
+    // session, so no parent fields exist on this payload by design. The queue
+    // owns lease liveness; this event only records the association the pickup
+    // path asserted at bind time (attempt + lease presented by the claim
+    // owner), and it never mints, renews, or verifies a lease.
+    exactKeys(payload, [
+      "task_id",
+      "coordinator",
+      "attempt",
+      "lease_id",
+      "session_key",
+      "run_id",
+    ]);
+    // M7-073: only o1/o2 coordinate executable work. main and specialists can
+    // never be bound as coordinators. Stated explicitly rather than derived so
+    // a topology change cannot silently widen this gate.
+    requireCondition(
+      payload.coordinator === "o1" || payload.coordinator === "o2",
+      "POLICY_DENIED",
+    );
+    requireCondition(
+      Number.isSafeInteger(payload.attempt) && payload.attempt >= 1,
+      "SCHEMA_INVALID",
+    );
+    identifier(payload.lease_id);
+    identifier(payload.session_key);
+    identifier(payload.run_id);
+    requireCondition(
+      task.workflow_status === "EXECUTING",
+      "INVALID_STATE_TRANSITION",
+    );
+    requireCondition(task.claimed_by === payload.coordinator, "POLICY_DENIED");
+    task.coordinator_runs ??= {};
+    const existing = task.coordinator_runs[payload.attempt];
+    if (existing) {
+      // Identical replay is a no-op (the writer's no-change-no-append rule
+      // turns it into a non-append). Any conflicting re-bind for one attempt
+      // is a lineage conflict, never a silent overwrite.
+      requireCondition(
+        existing.task_id === payload.task_id &&
+          existing.coordinator === payload.coordinator &&
+          existing.attempt === payload.attempt &&
+          existing.lease_id === payload.lease_id &&
+          existing.session_key === payload.session_key &&
+          existing.run_id === payload.run_id,
+        "LINEAGE_MISMATCH",
+      );
+      return next;
+    }
+    // A superseded attempt never rebinds: once a higher attempt holds a
+    // binding, the older generation is audit history only.
+    for (const boundAttempt of Object.keys(task.coordinator_runs)) {
+      requireCondition(
+        Number(boundAttempt) <= payload.attempt,
+        "LINEAGE_MISMATCH",
+      );
+    }
+    task.coordinator_runs[payload.attempt] = {
+      task_id: payload.task_id,
+      coordinator: payload.coordinator,
+      attempt: payload.attempt,
+      lease_id: payload.lease_id,
+      session_key: payload.session_key,
+      run_id: payload.run_id,
+    };
     return next;
   }
   if (type === "WORKFLOW_USER_QUESTION_RECORDED") {
@@ -970,8 +1742,48 @@ export function applyWorkflowEvent(
     }
     task.workflow_status = "RESULT_PENDING_REVIEW";
     task.result_pending_at = payload.recorded_at ?? eventTime;
-    if (payload.payload_digest)
-      task.execution_payload_digest = payload.payload_digest;
+    // M12/T9 F-077: the ledger carries EXACTLY ONE digest for this result.
+    //
+    // The store used to be conditional (`if (payload.payload_digest)`), so a
+    // result recorded without a digest left the task in RESULT_PENDING_REVIEW
+    // with no identity at all — and every verdict then failed RESULT_MISMATCH,
+    // because the binding requires a digest to compare against. The task was
+    // wedged in review with no operator path.
+    //
+    // When the caller supplies the digest it is authoritative and unchanged.
+    // When it does not, the reducer mints ONE from the facts the result
+    // itself consists of (the task, the brief revision, the artifact set), so
+    // the digest is a function of WHAT was produced — never of the clock, the
+    // writer or the attempt — it is stable across replay, and a verdict that
+    // names it is bound to THIS result and to no other.
+    task.execution_payload_digest =
+      payload.payload_digest ?? reducerMintedResultDigest(task);
+    // M12/T9 F-394 (legacy R9-L02-2): this arm whitelisted technical_status
+    // and business_status and then wrote NEITHER, so a FAIL/FAIL result left
+    // no outcome anywhere in the durable projection and a later ACCEPT
+    // derived COMPLETE — the outcome the owner was being asked to accept was
+    // absent from durable state. The outcome is now persisted, derived from
+    // the two gate statuses the plugin ships, in the published outcome
+    // vocabulary, and resolveAcceptedOutcome reads it. A result that carries
+    // no status (every event recorded before the plugin shipped them, and
+    // every replay of one) persists no outcome and keeps the legacy COMPLETE
+    // fallback, so an old journal never changes meaning by replay.
+    if (
+      payload.technical_status !== undefined ||
+      payload.business_status !== undefined
+    ) {
+      for (const status of [payload.technical_status, payload.business_status])
+        if (status !== undefined)
+          requireCondition(
+            status === "PASS" || status === "FAIL",
+            "SCHEMA_INVALID",
+          );
+      task.execution_outcome_status =
+        payload.technical_status === "FAIL" ||
+        payload.business_status === "FAIL"
+          ? "FAILED"
+          : "COMPLETE";
+    }
     return next;
   }
   // M7-020: a spawn reservation creates governed work, so it is a
@@ -983,6 +1795,19 @@ export function applyWorkflowEvent(
     // reservation. The task is BLOCKED at this point, so the post-approval gate
     // below is evaluated against the restored state.
     reconcileForRetry(task, payload.node_id, eventTime);
+    // M12/T9 F-078: an abandoned spawn of the SAME node (a reservation whose
+    // receipt never arrived) is reconciled here too, so a fresh attempt is
+    // not refused SPAWN_UNKNOWN by an attempt the ledger never learned the
+    // identity of. The reconciliation is scoped to this node AND to a strictly
+    // OLDER attempt on purpose: a replay of the SAME attempt is a duplicate
+    // reservation, not a retry, and it keeps its refusal (SPAWN_UNKNOWN). The
+    // retry gate below then sees a terminal FAILED attempt in the documented
+    // transient class, which is the existing retry path.
+    reconcileAbandonedSpawns(
+      task,
+      eventTime,
+      (run) => run.node_id === payload.node_id && run.attempt < payload.attempt,
+    );
     // Option (b) migration: anchored replay trusts admission (see above).
     if (!replayAnchored) requirePostApprovalState(task);
     return applySpawnReserved(next, task, payload, replayAnchored);
@@ -1261,13 +2086,39 @@ export function applyWorkflowEvent(
     if (task.nodes.length === 0) requireCondition(payload.brief_revision === 1);
     else {
       requireCondition(payload.brief_revision === task.brief_revision + 1);
-      requireCondition(task.revisions_used < 16, "WORKFLOW_BUDGET_EXHAUSTED");
+      requireCondition(
+        task.revisions_used < BUDGETS.maxBriefRevisionsPerTask,
+        "WORKFLOW_BUDGET_EXHAUSTED",
+      );
       task.revisions_used++;
       for (const run of Object.values(task.delegations))
         if (activeRun.has(run.run_state)) run.run_state = "CANCELLED";
     }
     task.brief_revision = payload.brief_revision;
     task.nodes = payload.nodes;
+    // M12/T9 F-060: the coordinator that owns this task's execution is
+    // DERIVED here, from the activated brief's own nodes, and never defaulted.
+    //
+    // The field was DECLARED (the published ledger-event and ledger-snapshot
+    // contracts carry it, and the dispatch derivation reads it) but nothing
+    // ever wrote it, so every task failed the dispatch with
+    // COORDINATOR_NOT_EXECUTABLE and the live pickup loop could never claim
+    // anything.
+    //
+    // The derivation is re-run on every brief activation, because a brief
+    // revision can change the nodes and therefore the owner. When the
+    // derivation finds no coordinator, or more than one, the field is left
+    // UNSET: the dispatch then refuses the task with
+    // COORDINATOR_NOT_EXECUTABLE, which is the fail-closed answer. The key is
+    // DELETED rather than set to undefined - the contract validator sees
+    // own-properties regardless of value, so an undefined-valued key would
+    // fail additionalProperties.
+    const coordinators = deriveTaskCoordinators(task.nodes);
+    if (coordinators.primary === null) {
+      delete task.primary_coordinator;
+    } else {
+      task.primary_coordinator = coordinators.primary;
+    }
     // M7-016: the task mirrors the activated brief's semantic contract status,
     // so the guard authorizes a specialist against recorded task state rather
     // than a caller-supplied brief document. Pre-R4 briefs carry no status:
@@ -1304,6 +2155,47 @@ function reconcileTransientAttempt(task, run, eventTime) {
 }
 
 /**
+ * M12/T9 F-078: a spawn reservation whose receipt never arrived.
+ *
+ * The ledger learns a child's identity ONLY from WORKFLOW_SPAWN_RECEIVED. A
+ * reservation whose receipt is lost therefore leaves its delegation in
+ * SPAWN_UNKNOWN forever, and SPAWN_UNKNOWN is an ACTIVE run:
+ *
+ *   - it blocks WORKFLOW_ROOT_RESULT_RECORDED (MISSING_PREREQUISITE),
+ *   - it blocks a re-reservation of the same node (SPAWN_UNKNOWN),
+ *   - and a late report about it matches no identity at all
+ *     (LINEAGE_MISMATCH), because the ledger never learned the run id.
+ *
+ * The task had no operator path out: not a cancellation of the whole task, and
+ * not a budgeted brief supersede.
+ *
+ * The reconciliation is bounded to what the ledger can PROVE. Only a
+ * delegation that never received an identity (no native_run_id) is reconciled,
+ * so a child that reported itself is never swept away, and the task's own
+ * status is never touched. It is journaled inside the event that observes it,
+ * so it survives replay, and the runtime reason code it stamps is the
+ * documented transient class, so the existing retry path (a fresh attempt for
+ * the same node) is the way forward.
+ */
+const ABANDONED_SPAWN_REASON = "SPAWN_RECEIPT_LOST";
+
+function reconcileAbandonedSpawns(task, eventTime, predicate = () => true) {
+  const abandoned = Object.values(task.delegations ?? {}).filter(
+    (run) =>
+      run.run_state === "SPAWN_UNKNOWN" && !run.native_run_id && predicate(run),
+  );
+  for (const run of abandoned) {
+    run.run_state = "FAILED";
+    run.runtime_reason_code = "TRANSIENT_RUNTIME_FAILURE";
+    run.recovery_needed_at = eventTime;
+    run.recovery_reason = ABANDONED_SPAWN_REASON;
+    run.reconciled_at = eventTime;
+    run.superseded_at = eventTime;
+  }
+  return abandoned.length;
+}
+
+/**
  * M8-056: a retry reservation IS the reconcile trigger. Reserving a fresh attempt
  * for a node whose previous attempt is stuck in the documented transient class
  * reconciles that attempt in the same atomic event. Without this the retry class
@@ -1332,13 +2224,94 @@ function reconcileForRetry(task, nodeId, eventTime) {
 }
 
 /**
+ * F-226: the post-ACCEPT workflow status, derived from the outcome the owner
+ * accepted.
+ *
+ * The recorded outcome is the only thing that can say what the run actually
+ * produced. An ACCEPT is a verdict on a result, not a statement that the work
+ * succeeded, so the status follows the result: a FAILED or PARTIAL run stays
+ * FAILED or PARTIAL and a BLOCKED one stays BLOCKED.
+ *
+ * The decision MAY name the outcome it accepted; when it does, the name must
+ * equal the outcome the ledger recorded, so a decision cannot re-label the
+ * result it is accepting. A decision that names no outcome follows the outcome
+ * the ledger recorded — a silent verdict cannot contradict a result it is
+ * accepting either — and only a result that recorded none keeps the legacy
+ * COMPLETE.
+ *
+ * F-393: the silent branch used to return COMPLETE unconditionally, and the
+ * plugin's only ACCEPT emitter sends no outcome_status, so the silent branch
+ * was the PRODUCTION branch: accepting a recorded FAILED closed the brief as a
+ * completed run and the ledger then contradicted the outcome it had recorded.
+ */
+function resolveAcceptedOutcome(task, payload) {
+  // M12/T9 F-394: a task-level result persists its derived outcome in
+  // execution_outcome_status; a root result keeps outcome_status. Either is
+  // "the outcome the ledger recorded" — only a result that recorded none
+  // keeps the legacy COMPLETE.
+  const recorded =
+    task.root_result?.outcome_status ?? task.execution_outcome_status ?? null;
+  const claimed = payload.outcome_status ?? null;
+  if (claimed !== null) {
+    requireCondition(OUTCOME_STATUSES.includes(claimed), "SCHEMA_INVALID");
+    requireCondition(
+      recorded === null || claimed === recorded,
+      "RESULT_MISMATCH",
+    );
+    return claimed === "COMPLETE" ? "COMPLETE" : claimed;
+  }
+  return recorded ?? "COMPLETE";
+}
+
+/**
+ * M12/T9 F-077: the digest the reducer mints for a task-level result whose
+ * caller supplied none.
+ *
+ * The preimage is built ONLY from facts the snapshot keeps, so the digest can
+ * be RE-DERIVED from the task projection alone. That is what lets a reader
+ * tell a reducer-minted digest from a caller-supplied one — and therefore
+ * lets the verdict binding know that a digest-less result is bound to the
+ * single pending result, while a result the CALLER named keeps the M7-062
+ * obligation that a verdict must name it.
+ *
+ * The preimage carries no clock and no caller-supplied fact: the digest is a
+ * function of WHAT was produced (the task, the brief revision and the
+ * artifact set), never of WHEN it was recorded, so it is identical at write
+ * time and at every replay, and a pure reducer call without an event
+ * timestamp produces the same digest as the journaled one.
+ *
+ * Every value in the preimage is fixed once the result is recorded: the task
+ * id and the brief revision never move while the task waits for review, and
+ * the artifact-set digest is written by the same event.
+ */
+function reducerMintedResultDigest(task) {
+  return canonicalHash("zink-workflow-result-v1", {
+    task_id: task.task_id,
+    brief_revision: task.brief_revision,
+    artifact_set_digest: task.artifact_set_digest ?? null,
+  });
+}
+
+/**
  * M7-062: the ONE result-identity binding. A user verdict (accept, reject, or
  * request a revision) must name the exact result it applies to, otherwise a
  * verdict recorded against result A could be replayed against result B. The
- * digest is authoritative; the legacy result id is accepted only when the
- * digest is absent, and an unbound verdict is refused.
- */
-function requireResultIdentityMatch(task, payload, replayAnchored = false) {
+ * digest is authoritative, and a verdict that binds to nothing is refused.
+ * M12/T9 F-249 withdrew the id-only binding and M12/T9 F-376 re-admitted the
+ * legacy result id as an OPTIONAL member without weakening that: a verdict
+ * that names only a result id is still refused (see below).
+ *
+ * M12/T9 F-077: the ONE exception, and it is narrow. A task-level result
+ * (WORKFLOW_RESULT_RECORDED, the coordinator's own result) whose caller
+ * supplied NO digest had no identity at all, so every verdict against it was
+ * refused with RESULT_MISMATCH and the task stayed in RESULT_PENDING_REVIEW
+ * for ever. The reducer now mints ONE digest for that result, and a verdict
+ * that names nothing binds to it — but ONLY when the recorded digest is the
+ * reducer's own mint. A result the CALLER named keeps the M7-062 obligation
+ * in full: an unbound verdict against it is still refused, and a verdict that
+ * names a digest is still compared with the recorded one, so a stale card is
+ * still refused.
+ */ function requireResultIdentityMatch(task, payload, replayAnchored = false) {
   const currentDigest =
     task.root_result?.payload_digest ?? task.execution_payload_digest;
   requireCondition(typeof currentDigest === "string", "RESULT_MISMATCH");
@@ -1359,10 +2332,25 @@ function requireResultIdentityMatch(task, payload, replayAnchored = false) {
   // (RESULT_PENDING_REVIEW) and the digest comparison when a digest IS
   // supplied both still apply, and new verdicts stay fully bound.
   if (replayAnchored) return;
-  if (payload.result_id === undefined) fail("RESULT_MISMATCH");
+  // M12/T9 F-249: the id-only verdict is WITHDRAWN.
+  //
+  // The digest is the ONE binding. The branch that compared `payload.result_id`
+  // against `task.root_result.result_id` is gone: `root_result` is stored as
+  // `{...payload}` under a CLOSED contract, so the compared value could never
+  // exist and every id-only verdict failed with RESULT_MISMATCH.
+  //
+  // M12/T9 F-376: the published contract admits `result_id` again as an
+  // OPTIONAL LEGACY member, so a verdict the older build already wrote stays
+  // readable. The verdict still binds by `result_digest`: a verdict that names
+  // ONLY a result id binds to nothing and is refused with the same code the
+  // comparison used to raise — never silently accepted, and never bound to a
+  // field the contract forbids.
+  if (payload.result_id !== undefined && payload.result_digest == null) {
+    fail("RESULT_MISMATCH");
+  }
   requireCondition(
-    task.root_result?.result_id !== undefined &&
-      payload.result_id === task.root_result.result_id,
+    task.root_result === undefined &&
+      task.execution_payload_digest === reducerMintedResultDigest(task),
     "RESULT_MISMATCH",
   );
 }
@@ -1425,10 +2413,15 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     payload.parent_session_key,
     payload.parent_run_id,
   );
+  // M10/T2: same load-bearing fallback order as admission — a bound
+  // coordinator parent resolves to its bound coordinator identity, never to
+  // Main/root. The parent session/run themselves are real (the coordinator's
+  // live gateway run); only delegation lineage is absent, by design.
   requireCondition(
     parent.task_id === payload.task_id &&
-      (parent.delegation?.agent_id ?? task.root_agent_id) ===
-        payload.parent_agent_id,
+      (parent.delegation?.agent_id ??
+        parent.coordinatorRun?.coordinator ??
+        task.root_agent_id) === payload.parent_agent_id,
     "LINEAGE_MISMATCH",
   );
   if (parent.delegation)
@@ -1436,11 +2429,49 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
       parent.delegation.run_state === "RUNNING" &&
         parent.delegation.brief_revision === task.brief_revision,
     );
+  // M10/T2-R2: a bound coordinator parent is fenced by EXECUTION GENERATION.
+  //
+  // A coordinator has no delegation run_state, so liveness cannot be read from
+  // the delegation projection — and the historical binding deliberately
+  // survives stale recovery as audit history. Therefore a superseded generation
+  // must be refused here, at the authoritative commit path, and the task must
+  // still be claimed by that coordinator.
+  //
+  // Lease liveness itself is queue-owned and is NOT re-derived in the reducer:
+  // the queue is a separate store behind its own lock, so the ledger cannot see
+  // a revocation atomically. That half of the fence is enforced one level up, at
+  // the mutation seam (QueueManager.withExecutionFence), which holds the queue
+  // critical section across this same commit. The two halves are complementary:
+  // this one survives any caller that bypassed the queue seam, and the queue one
+  // closes the revocation window.
+  //
+  // This throws inside the cloned projection, so a denied coordinator
+  // reservation commits nothing at all — including the retry reconciliation
+  // performed by the caller before this function ran.
+  if (parent.coordinatorRun) {
+    const boundAttempts = Object.keys(task.coordinator_runs ?? {})
+      .map((key) => Number(key))
+      .filter((value) => Number.isSafeInteger(value) && value >= 1);
+    requireCondition(boundAttempts.length > 0, "LINEAGE_MISMATCH");
+    // A superseded attempt never reserves again: once a higher attempt holds a
+    // binding, the older generation is history only.
+    requireCondition(
+      Math.max(...boundAttempts) === parent.coordinatorRun.attempt,
+      "SUPERSEDED_REVISION",
+    );
+    requireCondition(
+      task.claimed_by === parent.coordinatorRun.coordinator,
+      "POLICY_DENIED",
+    );
+  }
   const node = task.nodes.find((item) => item.node_id === payload.node_id);
   requireCondition(
     node && node.agent_id === payload.agent_id,
     "UNAUTHORIZED_TARGET",
   );
+  // M10/T2: same root-like treatment as the guard: a bound coordinator parent
+  // carries no parent-stack constraint. Target containment is enforced by the
+  // canonical spawn-policy allowlist, checked by the caller before reserving.
   if (parent.delegation)
     requireCondition(
       node.stack_id === parent.delegation.stack_id,
@@ -1448,7 +2479,10 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     );
   if (payload.parent_agent_id === "main") {
     if (task.current_stack && task.current_stack !== node.stack_id) {
-      requireCondition(task.transitions_used < 10, "WORKFLOW_BUDGET_EXHAUSTED");
+      requireCondition(
+        task.transitions_used < BUDGETS.maxStackTransitionsPerTask,
+        "WORKFLOW_BUDGET_EXHAUSTED",
+      );
       task.transitions_used++;
     }
     // This authorization is journaled with the reservation, before native
@@ -1510,9 +2544,18 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
   // event digest plus the hash chain already bind those bytes against
   // tampering, and re-litigating an evolved serialization can only reject
   // legitimate history. New writes and tail replay stay exact.
+  //
+  // M12/T9 F-371: the delegation id changed its FORM - the same digest, now
+  // rendered as a version-4 UUID, because the published tool-call envelope
+  // and the guard both require that shape. Both renderings are therefore
+  // legitimate identities of the same proposal, and the ledger already holds
+  // reserves under the 64-hex one: accepting only the new form would make
+  // the operational history unreadable, and accepting only the old one
+  // would refuse every new reserve.
   const rederived = buildSpawnProposal(payload);
   requireCondition(
-    rederived.delegation_id === payload.delegation_id &&
+    (rederived.delegation_id === payload.delegation_id ||
+      deriveLegacyDelegationId(payload) === payload.delegation_id) &&
       (replayAnchored || rederived.request_digest === payload.request_digest) &&
       !task.delegations[payload.delegation_id],
     "LINEAGE_MISMATCH",
@@ -1525,7 +2568,10 @@ function applySpawnReserved(next, task, payload, replayAnchored = false) {
     ),
     "SPAWN_UNKNOWN",
   );
-  requireCondition(task.delegated_runs_used < 72, "WORKFLOW_BUDGET_EXHAUSTED");
+  requireCondition(
+    task.delegated_runs_used < BUDGETS.maxTotalDelegatedRunsPerTask,
+    "WORKFLOW_BUDGET_EXHAUSTED",
+  );
   requireCondition(
     runs.filter(
       (run) =>

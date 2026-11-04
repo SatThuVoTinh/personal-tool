@@ -25,6 +25,11 @@ from .markdown_adapter import TAG_TO_TOPIC
 PDF_CONTENT_DOMAIN = b"zink:knowledge:pdf-content:v1"
 PROCESSING_IDENTITY_SCHEMA_VERSION = 1
 MAX_SIDECAR_BYTES = 64 * 1024
+# F-440 (R9-L09-4): the PDF ceiling is enforced where the file is READ, so
+# discovery stats before hashing instead of reading a whole oversized PDF and
+# meeting the build path's ceiling afterwards. The build path carries the same
+# value; `test_pdf_foundation` pins the two together.
+MAX_PDF_BYTES = 512 * 1024 * 1024
 _EMBED = re.compile(r"!\[\[([^\]]+)\]\]")
 _H1 = re.compile(r"^ {0,3}#(?!#)[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 _TAG = re.compile(r"(?<![\\\w/])#([\w-]+)", re.UNICODE)
@@ -34,9 +39,10 @@ _FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(?:[^\r\n]*)$")
 class PdfFoundationError(ValueError):
     """A safe, public foundation-validation failure."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, source_path: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.source_path = source_path
 
 
 @dataclass(frozen=True)
@@ -162,6 +168,12 @@ def parse_pdf_sidecar(
     sidecar_relative = canonical_vault_path(vault_root, supplied_relative)
     if not sidecar_relative.startswith(("02. Books/", "03. Papers/")):
         raise PdfFoundationError("PDF_SIDECAR_OUTSIDE_DISCOVERY_ROOT")
+    # M10/T2-R21: stat BEFORE reading. The length check used to run after
+    # `read_bytes()` had already materialised the whole file, so the 64 KiB cap
+    # bounded nothing about memory: a large sidecar was fully resident first.
+    # This mirrors the PDF path, which checks `before_pdf.size` before hashing.
+    if sidecar_path.stat().st_size > MAX_SIDECAR_BYTES:
+        raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE")
     raw = sidecar_path.read_bytes()
     if len(raw) > MAX_SIDECAR_BYTES:
         raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE")
@@ -209,6 +221,11 @@ def parse_pdf_sidecar(
     if not basename_only and not source_path.startswith(("02. Books/", "03. Papers/", "Archives/")):
         raise PdfFoundationError("PDF_SIDECAR_EMBED_INVALID")
     source_file = validated_vault_regular_file(vault_root, source_path, require_pdf=True)
+    # F-440 (R9-L09-4): stat BEFORE hashing, exactly as the sidecar check
+    # above does. The only PDF ceiling used to live in the build path, so
+    # discovery read and digested an oversized file in full first.
+    if source_file.stat().st_size > MAX_PDF_BYTES:
+        raise PdfFoundationError("PDF_FILE_TOO_LARGE")
     raw_tags = tuple(f"#{tag}" for tag in _TAG.findall(visible_body))
     canonical_topics = tuple(dict.fromkeys(TAG_TO_TOPIC[tag] for tag in raw_tags if tag in TAG_TO_TOPIC))
     if not canonical_topics:
@@ -237,6 +254,16 @@ def discover_pdf_sidecars(vault_root: Path) -> tuple[PdfSidecar, ...]:
             continue
         _assert_no_link_or_reparse(resolved_vault, root)
         for sidecar in sorted(root.rglob("*.md")):
+            # M10/T2-R21: check oversize sidecars by STAT, before any read. An
+            # omitted sidecar would make its still-present PDF look stale during
+            # incremental publication, so preserve its safe source path in the
+            # discovery error and let the lifecycle fail the run without deletes.
+            if sidecar.stat().st_size > MAX_SIDECAR_BYTES:
+                try:
+                    sidecar_path = sidecar.relative_to(resolved_vault).as_posix()
+                except ValueError as error:
+                    raise PdfFoundationError("PDF_SIDECAR_OUTSIDE_DISCOVERY_ROOT") from error
+                raise PdfFoundationError("PDF_SIDECAR_TOO_LARGE", sidecar_path)
             raw = sidecar.read_bytes()
             recognition_text = raw.decode("utf-8", errors="ignore")
             try:
@@ -366,8 +393,14 @@ def _visible_markdown(text: str) -> str:
             fence_length = len(opening.group(1))
             visible.append(newline)
             continue
-        without_comments, in_comment = _strip_html_comments(line, in_comment)
-        visible.append(_strip_inline_code(without_comments) + newline)
+        # M10/T2-R23: same ordering defect as markdown_adapter. Inline code
+        # is stripped first, so an opener inside a backtick span cannot be
+        # mistaken for a real comment. Proven by execution: a sidecar with
+        # 'Start `<!--` marker.` yielded an empty body, so its
+        # `![[Book.pdf]]` embed was never seen and the PDF never indexed.
+        without_code = _strip_inline_code(line)
+        without_comments, in_comment = _strip_html_comments(without_code, in_comment)
+        visible.append(without_comments + newline)
     return "".join(visible)
 
 

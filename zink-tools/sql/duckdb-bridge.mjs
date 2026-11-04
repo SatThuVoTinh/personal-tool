@@ -1,4 +1,3 @@
-import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { TOOL_POLICY } from "../../integrations/openclaw/lib/policy.mjs";
 import { validateSqlQuery } from "./validator.mjs";
@@ -14,12 +13,26 @@ export const DUCKDB_MAX_TIMEOUT_MS = 30000;
 export const DUCKDB_DEFAULT_MAX_ROWS = 100;
 export const DUCKDB_MAX_ROWS_CEILING = 1000;
 
+// F-186 (R5-E06-06): the engine child's stdio bound is an explicit, repo-owned
+// ceiling instead of Node's 1 MiB default, which turned an ordinary wide result
+// into spawnSync's ENOBUFS.
+export const DUCKDB_MAX_STDIO_BYTES = 8 * 1024 * 1024;
+
 export const ALLOWLISTED_DATABASES = Object.freeze([
   "knowledge",
   "analytics_read",
 ]);
 
 // Patterns strictly denied to prevent filesystem escapes, arbitrary host executions, or sandbox breaches
+//
+// F-037 (R5-E15-03): measured at HEAD this list was a fail-open deny-list and
+// five members of the dangerous class were absent: `glob`, `read_text`,
+// `read_blob`, `CREATE SECRET` and `SET`. The statement validator downstream
+// refuses all of them too, but the bridge's OWN guard is the one that runs
+// first, and it accepted them by construction. The list now covers the class
+// it claims to cover, and `assertDuckDbSafety` additionally refuses every
+// table-function call, so the deny-list is no longer the only thing standing
+// between a model-authored query and a host file read.
 const ESCAPE_PATTERNS = [
   /\bATTACH\b/i,
   /\bDETACH\b/i,
@@ -28,6 +41,10 @@ const ESCAPE_PATTERNS = [
   /\bread_parquet\w*\b/i,
   /\bread_json\w*\b/i,
   /\bparquet_scan\b/i,
+  // F-037: the host-file read functions the deny-list did not name.
+  /\bread_text\w*\b/i,
+  /\bread_blob\w*\b/i,
+  /\bglob\w*\b/i,
   /\bINSTALL\b/i,
   /\bLOAD\b/i,
   /\bPRAGMA\b/i,
@@ -35,6 +52,11 @@ const ESCAPE_PATTERNS = [
   /\bEXECUTE\b/i,
   /\bIMPORT\b/i,
   /\bEXPORT\b/i,
+  // F-037: a credential/configuration statement. `SET` is matched in
+  // statement position only, so a query that merely mentions the word inside
+  // a string literal is not refused for it.
+  /^\s*SET\b/i,
+  /\bCREATE\s+SECRET\b/i,
   /\bcmd\.exe\b/i,
   /\bpowershell\b/i,
   /\bwsl\b/i,
@@ -42,6 +64,76 @@ const ESCAPE_PATTERNS = [
   /\bsh\b/i,
   /\bbash\b/i,
 ];
+
+// F-037 (R5-E15-03): the governed SQL subset admits no table function at all —
+// the statement validator refuses every parenthesis in a projection, a WHERE
+// clause or a FROM clause. A table function is therefore never legitimate
+// here, and refusing the shape positively is what makes "a query using an
+// unlisted table function is refused" a property of the bridge rather than a
+// property of a deny-list that has to be complete.
+//
+// The rule is scoped to the FROM clause, because that is where a table
+// function appears. A parenthesised projection or a parenthesised value list
+// is a different thing and keeps the statement validator's own verdict, so the
+// bridge's refusal never masks the more precise code.
+const TABLE_FUNCTION_CALL = /\b[A-Za-z_][A-Za-z0-9_]*\s*\(/u;
+const FROM_CLAUSE = /\bFROM\b/iu;
+const CLAUSE_TERMINATOR = /\b(?:WHERE|ORDER|LIMIT|OFFSET)\b/iu;
+
+/**
+ * Replaces every single-quoted string literal with an empty placeholder, so a
+ * clause keyword or a parenthesis inside a literal cannot be read as syntax.
+ *
+ * @param {string} sql
+ * @returns {string}
+ */
+function stripSqlStringLiterals(sql) {
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch !== "'") {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+    while (i < sql.length) {
+      if (sql[i] === "'" && sql[i + 1] === "'") {
+        // Preserve the escape token, not the quoted character: the doubled
+        // quote is a delimiter, not data the mask may leak.
+        out += "''";
+        i += 2;
+        continue;
+      }
+      if (sql[i] === "'") {
+        out += "'";
+        i += 1;
+        break;
+      }
+      // The literal interior is data. Emit the empty placeholder instead of
+      // copying it, so `FROM x(` inside a string cannot be read as syntax.
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * The FROM clause of a statement, with string literals blanked out.
+ *
+ * @param {string} sql
+ * @returns {string} the clause text, or "" when the statement has no FROM
+ */
+function fromClauseOf(sql) {
+  const stripped = stripSqlStringLiterals(sql);
+  const fromIndex = stripped.search(FROM_CLAUSE);
+  if (fromIndex < 0) return "";
+  const rest = stripped.slice(fromIndex + "FROM".length);
+  const terminator = rest.search(CLAUSE_TERMINATOR);
+  return terminator < 0 ? rest : rest.slice(0, terminator);
+}
 
 export class DuckDbBridgeError extends Error {
   /**
@@ -95,9 +187,14 @@ export function assertDuckDbResourceAuthorized(targetDatabase) {
 }
 
 /**
- * Scans query string and parameters for escape or injection vectors.
+ * Scans the statement for escape or injection vectors.
+ *
+ * Bound values are data, not syntax: `bindParameters` renders every value as a
+ * quoted literal, so the values themselves are deliberately not scanned. Only
+ * the masked statement can carry a statement-shaped escape.
+ *
  * @param {string} query
- * @param {Array<{name: string, value: any}>} parameters
+ * @param {Array<{name: string, type: string, value: unknown}>} parameters
  */
 export function assertDuckDbSafety(query, parameters = []) {
   if (typeof query !== "string") {
@@ -107,23 +204,35 @@ export function assertDuckDbSafety(query, parameters = []) {
     );
   }
 
-  // 1. Check escape patterns in query
+  // 1. Check escape patterns in the MASKED statement. A literal interior is
+  // data, not syntax: scanning the raw query made `label = 'load'`,
+  // `label = 'sh'` and a literal that merely spells a read function look like
+  // host commands. `stripSqlStringLiterals` keeps the quotes and doubled-quote
+  // escapes, so the structural statement (COPY, SET, read_text(...)) is still
+  // visible and is still refused.
+  const maskedQuery = stripSqlStringLiterals(query);
   for (const pattern of ESCAPE_PATTERNS) {
-    if (pattern.test(query)) {
-      if (/ATTACH|DETACH|COPY/i.test(query)) {
+    if (pattern.test(maskedQuery)) {
+      if (/ATTACH|DETACH|COPY/i.test(maskedQuery)) {
         throw new DuckDbBridgeError(
           "DUCKDB_FILESYSTEM_ACCESS_DENIED",
           `Forbidden database manipulation statement detected: ${pattern.source}`,
         );
       }
-      if (/read_csv|read_parquet|read_json|parquet_scan/i.test(query)) {
+      if (
+        /read_csv|read_parquet|read_json|parquet_scan|read_text|read_blob|glob/i.test(
+          maskedQuery,
+        )
+      ) {
         throw new DuckDbBridgeError(
           "DUCKDB_FILESYSTEM_ACCESS_DENIED",
           `Direct filesystem scan forbidden: ${pattern.source}`,
         );
       }
       if (
-        /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD/i.test(query)
+        /powershell|cmd|wsl|docker|sh|bash|PRAGMA|INSTALL|LOAD|SECRET|SET/i.test(
+          maskedQuery,
+        )
       ) {
         throw new DuckDbBridgeError(
           "DUCKDB_HOST_EXECUTION_DENIED",
@@ -137,35 +246,132 @@ export function assertDuckDbSafety(query, parameters = []) {
     }
   }
 
-  // 2. Check parameter values for path traversal or command escape vectors
-  if (Array.isArray(parameters)) {
-    for (const param of parameters) {
-      if (typeof param?.value === "string") {
-        const val = param.value;
-        if (
-          val.includes("..") ||
-          val.includes("\\..") ||
-          val.includes("/..") ||
-          /^[A-Za-z]:[\\/]/.test(val) ||
-          val.startsWith("/") ||
-          val.startsWith("\\")
-        ) {
-          throw new DuckDbBridgeError(
-            "DUCKDB_FILESYSTEM_ACCESS_DENIED",
-            `Filesystem traversal path in parameter '${param.name}' is strictly forbidden`,
-          );
-        }
-        for (const pattern of ESCAPE_PATTERNS) {
-          if (pattern.test(val)) {
-            throw new DuckDbBridgeError(
-              "DUCKDB_ESCAPE_ATTEMPT_DENIED",
-              `Disallowed pattern in parameter '${param.name}'`,
-            );
-          }
-        }
-      }
+  // 1b. F-037 (R5-E15-03): no table function is admissible in the governed
+  // subset, so a call is refused by shape rather than by name. This is what
+  // makes an UNLISTED table function impossible to reach: the previous
+  // deny-list could only refuse the names it happened to carry.
+  if (TABLE_FUNCTION_CALL.test(fromClauseOf(query))) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_TABLE_FUNCTION_DENIED",
+      "Table functions are not part of the governed read-only subset.",
+    );
+  }
+
+  // 2. Bound values are data. `bindParameters` renders every string value
+  // through `toDuckDbLiteral`, which wraps it in single quotes and doubles any
+  // embedded quote, so a value such as `/reports/q3` or `load` can never
+  // become statement syntax. Scanning the value here refused a legitimate
+  // path or label for a filesystem escape that the quoted literal cannot
+  // perform. The statement's own syntax was already masked and checked above.
+  void parameters;
+}
+
+/**
+ * Renders one bound parameter value as a DuckDB literal.
+ *
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {string}
+ */
+function toDuckDbLiteral(value, name) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new DuckDbBridgeError(
+        "DUCKDB_INVALID_PARAMETER",
+        `Parameter '${name}' must be a finite number.`,
+      );
+    }
+    return String(value);
+  }
+  if (typeof value !== "string") {
+    throw new DuckDbBridgeError(
+      "DUCKDB_INVALID_PARAMETER",
+      `Parameter '${name}' must be a string, number, boolean or null.`,
+    );
+  }
+  // The control range is the point of the pattern, not an accident of it.
+  // eslint-disable-next-line no-control-regex
+  if (/[\0\x01-\x1F\x7F]/u.test(value)) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_INVALID_PARAMETER",
+      `Parameter '${name}' must not contain control characters.`,
+    );
+  }
+  return `'${value.replace(/'/gu, "''")}'`;
+}
+
+/**
+ * F-117 (R5-E06-05): substitutes the validated `:name` placeholders with
+ * literals.
+ *
+ * Measured at HEAD: `parameters` was validated (`validateSqlQuery` requires
+ * exact set equality between the query's placeholders and the declared
+ * parameter names) and then discarded - `initSql` interpolated `input.query`
+ * verbatim - so EVERY contract-valid parameterized `zink_sql` call reached the
+ * engine with `:name` unsubstituted and failed `DUCKDB_EXECUTION_ERROR`.
+ *
+ * F-455 (R9-T07-1): the canonical parameter shape is
+ * `{name: string, type: string, value: unknown}`, as published in
+ * `contracts/tools/zink-sql.schema.json` and `sql/README.md`. The binder
+ * DISCARDS `type`: rendering is decided by the JavaScript type of `value`, so
+ * a mismatched declaration never changes how the literal is quoted.
+ *
+ * The scan mirrors the validator's tokenizer: a `:name` inside a string literal
+ * is data, not a placeholder, and single quotes are doubled so a value cannot
+ * terminate its own literal.
+ *
+ * @param {string} query
+ * @param {Array<{name: string, type: string, value: unknown}>} [parameters]
+ * @returns {string}
+ */
+export function bindParameters(query, parameters = []) {
+  const byName = new Map();
+  for (const param of parameters || []) {
+    if (param && typeof param.name === "string") {
+      byName.set(param.name, param.value);
     }
   }
+
+  let out = "";
+  let i = 0;
+  while (i < query.length) {
+    const ch = query[i];
+    if (ch === "'") {
+      const start = i;
+      i += 1;
+      while (i < query.length) {
+        if (query[i] === "'") {
+          if (query[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      out += query.slice(start, i);
+      continue;
+    }
+    if (ch === ":") {
+      let j = i + 1;
+      let name = "";
+      while (j < query.length && /[A-Za-z0-9_]/u.test(query[j])) {
+        name += query[j];
+        j += 1;
+      }
+      if (name && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) && byName.has(name)) {
+        out += toDuckDbLiteral(byName.get(name), name);
+        i = j;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -208,6 +414,18 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     Number(options.timeoutMs) || DUCKDB_DEFAULT_TIMEOUT_MS,
     DUCKDB_MAX_TIMEOUT_MS,
   );
+  // F-186 (R5-E06-06): a repo-owned stdio bound, so a buffer overrun means the
+  // result genuinely exceeded a declared ceiling rather than silently tripping
+  // Node's 1 MiB default.
+  const maxBuffer =
+    Number(options.maxBuffer) > 0
+      ? Number(options.maxBuffer)
+      : DUCKDB_MAX_STDIO_BYTES;
+
+  // 5b. F-117 (R5-E06-05): bind the declared parameters into the statement. The
+  // validator has already required exact placeholder/parameter set equality, so
+  // every `:name` in the query has a value here.
+  const boundQuery = bindParameters(input.query, input.parameters || []);
 
   // 6. Execute bounded query (in contract/mock mode or via direct engine)
   if (options.simulateTimeout) {
@@ -227,6 +445,7 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
 
     return Object.freeze({
       execution_state: "TEST_SIMULATION",
+      data_source: "in_process_simulation",
       row_count: mockRows.length,
       columns: Object.freeze(mockColumns),
       rows: Object.freeze(mockRows),
@@ -236,20 +455,43 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     });
   }
 
-  // 7. Real DuckDB execution with schema fixtures for allowlisted databases
+  // 7. Contract-fixture DuckDB execution.
+  //
+  // The engine here IS a real DuckDB process: the SQL is really parsed, bound
+  // and executed, and a real error really fails. What is NOT real is the
+  // datasource. The rows below are a hardcoded contract fixture created inside
+  // an ephemeral in-memory database that is destroyed when the process exits.
+  // No business or analytics datasource is wired to this boundary yet, so the
+  // result is reported as a contract-fixture execution. Reporting it as
+  // "REAL_EXECUTED" would attest to the engine subprocess while presenting two
+  // canned rows as live analytics data, which is exactly the false-success
+  // claim this seam must not make. A governed consumer that needs business data
+  // must see FIXTURE_CONTRACT_EXECUTED and refuse to treat it as live.
   const initSql = [
     "CREATE TABLE IF NOT EXISTS knowledge (id INTEGER, name VARCHAR, category VARCHAR, value DOUBLE, created_at VARCHAR);",
     "INSERT INTO knowledge VALUES (1, 'artifact-alpha', 'silver', 100.5, '2026-09-14T00:00:00Z'), (2, 'artifact-beta', 'silver', 250.0, '2026-09-14T01:00:00Z');",
     "CREATE TABLE IF NOT EXISTS analytics_read AS SELECT * FROM knowledge;",
-    input.query.trim().endsWith(";")
-      ? input.query.trim()
-      : `${input.query.trim()};`,
+    boundQuery.trim().endsWith(";")
+      ? boundQuery.trim()
+      : `${boundQuery.trim()};`,
   ].join(" ");
 
   let parsedRows = [];
   try {
-    const rawOut = execFileSync("duckdb", ["-json", "-c", initSql], {
+    // F-294 (R7-C5-02): the child is spawned through an injectable seam so a
+    // lane can prove the timeout is applied to a REAL child and that the child
+    // is reaped. Measured at HEAD: the only timeout assertion drove
+    // `simulateTimeout`, a flag that raises before any subprocess exists, so
+    // the `timeout` option below was never exercised and removing it changed
+    // no count in any lane. The seam is an internal option of this function
+    // (never a model-reachable field); the default is the real spawn.
+    const spawn =
+      typeof options.execFileSyncImpl === "function"
+        ? options.execFileSyncImpl
+        : execFileSync;
+    const rawOut = spawn("duckdb", ["-json", "-c", initSql], {
       timeout: timeoutMs,
+      maxBuffer,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -258,6 +500,17 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
       parsedRows = JSON.parse(trimmed);
     }
   } catch (err) {
+    // Measured on this host: a buffer overrun and a timeout both terminate the
+    // child with `signal: "SIGTERM"` and `status: null`, so the signal cannot
+    // separate them; the spawn `code` is the discriminator. The overrun is a
+    // local plumbing limit and must not be reported as an engine failure
+    // (`R5-E06-06`).
+    if (err.code === "ENOBUFS") {
+      throw new DuckDbBridgeError(
+        "DUCKDB_RESULT_TOO_LARGE",
+        `Query result exceeded the ${maxBuffer} byte engine output ceiling.`,
+      );
+    }
     if (err.code === "ETIMEDOUT") {
       throw new DuckDbBridgeError(
         "DUCKDB_TIMEOUT",
@@ -270,10 +523,24 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
         "DuckDB executable not found in PATH",
       );
     }
-    const stderr = err.stderr ? String(err.stderr) : err.message;
+    // The child's stderr is uncapped engine prose, and this seam's errors are
+    // read by the model and recorded in the ledger and the cards. Only
+    // structured fields cross the boundary; the engine's own output stays
+    // host-side (`R5-E06-04`).
+    const cause = [
+      Number.isInteger(err.status) ? `engine status ${err.status}` : null,
+      typeof err.code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/u.test(err.code)
+        ? `spawn code ${err.code}`
+        : null,
+      typeof err.signal === "string" ? `signal ${err.signal}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     throw new DuckDbBridgeError(
       "DUCKDB_EXECUTION_ERROR",
-      `DuckDB engine execution failed: ${stderr.trim()}`,
+      `DuckDB engine execution failed${
+        cause ? ` (${cause})` : " (cause not classified)"
+      }; the engine's own stderr is not forwarded.`,
     );
   }
 
@@ -281,6 +548,7 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
   if (!Array.isArray(parsedRows) || parsedRows.length === 0) {
     return Object.freeze({
       execution_state: "EMPTY_RESULT",
+      data_source: "contract_fixture",
       row_count: 0,
       columns: Object.freeze([]),
       rows: Object.freeze([]),
@@ -290,12 +558,24 @@ export async function executeGovernedDuckDbQuery(context, input, options = {}) {
     });
   }
 
-  const sliced = parsedRows.slice(0, maxRows);
-  const columns = Object.keys(sliced[0]);
-  const rows = sliced.map((item) => Object.values(item));
+  // F-186 (R5-E06-06): measured at HEAD, `parsedRows.slice(0, maxRows)` returned
+  // the first max_rows rows with `row_count` equal to that page, so a caller
+  // could not tell "2 rows total" from "1 of 2 shown" and the model asserted the
+  // page was the table. The ceiling is now enforced instead of applied
+  // silently: a returned result is always the whole result.
+  if (parsedRows.length > maxRows) {
+    throw new DuckDbBridgeError(
+      "DUCKDB_RESULT_LIMIT_EXCEEDED",
+      `Query produced ${parsedRows.length} rows, above max_rows ${maxRows}; add a LIMIT to the query or raise max_rows.`,
+    );
+  }
+
+  const columns = Object.keys(parsedRows[0]);
+  const rows = parsedRows.map((item) => Object.values(item));
 
   return Object.freeze({
-    execution_state: "REAL_EXECUTED",
+    execution_state: "FIXTURE_CONTRACT_EXECUTED",
+    data_source: "contract_fixture",
     row_count: rows.length,
     columns: Object.freeze(columns),
     rows: Object.freeze(rows),

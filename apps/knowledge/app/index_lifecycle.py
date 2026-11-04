@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 
 import httpx
@@ -12,12 +13,16 @@ from .database import (
     ActiveIndex,
     KnowledgeDatabase,
     StateTransitionError,
+    normalize_source_path,
 )
 from .markdown_adapter import MarkdownSource, MarkdownVaultScanner, TokenBudget
 from .model_probe import ModelProbeError, OllamaModelProbe, ResolvedEmbeddingModel
 from .pdf_foundation import PdfFoundationError, PdfSidecar, discover_pdf_sidecars
 from .pdf_pipeline import PdfBuildError, PdfContentBuilder
 from .run_errors import SafeRunError
+
+# F-101 (R5-E01-05): the module had no logging facility at all.
+logger = logging.getLogger(__name__)
 
 
 class LifecycleError(RuntimeError):
@@ -101,8 +106,22 @@ class IndexLifecycle:
         )
 
     async def require_identity(self, expected: ActiveIndex) -> None:
+        """Refuse to work against a model that is not the indexed one.
+
+        F-263 (R7-D10B-01): the resolution used to issue an embedding
+        preflight on every call, so one `/v1/search` paid two model-list
+        round trips and three embedding round trips. The index already knows
+        the vector width, and every caller checks the width of the vectors it
+        received, so the width is passed in and the redundant embedding call
+        is not made. The digest comparison -- the part that can actually fail
+        -- is unchanged.
+        """
+
         try:
-            actual = await self._model_probe.resolve(expected.embedding_model_name)
+            actual = await self._model_probe.resolve(
+                expected.embedding_model_name,
+                expected_dimensions=expected.embedding_dimensions,
+            )
         except (httpx.HTTPError, ModelProbeError) as error:
             raise LifecycleError("EMBEDDING_MODEL_UNAVAILABLE") from error
         if not self.matches(expected, actual):
@@ -130,30 +149,43 @@ class IndexLifecycle:
                     pdf_sidecars = await asyncio.to_thread(discover_pdf_sidecars, self._vault_root)
                 except PdfFoundationError as error:
                     pdf_discovery_error = error
-            discovered = scan.discovered_count + len(pdf_sidecars)
+            failed_pdf_discovery = int(
+                pdf_discovery_error is not None
+                and pdf_discovery_error.source_path is not None
+            )
+            discovered = scan.discovered_count + len(pdf_sidecars) + failed_pdf_discovery
             self._run_source_counts = {
                 "MARKDOWN": [scan.discovered_count, 0, 0],
-                "PDF": [len(pdf_sidecars), 0, 0],
+                "PDF": [len(pdf_sidecars) + failed_pdf_discovery, 0, failed_pdf_discovery],
             }
             await self._database.set_discovered(run.id, discovered)
             if pdf_discovery_error is not None:
                 scan_failed = True
-                errors.append(SafeRunError(pdf_discovery_error.code))
+                errors.append(
+                    SafeRunError(
+                        pdf_discovery_error.code, pdf_discovery_error.source_path
+                    )
+                )
+                failed += failed_pdf_discovery
                 if run.kind == "FULL_REBUILD":
                     await self._fail(run, "SCAN_FAILED", errors, discovered, indexed, failed)
                     return []
             if not scan.succeeded:
                 scan_failed = True
+                # F-307 (R7-E1-02): the per-source COUNT still counts only
+                # the errors that name a specific markdown file, but the
+                # error keeps its LOCATION. A directory-scoped read failure
+                # used to have its path nulled, so the class of errors that
+                # most needs locating was the class that lost its location
+                # -- and, with the path nulled, two of them collapsed into
+                # one reported error.
                 source_error_paths = {
                     error.source_path
                     for error in scan.errors
                     if error.source_path.endswith(".md")
                 }
                 errors.extend(
-                    SafeRunError(
-                        error.code,
-                        error.source_path if error.source_path in source_error_paths else None,
-                    )
+                    SafeRunError(error.code, error.source_path)
                     for error in scan.errors
                 )
                 failed = len(source_error_paths)
@@ -180,14 +212,32 @@ class IndexLifecycle:
                 )
                 return []
 
-            manifest = {source.source_path: source for source in scan.sources}
-            manifest.update({sidecar.source_path: sidecar for sidecar in pdf_sidecars})
+            # F-576 (R10-T10-7): the hash map is keyed by the stored form, so a
+            # decomposed scan path has to be compared in that same form; the
+            # stale set is derived from the same keys, which is what keeps an
+            # unchanged source from being deleted after it was skipped.
+            manifest = {
+                normalize_source_path(source.source_path): source
+                for source in scan.sources
+            }
+            manifest.update(
+                {
+                    normalize_source_path(sidecar.source_path): sidecar
+                    for sidecar in pdf_sidecars
+                }
+            )
             for source in scan.sources:
-                if run.kind == "INCREMENTAL" and existing.get(source.source_path) == source.sha256:
+                if run.kind == "INCREMENTAL" and existing.get(
+                    normalize_source_path(source.source_path)
+                ) == source.sha256:
                     continue
                 try:
-                    await self.require_identity(expected)
                     embeddings = await self._embed_source(expected, source)
+                    # M11/T1-R1 3.4: the second probe per document was the
+                    # pre-embed one. The post-embed check still brackets every
+                    # source and runs BEFORE replace_source, so a drifted model
+                    # can never publish embeddings; the run keeps its initial
+                    # check at the API boundary.
                     await self.require_identity(expected)
                     await self._database.replace_source(run, source, embeddings)
                     indexed += 1
@@ -245,7 +295,11 @@ class IndexLifecycle:
                     )
                     return []
                 try:
-                    pdf_processing_identity = self._pdf_processing_identity(expected)
+                    # M11/T1-R1 3.7: the identity hashes the lock/manifest files
+                    # synchronously; off the loop it would stall every run.
+                    pdf_processing_identity = await asyncio.to_thread(
+                        self._pdf_processing_identity, expected
+                    )
                 except Exception:
                     await self._fail(
                         run,
@@ -258,8 +312,23 @@ class IndexLifecycle:
                     return []
                 for sidecar in pdf_sidecars:
                     try:
+                        # F-444 (R9-T06-2): the publish skip below compares a
+                        # content identity that embeds the digest of
+                        # app/pdf_runtime.py. A byte change to the deriving
+                        # code re-keys every PDF, so the owner's reclamation
+                        # record must be consulted by the stable source pair
+                        # BEFORE the build re-derives the reclaimed copy.
+                        if (
+                            run.kind == "INCREMENTAL"
+                            and await self._database.pdf_content_is_reclaimed(
+                                sidecar.pdf_digest, sidecar.sidecar_digest
+                            )
+                        ):
+                            continue
                         result = await self._pdf_builder.build(sidecar, pdf_processing_identity)
-                        if existing.get(sidecar.source_path) == result.content_identity_digest:
+                        if existing.get(
+                            normalize_source_path(sidecar.source_path)
+                        ) == result.content_identity_digest:
                             continue
                         await self.require_identity(expected)
                         await self._pdf_builder.revalidate_identity(
@@ -287,13 +356,41 @@ class IndexLifecycle:
                         )
                         indexed += 1
                         self._run_source_counts["PDF"][1] += 1
-                    except (PdfBuildError, StateTransitionError) as error:
-                        code = error.code if isinstance(error, PdfBuildError) else "PDF_RUNTIME_FAILED"
-                        errors.append(SafeRunError(code, sidecar.source_path))
+                    except PdfBuildError as error:
+                        # F-550 (R10-T06-2): the child's bounded summary is
+                        # recorded beside the code, so an OOM kill and a missing
+                        # artifact no longer persist as one indistinguishable
+                        # PDF_RUNTIME_FAILED row.
+                        errors.append(
+                            SafeRunError(error.code, sidecar.source_path, error.cause)
+                        )
                         failed += 1
                         self._run_source_counts["PDF"][2] += 1
                         if run.kind == "FULL_REBUILD":
-                            await self._fail(run, code, errors, discovered, indexed, failed)
+                            await self._fail(
+                                run, error.code, errors, discovered, indexed, failed
+                            )
+                            return []
+                    except StateTransitionError:
+                        # F-550 (R10-T06-2): a state the store refused is not a
+                        # runtime failure; naming it runtime sent the operator
+                        # to the child for a row the database declined. No cause
+                        # rides along — this fault's message is internal, and the
+                        # run row has always refused internal messages.
+                        errors.append(
+                            SafeRunError("PDF_BUILD_STATE_INVALID", sidecar.source_path)
+                        )
+                        failed += 1
+                        self._run_source_counts["PDF"][2] += 1
+                        if run.kind == "FULL_REBUILD":
+                            await self._fail(
+                                run,
+                                "PDF_BUILD_STATE_INVALID",
+                                errors,
+                                discovered,
+                                indexed,
+                                failed,
+                            )
                             return []
                     except LifecycleError as error:
                         errors.append(SafeRunError(error.code, sidecar.source_path))
@@ -338,14 +435,13 @@ class IndexLifecycle:
                         failed,
                     )
                     return []
-                await self._database.complete_incremental(
+                return await self._database.complete_incremental(
                     run,
                     discovered,
                     indexed,
                     set(existing).difference(manifest),
                     self._source_counts(),
                 )
-                return []
 
             return await self._database.publish_full_rebuild(
                 run, discovered, indexed, self._source_counts()
@@ -353,6 +449,35 @@ class IndexLifecycle:
         except LifecycleError as error:
             await self._fail(run, error.code, [SafeRunError(error.code, error.source_path)], discovered, indexed, failed)
             return []
+        except asyncio.CancelledError:
+            # F-253 (R7-D10A-01): the owner-connection termination handler
+            # cancels the run task, and `asyncio.CancelledError` derives from
+            # `BaseException`, so the `except Exception` arm below never ran
+            # and the run row stayed RUNNING. The partial unique index then
+            # refused every later run and the violation surfaced as a 503
+            # "database unavailable" until the process restarted. The run is
+            # marked terminal here, inside the same process, and the
+            # cancellation is re-raised.
+            try:
+                await asyncio.shield(
+                    self._fail(
+                        run,
+                        "INDEX_RUN_INTERRUPTED",
+                        [SafeRunError("INDEX_RUN_INTERRUPTED")],
+                        discovered,
+                        indexed,
+                        failed,
+                    )
+                )
+            except Exception as error:
+                logger.error(
+                    "knowledge.run_interrupt_unrecorded code=%s run_id=%s error=%s",
+                    "INDEX_RUN_INTERRUPTED",
+                    run.id,
+                    error,
+                    exc_info=True,
+                )
+            raise
         except Exception:
             await self._fail(
                 run,
@@ -410,7 +535,10 @@ class IndexLifecycle:
             discovered,
             indexed,
             failed,
-            fail_index=run.kind == "FULL_REBUILD",
+            # Both kinds now target a BUILDING index: incremental stages in a
+            # shadow index, so failure must mark that shadow FAILED and leave
+            # the live ACTIVE index untouched.
+            fail_index=True,
             source_counts=self._source_counts(),
         )
 
@@ -425,6 +553,19 @@ class IndexLifecycle:
     async def cleanup(self, index_ids: list[str]) -> None:
         try:
             await self._database.cleanup_superseded(index_ids)
-        except Exception:
-            # Cleanup is explicitly outside the correctness lifecycle.
+        except Exception as error:
+            # F-101 (R5-E01-05): the module had no logging facility at all,
+            # so a failed cleanup left nothing behind: the owner saw silent
+            # Postgres growth and an unattributable 500. The failure is now a
+            # record that names the code and the identifiers it is about.
+            # Cleanup stays outside the correctness lifecycle -- the run has
+            # already been published -- so the failure is recorded, not
+            # raised.
+            logger.error(
+                "knowledge.cleanup_failed code=%s index_ids=%s error=%s",
+                "CLEANUP_FAILED",
+                ",".join(index_ids),
+                error,
+                exc_info=True,
+            )
             return

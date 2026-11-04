@@ -27,6 +27,7 @@ Tất cả các lệnh gọi API đều đi qua Nginx tại địa chỉ `http:/
 | `POST`      | `/v1/index-runs`          | Kích hoạt tiến trình lập chỉ mục           | `{ "kind": "INCREMENTAL" }` hoặc `{ "kind": "FULL_REBUILD" }` |
 | `GET`       | `/v1/index-runs/{run_id}` | Theo dõi tiến độ lập chỉ mục               | Truyền `run_id` trên đường dẫn                                |
 | `POST`      | `/v1/search`              | Thực hiện tìm kiếm ngữ nghĩa kèm trích dẫn | `{ "query": "...", "limit": 10 }`                             |
+| `POST`      | `/v1/pdf-content-reclamations` | Thu hồi bản trích xuất (bản sao dẫn xuất) của một tài liệu PDF; **file PDF gốc vẫn được giữ nguyên** | `{ "source_path": "02. Books/.../report.pdf" }`                |
 
 ---
 
@@ -62,10 +63,10 @@ Sử dụng `index_run_id` vừa nhận được để kiểm tra trạng thái 
 
 ```powershell
 $status = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs/$runId"
-Write-Host "Trạng thái hiện tại: $($status.state)"
+Write-Host "Trạng thái hiện tại: $($status.status)"
 ```
 
-Khi trạng thái chuyển thành `COMPLETED`, toàn bộ chỉ mục HNSW và FTS đã được cập nhật thành công.
+Khi trạng thái chuyển thành `SUCCEEDED`, toàn bộ chỉ mục HNSW và FTS đã được cập nhật thành công.
 
 ---
 
@@ -79,11 +80,13 @@ $searchPayload = @{
 
 $results = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/knowledge/v1/search -ContentType application/json -Body $searchPayload
 
-foreach ($hit in $results.hits) {
+foreach ($hit in $results.results) {
     Write-Host "---"
-    Write-Host "Tiêu đề: $($hit.document_title)"
-    Write-Host "Điểm RRF: $($hit.score)"
-    Write-Host "Trích dẫn: $($hit.citation)"
+    Write-Host "Tiêu đề: $($hit.title)"
+    Write-Host "Điểm RRF: $($hit.rrf_score)"
+    Write-Host "Điểm rerank: $($hit.rerank_score)"
+    Write-Host "Trích dẫn: $($hit.citation.markdown)"
+    Write-Host "SHA-256 nguồn: $($hit.source_sha256)"
     Write-Host "Đoạn trích: $($hit.text.Substring(0, 150))..."
 }
 ```

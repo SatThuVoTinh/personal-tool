@@ -203,6 +203,30 @@ class PdfSegmentationTests(unittest.TestCase):
                 self.batch(),
             )
 
+    def test_an_item_that_normalises_to_empty_fails_closed(self) -> None:
+        """F-287 (R7-C3-06): a dropped item left no count and no code.
+
+        The boundary guarantees non-empty RAW content, and the normaliser
+        can still empty it (three spaces, a newline and a tab, a
+        non-breaking space). The item used to be skipped, so a page could
+        contribute nothing while the build still finished READY. The
+        sibling case -- a wholly empty result -- fails closed, and this one
+        does too.
+        """
+
+        for content in ("   ", "\n\t", "\u00a0"):
+            with self.subTest(content=repr(content)):
+                with self.assertRaises(PdfBuildError) as caught:
+                    self.builder()._segment_batch(
+                        "T",
+                        [{
+                            "kind": "text", "ordinal": 0, "content": content,
+                            "page_start": 1, "page_end": 1, "bbox": None,
+                        }],
+                        self.batch(),
+                    )
+                self.assertEqual(caught.exception.code, "PDF_RUNTIME_OUTPUT_INVALID")
+
     def test_large_token_split_uses_bounded_binary_search(self) -> None:
         builder = self.builder(40)
         pieces = builder._split_prose("T", "界" * 4000)
@@ -215,7 +239,7 @@ class _Database:
         self.created = False
         self.started: list[PdfContentBatch] = []
         self.completed: list[tuple[PdfContentBatch, tuple]] = []
-        self.failures: list[tuple[str, str]] = []
+        self.failures: list[tuple[str, str, str | None]] = []
         self.ready = False
         self.after_complete = None
         self.state: PdfContentBuildState | None = None
@@ -262,11 +286,11 @@ class _Database:
         if self.after_complete:
             self.after_complete()
 
-    async def fail_pdf_content_batch_and_build(self, batch, code: str) -> None:
-        self.failures.append((batch.id, code))
+    async def fail_pdf_content_batch_and_build(self, batch, code: str, cause=None) -> None:
+        self.failures.append((batch.id, code, cause))
 
-    async def fail_pdf_content_build(self, build, code: str) -> None:
-        self.failures.append((build.id, code))
+    async def fail_pdf_content_build(self, build, code: str, cause=None) -> None:
+        self.failures.append((build.id, code, cause))
 
     async def complete_pdf_content_build(self, build) -> None:
         self.ready = True
@@ -279,18 +303,24 @@ class _Runtime:
         *,
         failure: str | None = None,
         failure_start: int | None = None,
+        failure_detail: str | None = None,
+        preflight_detail: str | None = None,
         empty: bool = False,
         delay: float = 0,
     ) -> None:
         self.page_count = page_count
         self.failure = failure
         self.failure_start = failure_start
+        self.failure_detail = failure_detail
+        self.preflight_detail = preflight_detail
         self.empty = empty
         self.delay = delay
         self.ranges: list[tuple[int, int]] = []
         self.after_extract = None
 
     async def preflight(self, *_args):
+        if self.preflight_detail is not None:
+            raise PdfRuntimeError(self.failure or "PDF_RUNTIME_FAILED", self.preflight_detail)
         return {"page_count": self.page_count}
 
     async def extract_range(self, _path, start, end, _identity, _deadline):
@@ -298,7 +328,7 @@ class _Runtime:
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.failure and (self.failure_start is None or self.failure_start == start):
-            raise PdfRuntimeError(self.failure)
+            raise PdfRuntimeError(self.failure, self.failure_detail)
         if self.after_extract:
             self.after_extract()
         return {
@@ -425,7 +455,11 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
             segment_count=1,
         )
 
-        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+        # F-333 (R7-F2-02): the parent-side failure carries its OWN code.
+        # `PDF_RUNTIME_FAILED` means the child runtime died, and a suite
+        # that asserts the generic code for a case it titled specifically
+        # reinforced the fold.
+        with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_STATE_INVALID"):
             await self.builder(database, runtime).build(self.sidecar, identity)
         self.assertEqual(runtime.ranges, [])
 
@@ -482,7 +516,7 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         database.recovery_error = True
 
-        with self.assertRaisesRegex(PdfBuildError, "PDF_RUNTIME_FAILED"):
+        with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_STATE_INVALID"):
             await self.builder(database, runtime).build(self.sidecar, identity)
         self.assertTrue(database.recovered)
         self.assertEqual(runtime.ranges, [])
@@ -526,7 +560,10 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         def changing_hash(path: Path) -> str:
             nonlocal changed
             digest = sha256_file(path)
-            if path == self.pdf and not changed:
+            # Compare resolved paths: on Windows the production resolver returns
+            # the 8.3 short-name spelling, so a raw equality check would never
+            # match the fixture and the drift would never be injected.
+            if path.resolve() == self.pdf.resolve() and not changed:
                 self.pdf.write_bytes(b"changed fixture")
                 changed = True
             return digest
@@ -569,8 +606,16 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.failures[0][1], "PDF_RUNTIME_TIMEOUT")
 
     async def test_cumulative_timeout_after_commit_fails_running_batch_and_build(self) -> None:
-        database, runtime = _Database(), _Runtime(5, delay=0.2)
-        with patch("app.pdf_pipeline.BUILD_TIMEOUT_SECONDS", 0.1):
+        # The budget and the delay are wide apart on purpose. The budget
+        # covers the phase BEFORE the commit point (the snapshot hop, the
+        # preflight and the build row), and the delay has to outlast it, so
+        # the timeout still fires after the commit point. The old 0.1 s
+        # budget sat inside the pre-commit phase on a loaded host -- the
+        # first thread hop alone measured 43 ms here and the whole body
+        # 145 ms -- so the case failed on the environment, not on the
+        # behaviour it names. The assertions are unchanged.
+        database, runtime = _Database(), _Runtime(5, delay=1.0)
+        with patch("app.pdf_pipeline.BUILD_TIMEOUT_SECONDS", 0.5):
             with self.assertRaisesRegex(PdfBuildError, "PDF_BUILD_TIMEOUT"):
                 await self.builder(database, runtime).build(self.sidecar, "a" * 64)
         self.assertTrue(database.created)
@@ -585,6 +630,72 @@ class PdfBuildLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.ranges, [(1, 4), (5, 8)])
         self.assertEqual([(batch.page_start, batch.page_end) for batch in database.started], [(1, 4), (5, 8)])
         self.assertEqual(database.failures[0][1], "PDF_RUNTIME_FAILED")
+
+    async def test_the_child_summary_reaches_the_build_error_as_its_cause(
+        self,
+    ) -> None:
+        """F-550 (R10-T06-2): the boundary computes a diagnosis, this seam keeps it.
+
+        `_child_failure_detail` returned `exit=-9; stderr=Killed` and the
+        conversion arm rebuilt the error from the code alone, so every cause was
+        dropped exactly one call before it could become durable.
+        """
+
+        database = _Database()
+        runtime = _Runtime(
+            10,
+            failure="PDF_RUNTIME_FAILED",
+            failure_start=5,
+            failure_detail="exit=-9; stderr=Killed",
+        )
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
+        self.assertEqual(caught.exception.cause, "exit=-9; stderr=Killed")
+        # F-550 (R10-T06-2): the same summary reaches the build row this arm
+        # writes, not only the exception the caller sees.
+        self.assertEqual(database.failures[0][1], "PDF_RUNTIME_FAILED")
+        self.assertEqual(database.failures[0][2], "exit=-9; stderr=Killed")
+
+    async def test_a_preflight_death_keeps_its_cause_too(self) -> None:
+        """F-550 (R10-T06-2): the preflight seam is the other place it was dropped."""
+
+        database = _Database()
+        runtime = _Runtime(10, failure="PDF_RUNTIME_FAILED", preflight_detail="exit=1; stderr=artifact missing")
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.cause, "exit=1; stderr=artifact missing")
+        self.assertEqual(runtime.ranges, [])
+
+    async def test_a_parent_side_fault_names_its_type_and_not_its_message(
+        self,
+    ) -> None:
+        """F-550 (R10-T06-2): the cause channel is the child's, not a message pipe.
+
+        The catch-all arm still answers `PDF_RUNTIME_FAILED`, so the cause is the
+        only thing that can say what really happened — and an internal fault's
+        message (a database detail, a file path) must not enter it.
+        """
+
+        database = _Database()
+        runtime = _Runtime(1)
+
+        def fault() -> None:
+            raise KeyError("host=internal-db password=rot13")
+
+        runtime.after_extract = fault
+
+        with self.assertRaises(PdfBuildError) as caught:
+            await self.builder(database, runtime).build(self.sidecar, "a" * 64)
+
+        self.assertEqual(caught.exception.code, "PDF_RUNTIME_FAILED")
+        self.assertEqual(caught.exception.cause, "type=KeyError")
+        self.assertEqual(database.failures[0][2], "type=KeyError")
+        self.assertNotIn("internal-db", str(caught.exception.cause))
 
     async def test_hashing_is_offloaded_from_the_event_loop(self) -> None:
         database, runtime = _Database(), _Runtime(1)

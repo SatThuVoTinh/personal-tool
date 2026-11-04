@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "zink://contracts/approval-request-v1",
   "title": "ApprovalRequestV1",
+  "x-zink-contract-version": "1.1.0",
   "description": "An owner-approval record presented for a governed action. Two shapes exist and both are enforced: a Skill Store publication packet raised by a specialist, and a governed tool invocation approved through the canonical approval binding. The contract is applied to both, so it is authority rather than decoration.",
   "oneOf": [
     {
@@ -11,8 +12,9 @@
       "required": [
         "schema_version",
         "governance_version",
+        "subject_type",
         "approval_id",
-        "task_id",
+        "proposal_id",
         "brief_revision",
         "exact_target",
         "exact_operation",
@@ -39,13 +41,20 @@
           ]
         },
         "approval_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "subject_type": { "const": "SKILL_CANDIDATE_APPROVAL" },
+        "proposal_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
         "exact_target": { "type": "string", "maxLength": 1024 },
         "exact_operation": { "const": "SKILL_CANDIDATE_APPROVAL" },
         "material_parameters": {
           "type": "object",
-          "required": ["namespace", "capability", "version", "content_sha256"],
+          "required": [
+            "namespace",
+            "capability",
+            "version",
+            "content_sha256",
+            "source_type"
+          ],
           "properties": {
             "namespace": {
               "type": ["string", "array"],
@@ -60,7 +69,17 @@
               "pattern": "^[a-f0-9]{64}$"
             },
             "reason": { "type": "string", "maxLength": 4096 },
-            "requesting_agent": { "type": "string", "maxLength": 64 }
+            "requesting_agent": { "type": "string", "maxLength": 64 },
+            "source_type": {
+              "type": "string",
+              "enum": [
+                "owner-authored",
+                "demonstration",
+                "execution",
+                "correction",
+                "research"
+              ]
+            }
           },
           "additionalProperties": false,
           "maxProperties": 32
@@ -96,7 +115,7 @@
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
         },
-        "task_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "task_id": { "type": "string", "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$" },
         "brief_revision": { "type": "integer", "minimum": 1, "maximum": 16 },
         "tool_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "operation": { "type": "string", "minLength": 1, "maxLength": 256 },

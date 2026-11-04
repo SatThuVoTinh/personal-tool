@@ -9,6 +9,14 @@ export class MLflowAdapterError extends Error {
 }
 
 /**
+ * SIMULATION_CONTRACT: this adapter is a contract test double, NOT a live
+ * MLflow integration. It opens no network connection, reads no credential, and
+ * returns canned in-memory values. Any credential-shaped option it accepts is
+ * stored and never used, which is not integration. A governed path must treat
+ * its output as simulation and must never present it as provider execution.
+ * Wiring a real provider requires a separately approved backend.
+ */
+/**
  * Governed MLflow Local Adapter
  * Logs and tracks local experiments, parameters, metrics, and artifact references.
  */
@@ -16,6 +24,25 @@ export class MLflowLocalAdapter {
   constructor(options = {}) {
     this.trackingUri = options.trackingUri || "sqlite:///mlflow.db";
     this.runs = new Map();
+  }
+
+  /**
+   * F-278 (R7-C2-03): a deep, frozen copy of a run record.
+   *
+   * Measured at HEAD: `createRun` returned `Object.freeze({ ...runRecord })`,
+   * `logMetrics` returned a frozen object whose per-key metric arrays were the
+   * stored arrays, and `endRun` returned a frozen shallow copy — while
+   * `getRun` already returned a deep copy. A caller could therefore push a
+   * forged entry into the artifact array of a createRun result, or pop a
+   * metric history array, and silently corrupt the tracking store for every
+   * later reader. One copy helper, used by every method that hands run state
+   * out, makes the returned value a snapshot instead of a view.
+   *
+   * @param {object} record
+   * @returns {object} a deep-frozen copy
+   */
+  static #snapshot(record) {
+    return Object.freeze(JSON.parse(JSON.stringify(record)));
   }
 
   /**
@@ -46,7 +73,7 @@ export class MLflowLocalAdapter {
       artifacts: [],
     };
     this.runs.set(runId, runRecord);
-    return Object.freeze({ ...runRecord });
+    return MLflowLocalAdapter.#snapshot(runRecord);
   }
 
   /**
@@ -55,10 +82,16 @@ export class MLflowLocalAdapter {
   async logParameters(runId, params) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     Object.assign(run.params, params);
-    return Object.freeze({ run_id: runId, params: { ...run.params } });
+    return MLflowLocalAdapter.#snapshot({
+      run_id: runId,
+      params: { ...run.params },
+    });
   }
 
   /**
@@ -67,13 +100,19 @@ export class MLflowLocalAdapter {
   async logMetrics(runId, metrics, step = 0) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     for (const [k, v] of Object.entries(metrics)) {
       if (!run.metrics[k]) run.metrics[k] = [];
       run.metrics[k].push({ value: v, step, timestamp: Date.now() });
     }
-    return Object.freeze({ run_id: runId, metrics: { ...run.metrics } });
+    return MLflowLocalAdapter.#snapshot({
+      run_id: runId,
+      metrics: { ...run.metrics },
+    });
   }
 
   /**
@@ -82,7 +121,10 @@ export class MLflowLocalAdapter {
   async logArtifact(runId, { artifact_name, artifact_path, checksum }) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     const artifactRecord = {
       artifact_name,
@@ -100,11 +142,14 @@ export class MLflowLocalAdapter {
   async endRun(runId, status = "FINISHED") {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
     run.status = status;
     run.end_time = new Date().toISOString();
-    return Object.freeze({ ...run });
+    return MLflowLocalAdapter.#snapshot(run);
   }
 
   /**
@@ -113,8 +158,11 @@ export class MLflowLocalAdapter {
   async getRun(runId) {
     const run = this.runs.get(runId);
     if (!run) {
-      throw new MLflowAdapterError("MLFLOW_RUN_NOT_FOUND", `Run '${runId}' not found.`);
+      throw new MLflowAdapterError(
+        "MLFLOW_RUN_NOT_FOUND",
+        `Run '${runId}' not found.`,
+      );
     }
-    return Object.freeze(JSON.parse(JSON.stringify(run)));
+    return MLflowLocalAdapter.#snapshot(run);
   }
 }

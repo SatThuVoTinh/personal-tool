@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "purpose": "Every recovery archive this repository holds, with the digest that identifies it, the producer that wrote it and the retention that expires it. An archive that is not listed here has no provenance, no digest and no expiry.",
+  "canonical_copy": "docs/execution/findings.md",
+  "retention": "A recovery archive is retained until the owner authorizes its deletion. No archive in this ledger is ever the canonical record of anything, and none of them is a restore source on its own.",
+  "archives": [
+    {
+      "run_id": "4d26bc4f820d427b85339aee2286c9b2",
+      "path": "backups/knowledge-t5/4d26bc4f820d427b85339aee2286c9b2/knowledge.dump",
+      "bytes": 319932,
+      "sha256": "eb1488035dcfdf8db24b2927a331bbf8f57be1f439e4555b0ef79ddd460d0857",
+      "producer": "no tracked producer: written before the T5 driver owned the knowledge.dump name",
+      "status": "legacy-unowned-archive",
+      "retention": "Retained until the owner authorizes its deletion. Never the canonical record and never a restore source without a fresh, verified recovery point."
+    },
+    {
+      "run_id": "a02b3919a8aa43de9ebc7c21cb5d285b",
+      "path": "backups/knowledge-t5/a02b3919a8aa43de9ebc7c21cb5d285b/knowledge.dump",
+      "bytes": 319932,
+      "sha256": "aeaeedfb8b6498ec1e9dc616c3c098c9ecc3b2ec83b8c1d34aaa3770d2ca0f74",
+      "producer": "no tracked producer: written before the T5 driver owned the knowledge.dump name",
+      "status": "legacy-unowned-archive",
+      "retention": "Retained until the owner authorizes its deletion. Never the canonical record and never a restore source without a fresh, verified recovery point."
+    },
+    {
+      "run_id": "fe69e04156204b739933733b3e703adc",
+      "path": "backups/knowledge-t5/fe69e04156204b739933733b3e703adc/knowledge.dump",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "producer": "no tracked producer: written before the T5 driver owned the knowledge.dump name",
+      "status": "rejected-empty-archive",
+      "retention": "Zero length: the T5 driver refuses to write a zero-length recovery archive, so this file restores nothing and is not a recovery archive. Retained until the owner authorizes its deletion."
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "4d26bc4f820d427b85339aee2286c9b2",
+      "archive_path": "backups/knowledge-t5/4d26bc4f820d427b85339aee2286c9b2/knowledge.dump",
+      "status": "legacy-unowned-archive"
+    },
+    {
+      "run_id": "a02b3919a8aa43de9ebc7c21cb5d285b",
+      "archive_path": "backups/knowledge-t5/a02b3919a8aa43de9ebc7c21cb5d285b/knowledge.dump",
+      "status": "legacy-unowned-archive"
+    },
+    {
+      "run_id": "fe69e04156204b739933733b3e703adc",
+      "archive_path": "backups/knowledge-t5/fe69e04156204b739933733b3e703adc/knowledge.dump",
+      "status": "rejected-empty-archive"
+    },
+    {
+      "run_id": "0a4003be37b34fa589b36e67e298f537",
+      "archive_path": null,
+      "status": "no-archive-produced",
+      "note": "The run directory holds no archive. The pointer that used to tie this run to its evidence lived only in ignored scratch; this entry is the tracked pointer."
+    }
+  ]
+}

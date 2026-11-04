@@ -1,3 +1,10 @@
+// SKIP-FAMILY: docker
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -65,7 +72,8 @@ function readCompose() {
 }
 
 test("M3/T1 declares an internal-only Knowledge service", () => {
-  const knowledge = readCompose().services.knowledge;
+  const services = readCompose().services;
+  const knowledge = services.knowledge;
 
   assert.equal(knowledge.image, "personal-tool/knowledge:m3");
   assert.equal(knowledge.ports, undefined);
@@ -85,11 +93,32 @@ test("M3/T1 declares an internal-only Knowledge service", () => {
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_NAME, "postgres");
   assert.equal(
     knowledge.environment.KNOWLEDGE_DATABASE_PASSWORD,
-    "${POSTGRES_PASSWORD:-unconfigured}",
+    "${KNOWLEDGE_DB_PASSWORD:-unconfigured}",
   );
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_PORT, "5432");
-  assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");
+  assert.notEqual(knowledge.environment.KNOWLEDGE_DATABASE_USER, "postgres");
+  assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_USER, "knowledge_app");
   assert.equal(knowledge.environment.KNOWLEDGE_DATABASE_DSN, undefined);
+  // Owner decision 2026-11-01 (option C, F-INFRA-002): the postgres container
+  // now runs the first-boot role bootstrap, so it receives the same
+  // fail-closed module passwords as the one-shot helper. The superuser can
+  // already reset those roles, so the module boundary is unchanged.
+  assert.equal(
+    services.postgres.environment.KNOWLEDGE_DB_PASSWORD,
+    "${KNOWLEDGE_DB_PASSWORD:-unconfigured}",
+  );
+  assert.equal(
+    services.postgres.environment.N8N_POSTGRES_PASSWORD,
+    "${N8N_POSTGRES_PASSWORD:-unconfigured}",
+  );
+  assert.equal(
+    services.postgres.environment.SKILL_DB_PASSWORD,
+    "${SKILL_DB_PASSWORD:-unconfigured}",
+  );
+  assert.equal(
+    services["postgres-bootstrap"].environment.SKILL_DB_PASSWORD,
+    "${SKILL_DB_PASSWORD:-unconfigured}",
+  );
 });
 
 test("M3/T1 keeps Nginx loopback-only and proxies only the Knowledge route", () => {
@@ -136,7 +165,13 @@ test("M3/T1 migration scopes sources and segments by index identity", () => {
 test("M3/T1 readiness verifies the active index embedding digest and dimensions", () => {
   const service = readFileSync(servicePath, "utf8");
 
-  assert.match(service, /@app\.get\("\/healthz"\)/);
+  //
+  //
+  // `/healthz` returns `JSONResponse | dict[...]`, which the pinned
+  // FastAPI/Pydantic pair rejects during route registration unless response
+  // model generation is disabled. Pin the exact bootable form so the route
+  // cannot silently regress into a service that cannot import `app.main`.
+  assert.match(service, /@app\.get\("\/healthz", response_model=None\)/);
   assert.match(service, /@app\.get\("\/readyz", response_model=None\)/);
   assert.match(service, /NO_ACTIVE_INDEX/);
   assert.match(service, /EMBEDDING_MODEL_UNAVAILABLE/);
@@ -179,7 +214,12 @@ test("M3/T1 recovers orphan runs and holds an advisory lock for background work"
 test("M3/T1 acceptance validates readiness and cleans only its isolated project", () => {
   const script = readFileSync(validationPath, "utf8");
 
-  assert.match(script, /\$projectName = "personal-tool-m3-t1"/);
+  // F-290 (R7-C4-03): the acceptance project is namespaced per run, so two
+  // invocations cannot share a volume and a rerun cannot meet the state an
+  // earlier run left behind.
+  assert.match(script, /\$projectName = "personal-tool-m3-t1-\$runId"/);
+  assert.match(script, /New-AcceptanceRunId/);
+  assert.match(script, /New-AcceptanceFixtureUuid/);
   assert.match(script, /"build", "knowledge"/);
   assert.match(script, /"knowledge",\s*"nginx"/);
   assert.match(script, /NO_ACTIVE_INDEX/);

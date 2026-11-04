@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "knowledge-t5-common.ps1")
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $PSScriptRoot "..\env\.env" }
 if (-not $BackupBase) { $BackupBase = Join-Path $env:LOCALAPPDATA "ZinkKnowledge\recovery\m4" }
@@ -22,8 +23,14 @@ $knowledgeComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.kno
 $liveComposeFile = Join-Path $script:T5DockerDirectory "compose\compose.m4-t5.live.yml"
 $barrierRoot = Join-Path ([IO.Path]::GetTempPath()) "knowledge-t5-backup-barrier-$runId"
 $backupRoot = Join-Path $BackupBase $runId
-$dumpPath = Join-Path $backupRoot "m4-recovery-$runId.dump"
-$manifestPath = Join-Path $backupRoot "m4-recovery-$runId.manifest.json"
+# F-365 (R7-IG-05): this driver owns the recovery-archive name. The tree
+# already held archives named knowledge.dump that no tracked file produced;
+# the manifest is written beside the archive, so a run's pointer never lives
+# only in ignored scratch. The retention that expires an archive is stated in
+# docs/runbooks/backups-and-recovery-archives.md and in the tracked ledger
+# docs/runbooks/recovery-archive-ledger.json.
+$dumpPath = Join-Path $backupRoot "knowledge.dump"
+$manifestPath = Join-Path $backupRoot "knowledge.manifest.json"
 $evidence = [ordered]@{ schema_version = 2; mode = "Live"; result = "FAIL"; acceptance_run_id = $runId; started_at = [DateTime]::UtcNow.ToString("o") }
 $restoreContainer = "knowledge-t5-restore-$runId"
 $script:restoreContainerStarted = $false
@@ -268,8 +275,8 @@ function Assert-BackupAndRestore {
   param([string]$PostgresId, [object]$Snapshot, [string]$CatalogBefore)
 
   New-PrivateBackupRoot
-  $containerDump = "/tmp/m4-recovery-$runId.dump"
-  $temporaryDump = Join-Path $backupRoot "m4-recovery-$runId.dump.tmp"
+  $containerDump = "/tmp/knowledge-$runId.dump"
+  $temporaryDump = Join-Path $backupRoot "knowledge.dump.tmp"
   try {
     $toolVersion = (& docker exec $PostgresId pg_dump --version).Trim()
     $restoreToolVersion = (& docker exec $PostgresId pg_restore --version).Trim()
@@ -320,7 +327,7 @@ function Assert-BackupAndRestore {
       Remove-Item -LiteralPath $truncatedHost -Force -ErrorAction SilentlyContinue
     }
 
-    $criticalTables = @("indexes", "index_runs", "sources", "source_sidecars")
+    $criticalTables = @("indexes", "index_runs", "segments", "sources", "source_sidecars")
     if (@($Snapshot.migration_versions) -contains "002_pdf_ingestion_foundation.sql") { $criticalTables += @("pdf_content_builds", "pdf_content_batches", "pdf_content_segments", "pdf_source_details", "index_run_source_counts") }
     $metadataRows = @(Invoke-LiveSnapshotSql (Get-MetadataDigestSql $criticalTables) $Snapshot.snapshot_id | Where-Object { $_ -and $_ -notin @("BEGIN", "SET", "COMMIT") })
     $metadataDigest = Get-T5Sha256Text (($metadataRows -join "`n") + "`n")
@@ -328,7 +335,7 @@ function Assert-BackupAndRestore {
     $sequenceRows = @(Invoke-LiveSnapshotSql $sequenceSql $Snapshot.snapshot_id | Where-Object { $_ -and $_ -notin @("BEGIN", "SET", "COMMIT") })
 
     $restoreImage = "pgvector/pgvector:0.8.1-pg17@sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21"
-    & docker run --detach --name $restoreContainer --network none --memory 1g --pids-limit 256 --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=2048m --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,size=1536m --tmpfs /var/run/postgresql:rw,nosuid,nodev,size=32m --env POSTGRES_HOST_AUTH_METHOD=trust --label com.personal-tool.acceptance=t5 --label com.personal-tool.acceptance-run=$runId $restoreImage | Out-Null
+    & docker run --detach --name $restoreContainer --network none --memory 1g --pids-limit 256 --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=2048m --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,size=1536m --tmpfs /var/run/postgresql:rw,nosuid,nodev,size=32m --env POSTGRES_HOST_AUTH_METHOD=trust --label com.personal-tool.acceptance=t5 --label com.personal-tool.acceptance-run=$runId --label com.personal-tool.persistence=temporary $restoreImage | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Disposable recovery database failed to start." }
     $script:restoreContainerStarted = $true
     for ($attempt = 0; $attempt -lt 120; $attempt++) {
@@ -413,6 +420,10 @@ try {
   if (-not $ConfirmPersistentIndex) { throw "ConfirmPersistentIndex is required." }
   if (-not (Test-Path -LiteralPath $EnvironmentFile -PathType Leaf)) { throw "Runtime environment file is missing." }
   Assert-T5CleanRepository
+  # F-292 (R7-C4-05): the live run mutates the operational tree, so the tree
+  # it packages is the script's own and it is recorded in the evidence.
+  $null = Assert-T5RepositoryIdentity
+  $evidence.repository_root = $script:T5RepositoryRoot
   $canonicalVault = Get-T5CanonicalVaultRoot $VaultRoot
   Assert-T5ExpectedSourcePath $canonicalVault $ExpectedSourcePath | Out-Null
   $filters = Get-T5SearchFilters $canonicalVault $ExpectedSourcePath
@@ -437,7 +448,7 @@ try {
   $schemaExists = ((Invoke-LiveSql "SELECT to_regclass('knowledge.schema_migrations') IS NOT NULL AND to_regclass('knowledge.indexes') IS NOT NULL;") -join "").Trim() -eq "t"
   if (-not $schemaExists) { throw "M4 live acceptance requires the recoverable M3 Knowledge schema." }
   $ledgerBefore = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })
-  $allowedLedgers = @("001_initial.sql", "001_initial.sql`n002_pdf_ingestion_foundation.sql")
+  $allowedLedgers = @("001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql")
   if (($ledgerBefore -join "`n") -notin $allowedLedgers) { throw "Knowledge migration ledger is missing, corrupt, or unknown." }
 
   Invoke-LiveCompose @("up", "--detach", "knowledge")
@@ -455,8 +466,12 @@ try {
   Assert-T5ReadOnlyMount $knowledgeId $runId
   Assert-T5NetworkBoundary $knowledgeId $nginxId
   Assert-T5PrivilegeBoundary $knowledgeId
+  # F-288 (R7-C4-01): the deployed stack now carries the model allowlist, so
+  # the egress proof runs against the DEPLOYED shape and not only against
+  # the acceptance overlay.
+  Assert-T5ModelEgressAllowlist $knowledgeId
   $ledgerAfterStart = @(Invoke-LiveSql "SELECT version FROM knowledge.schema_migrations ORDER BY version" | Where-Object { $_ })
-  if (($ledgerAfterStart -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql") { throw "M4 migration ledger is invalid after service start." }
+  if (($ledgerAfterStart -join "`n") -cne "001_initial.sql`n002_pdf_ingestion_foundation.sql`n004_pdf_build_failure_cause.sql`n005_schema_migration_digest.sql") { throw "M4 migration ledger is invalid after service start." }
   $catalogAfterStart = ((Invoke-LiveSql (Get-CatalogSql) | Where-Object { $_ }) -join "`n") + "`n"
   if ((Get-T5Sha256Text $catalogAfterStart) -cne $matching.migration.schema_catalog_fingerprint) { throw "Operational M4 catalog differs from isolated exact-candidate acceptance." }
 
@@ -509,29 +524,55 @@ catch {
 }
 finally {
   $evidence.finished_at = [DateTime]::UtcNow.ToString("o")
-  $finalizationError = $null
-  try { Write-T5Evidence "live" $runId $evidence | Out-Null } catch { $finalizationError = $_.Exception }
-  try {
-    if ($script:restoreContainerStarted) { & docker rm -f $restoreContainer 2>$null | Out-Null }
-    if ($evidence.result -ne "PASS" -and $script:knowledgeStarted) {
-      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-      try { Invoke-LiveCompose @("stop", "knowledge") | Out-Null } finally { $ErrorActionPreference = $previous }
-    }
-  }
-  catch {
-    if ($null -eq $finalizationError) { $finalizationError = $_.Exception }
-  }
-  Remove-Item Env:KNOWLEDGE_VAULT_ROOT -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_T5_BACKUP_BARRIER_ROOT -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $barrierRoot -Recurse -Force -ErrorAction SilentlyContinue
-  if ($null -eq $finalizationError -and $evidence.result -eq "PASS") {
+  # F-291 (R7-C4-04): the shared finalisation contract runs the cleanup,
+  # records every condition it raises in the evidence, and names them in the
+  # output. The finalisation failure is raised after the body, so the body's
+  # own failure is never replaced by a teardown complaint, and a teardown
+  # failure on a run whose body already failed is still reported.
+  Invoke-AcceptanceFinalization -Label "M4/T5 live" -RunId $runId -Evidence $evidence -EvidenceWriter { Write-T5Evidence "live" $runId $evidence | Out-Null } -Cleanup {
+    # F-268 (R7-D13-05): the restore container is removed BEFORE the evidence
+    # is written, because a removal that fails has to be visible in the
+    # recorded result. The run used to swallow the removal's exit code and
+    # print its success line with the container still on the host. The
+    # container also carries the sweeper's third label now, so a leaked
+    # container is selected by the same filter set as every other temporary
+    # resource.
+    $cleanupError = $null
     try {
-      Initialize-T5PrivateEvidenceDirectory
-      if (Test-Path -LiteralPath $acceptedCandidatePath) { throw "Accepted candidate evidence is immutable and already exists." }
-      Write-T5AtomicJson $acceptedCandidatePath $acceptedCandidate
+      if ($script:restoreContainerStarted) {
+        & docker rm -f $restoreContainer 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          $evidence.result = "FAIL"
+          $evidence.error_code = "ACCEPTANCE_CONTAINER_LEAK"
+          throw "The disposable recovery container could not be removed: $restoreContainer"
+        }
+      }
     }
-    catch { $finalizationError = $_.Exception }
+    catch {
+      $cleanupError = $_.Exception.Message
+    }
+    finally {
+      if ($evidence.result -ne "PASS" -and $script:knowledgeStarted) {
+        $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        try { Invoke-LiveCompose @("stop", "knowledge") | Out-Null } catch { if ($null -eq $cleanupError) { $cleanupError = $_.Exception.Message } } finally { $ErrorActionPreference = $previous }
+      }
+      Remove-Item Env:KNOWLEDGE_VAULT_ROOT -ErrorAction SilentlyContinue
+      Remove-Item Env:KNOWLEDGE_T5_BACKUP_BARRIER_ROOT -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $barrierRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  if ($null -ne $finalizationError -and -not $script:bodyFailed) { throw "M4/T5 live evidence finalization or cleanup failed." }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T5 live evidence finalization or cleanup failed: $finalizationError"
+}
+
+if ($null -eq $finalizationError -and $evidence.result -eq "PASS") {
+  Initialize-T5PrivateEvidenceDirectory
+  if (Test-Path -LiteralPath $acceptedCandidatePath) { throw "Accepted candidate evidence is immutable and already exists." }
+  Write-T5AtomicJson $acceptedCandidatePath $acceptedCandidate
+}
+
 Write-Output "M4/T5 live acceptance passed."

@@ -12,9 +12,16 @@
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "float", "boolean", "null"]
+        },
+        "value": {
+          "type": ["string", "integer", "number", "boolean", "null"]
         }
       },
-      "required": ["name"],
+      "required": ["name", "type", "value"],
       "oneOf": [
         {
           "properties": {
@@ -86,6 +93,14 @@
     "output": {
       "type": "object",
       "properties": {
+        "execution_state": {
+          "type": "string",
+          "enum": ["FIXTURE_CONTRACT_EXECUTED", "TEST_SIMULATION", "EMPTY_RESULT"]
+        },
+        "data_source": {
+          "type": "string",
+          "enum": ["contract_fixture", "in_process_simulation"]
+        },
         "row_count": {
           "type": "integer",
           "minimum": 0
@@ -99,11 +114,24 @@
         "rows": {
           "type": "array",
           "items": {
-            "type": "object",
+            "type": ["object", "array"],
             "additionalProperties": {
+              "type": ["string", "number", "boolean", "null"]
+            },
+            "items": {
               "type": ["string", "number", "boolean", "null"]
             }
           }
+        },
+        "execution_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provider": {
+          "type": "string"
+        },
+        "target_database": {
+          "type": "string"
         }
       },
       "required": ["row_count", "columns", "rows"],

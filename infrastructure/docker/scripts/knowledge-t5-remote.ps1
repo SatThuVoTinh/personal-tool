@@ -10,6 +10,10 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "knowledge-t5-common.ps1")
 
 Assert-T5CleanRepository
+# F-292 (R7-C4-05): the remote proof describes the tree this script
+# packages, so a run started from another worktree is refused before it can
+# compare a foreign revision with the accepted candidate.
+$null = Assert-T5RepositoryIdentity
 $acceptedPath = Join-Path $script:T5EvidenceDirectory "accepted-candidate-$ImplementationCandidateSha.json"
 if (-not (Test-Path -LiteralPath $acceptedPath -PathType Leaf)) {
   throw "Exact accepted-candidate evidence is missing; live acceptance has not passed."
@@ -23,12 +27,12 @@ if ($accepted.result -ne "PASS" -or $accepted.implementation_candidate_sha -notm
 }
 if ($accepted.implementation_candidate_sha -cne $ImplementationCandidateSha) { throw "Accepted candidate SHA does not match the requested remote proof." }
 
-& git fetch $Remote $MainBranch
+& git -C $script:T5RepositoryRoot fetch $Remote $MainBranch
 if ($LASTEXITCODE -ne 0) { throw "Unable to fetch $Remote/$MainBranch." }
 $remoteRef = "$Remote/$MainBranch"
-& git merge-base --is-ancestor $accepted.implementation_candidate_sha $remoteRef
+& git -C $script:T5RepositoryRoot merge-base --is-ancestor $accepted.implementation_candidate_sha $remoteRef
 if ($LASTEXITCODE -ne 0) { throw "Accepted candidate SHA is not an ancestor of $remoteRef." }
-$remoteSha = (& git rev-parse $remoteRef).Trim()
+$remoteSha = (& git -C $script:T5RepositoryRoot rev-parse $remoteRef).Trim()
 if ($LASTEXITCODE -ne 0 -or $remoteSha -notmatch '^[0-9a-f]{40}$') { throw "Unable to resolve $remoteRef." }
 $remoteManifest = Get-T5CandidatePathManifest $remoteSha
 if ($remoteManifest.candidate_manifest_sha256 -cne $accepted.candidate_manifest_sha256 -or

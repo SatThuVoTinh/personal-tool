@@ -512,9 +512,17 @@ describe("Phase B (gap A) — an unambiguous writer-semantics discriminator", ()
     // other: the compare must reject the substitution.
     const { root, paths, taskId } = openedLedger("blocked");
     try {
-      // The real legacy shape: the task's OPENED carries a PRE-VERDICT stamp and
-      // its root result carries the AMBIGUOUS stamp, exactly as the deployed
-      // writer recorded task 6d4f96cc (seq 25 m7-t5-r13, seq 26 m8-t2.2-r4).
+      // The real legacy shape: the task's OPENED and its root result BOTH carry
+      // a PRE-VERDICT stamp, so the pre-verdict model is the one the events
+      // describe.
+      //
+      // M12/T9 F-160 (the owner's ruling, 2026-10-21): the AMBIGUOUS
+      // m8-t2.2-r4 stamp is a VERDICT stamp in every path, so a root result
+      // carrying it is no longer resolved by the JOURNAL's scope. This case
+      // therefore uses the pre-verdict stamp the pre-verdict writer actually
+      // emitted, and the AMBIGUOUS stamp is covered by case 4 above, by
+      // tests/m8-t2.3-blocked-verdict.test.mjs and by
+      // tests/agent-owner-F-160.test.mjs.
       const opened = readFileSync(paths.events, "utf8")
         .split("\n")
         .filter(Boolean)
@@ -534,7 +542,7 @@ describe("Phase B (gap A) — an unambiguous writer-semantics discriminator", ()
       let previous = legacyOpen.event_digest;
       const body = {
         schema_version: "1.0.0",
-        governance_version: AMBIGUOUS_VERSION,
+        governance_version: "m7-t5-r13",
         sequence: 2,
         type: "WORKFLOW_ROOT_RESULT_RECORDED",
         payload: {

@@ -3,7 +3,9 @@ param()
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
+$runId = New-AcceptanceRunId
 $containerName = "personal-tool-m3-t2-fixture"
 $imageName = "personal-tool/knowledge:m3-t2"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
@@ -27,6 +29,18 @@ function Get-FixtureManifest {
 
 $beforeManifest = @(Get-FixtureManifest)
 $created = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  container = $containerName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   & docker build `
@@ -85,13 +99,27 @@ try {
     throw "The read-only fixture Vault changed during acceptance."
   }
 
-  Write-Output "M3/T2 isolated read-only fixture acceptance passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($created) {
-    & docker rm --force $containerName | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      throw "M3/T2 fixture container cleanup failed."
+  Invoke-AcceptanceFinalization -Label "M3/T2" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M3-T2-$runId.json" -Cleanup {
+    if ($created) {
+      & docker rm --force $containerName | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        throw "M3/T2 fixture container cleanup failed."
+      }
     }
   }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M3/T2 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M3/T2 isolated read-only fixture acceptance passed."

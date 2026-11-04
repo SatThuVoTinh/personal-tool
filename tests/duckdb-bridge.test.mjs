@@ -1,9 +1,21 @@
+//
+// SKIP-FAMILY: duckdb
+//
+// M12/T9 F-384: these cases need the DuckDB ENGINE, and a host without it
+// reports NOT RUN instead of a pass. The capability is its own family, so the
+// CI runner's expectation is declared once and every host agrees on it.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
-import { executeGovernedDuckDbQuery } from "../zink-tools/sql/duckdb-bridge.mjs";
 import {
+  assertDuckDbSafety,
+  bindParameters,
+  executeGovernedDuckDbQuery,
+} from "../zink-tools/sql/duckdb-bridge.mjs";
+import {
+  classifyDuckDbEngineProbe,
   duckDbEngineAvailable,
   duckDbSkip,
+  DUCKDB_ENGINE_STATUS,
 } from "./helpers/duckdb-availability.mjs";
 
 describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
@@ -205,22 +217,16 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     }
   });
 
-  test("Gate 5.6: filesystem traversal in parameter value -> DENY (DUCKDB_FILESYSTEM_ACCESS_DENIED)", async () => {
-    await assert.rejects(
-      async () => {
-        await executeGovernedDuckDbQuery(validContext, {
-          query: "SELECT id FROM knowledge WHERE name = :param",
-          target_database: validDatabase,
-          parameters: [
-            { name: "param", type: "string", value: "../../etc/passwd" },
-          ],
-        });
-      },
-      (err) => {
-        assert.equal(err.code, "DUCKDB_FILESYSTEM_ACCESS_DENIED");
-        return true;
-      },
+  test("Gate 5.6: a traversal-shaped bind value is quoted data, not a filesystem path", () => {
+    const query = "SELECT id FROM knowledge WHERE name = :param";
+    const parameters = [
+      { name: "param", type: "string", value: "../../etc/passwd" },
+    ];
+    assert.equal(
+      bindParameters(query, parameters),
+      "SELECT id FROM knowledge WHERE name = '../../etc/passwd'",
     );
+    assert.doesNotThrow(() => assertDuckDbSafety(query, parameters));
   });
 
   test("Gate 5.7: mutation query is denied by Lean Option B parser", async () => {
@@ -268,14 +274,19 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
   });
 
   test(
-    "Gate RC09.1: known SELECT fixture returns exact real rows and REAL_EXECUTED",
+    "Gate RC09.1: known SELECT fixture returns exact rows labelled as a contract fixture",
     { skip: duckDbSkip() },
     async () => {
       const res = await executeGovernedDuckDbQuery(validContext, {
         query: "SELECT id, name FROM knowledge WHERE id = 1",
         target_database: validDatabase,
       });
-      assert.equal(res.execution_state, "REAL_EXECUTED");
+      // The engine really executed, but the datasource is a hardcoded contract
+      // fixture, so the state must not claim a real datasource. Reporting
+      // REAL_EXECUTED here attested to the subprocess while presenting canned
+      // rows as live analytics data.
+      assert.equal(res.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+      assert.equal(res.data_source, "contract_fixture");
       assert.equal(res.row_count, 1);
       assert.deepEqual(res.columns, ["id", "name"]);
       assert.deepEqual(res.rows, [[1, "artifact-alpha"]]);
@@ -315,6 +326,62 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     },
   );
 
+  // T2.1-4 (R5-E06-04): the execution-failure branch used to paste the child's
+  // whole stderr into the thrown message, and this seam's errors are read by the
+  // model and recorded in the ledger and the cards.
+  test(
+    "Gate RC09.4: an engine failure forwards no stderr and names only structured fields",
+    { skip: duckDbSkip() },
+    async () => {
+      const err = await executeGovernedDuckDbQuery(validContext, {
+        query: "SELECT invalid_column_xyz FROM knowledge",
+        target_database: validDatabase,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      assert.equal(err?.code, "DUCKDB_EXECUTION_ERROR");
+      for (const marker of [
+        "invalid_column_xyz",
+        "Referenced column",
+        "Binder Error",
+        "knowledge",
+      ]) {
+        assert.ok(
+          !err.message.includes(marker),
+          `the engine's own prose must stay host-side: ${marker}`,
+        );
+      }
+      // The operator still gets a cause, and it is bounded to structured fields.
+      assert.match(err.message, /engine status \d+/u);
+      assert.match(err.message, /stderr is not forwarded/u);
+
+      // A timeout is the same leak risk, so it must also be classifiable without
+      // the child's output. Whatever shape Node reports here, it may not be
+      // prose, and it may not silently become an execution error carrying bytes.
+      const timedOut = await executeGovernedDuckDbQuery(
+        validContext,
+        { query: validQuery, target_database: validDatabase },
+        { timeoutMs: 1 },
+      ).then(
+        () => null,
+        (error) => error,
+      );
+      if (timedOut) {
+        assert.ok(
+          ["DUCKDB_TIMEOUT", "DUCKDB_EXECUTION_ERROR"].includes(timedOut.code),
+          `a timed-out engine call must be classified, got ${timedOut.code}`,
+        );
+        for (const marker of ["Binder Error", "Referenced column"]) {
+          assert.ok(
+            !timedOut.message.includes(marker),
+            `a timeout must not forward engine prose: ${marker}`,
+          );
+        }
+      }
+    },
+  );
+
   // The one gate that is meaningful on every host, with or without the engine.
   // It asserts that an absent engine is reported as an explicit condition and
   // never degrades into rows, and — on a host that does have the engine — that
@@ -329,7 +396,8 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
 
     if (duckDbEngineAvailable()) {
       const res = await call();
-      assert.equal(res.execution_state, "REAL_EXECUTED");
+      assert.equal(res.execution_state, "FIXTURE_CONTRACT_EXECUTED");
+      assert.equal(res.data_source, "contract_fixture");
       assert.ok(res.row_count >= 0);
       return;
     }
@@ -351,4 +419,46 @@ describe("Governed DuckDB Windows Bridge (M7/T4 G4 & G5)", () => {
     assert.equal(res.execution_state, "TEST_SIMULATION");
     assert.equal(res.row_count, 2);
   });
+});
+
+test("F-304: only an absent binary yields NOT RUN; a broken engine reddens the lane", () => {
+  // M12/T9 F-304: the probe used to fold every failure into "not installed",
+  // so a hanging or broken engine retired the SQL gates behind a skip whose
+  // reason was factually wrong, and the lane still exited zero. The cause is
+  // now reported, and the skip is only produced for an absent binary.
+  const absent = classifyDuckDbEngineProbe(() => {
+    const error = new Error("spawn duckdb ENOENT");
+    error.code = "ENOENT";
+    throw error;
+  });
+  assert.equal(absent.status, DUCKDB_ENGINE_STATUS.NOT_INSTALLED);
+  assert.match(absent.detail, /not installed/u);
+  assert.equal(
+    duckDbSkip(absent),
+    absent.detail,
+    "an absent engine is still NOT RUN, with an accurate reason",
+  );
+
+  for (const code of ["ETIMEDOUT", "EACCES", "ENOEXEC", 1]) {
+    const broken = classifyDuckDbEngineProbe(() => {
+      const error = new Error("the engine did not answer");
+      error.code = code;
+      throw error;
+    });
+    assert.equal(
+      broken.status,
+      DUCKDB_ENGINE_STATUS.BROKEN,
+      `a probe failure with code ${code} is BROKEN, not NOT INSTALLED`,
+    );
+    assert.match(broken.detail, /FAILURE, not NOT RUN/u);
+    assert.equal(
+      duckDbSkip(broken),
+      false,
+      `a broken engine must NOT be retired behind a skip (code ${code})`,
+    );
+  }
+
+  const available = classifyDuckDbEngineProbe(() => {});
+  assert.equal(available.status, DUCKDB_ENGINE_STATUS.AVAILABLE);
+  assert.equal(duckDbSkip(available), false);
 });

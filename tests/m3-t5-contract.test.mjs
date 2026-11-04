@@ -1,3 +1,10 @@
+// SKIP-FAMILY: docker
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -81,7 +88,14 @@ test("M4/T5 freezes portable Git path and blob candidate identities", () => {
   assert.match(common, /function Get-T5DeploymentFingerprint/);
   assert.match(common, /persistence = \$Persistence/);
   assert.match(common, /function Get-T5CandidatePathManifest/);
-  assert.match(common, /git ls-tree -r --name-only/);
+  //
+  //
+  // F-292 (R7-C4-05): the candidate path set is enumerated from the
+  // script's own tree, not from the invocation directory.
+  assert.match(
+    common,
+    /git -C \$script:T5RepositoryRoot ls-tree -r --name-only/,
+  );
   assert.match(common, /candidate_path_set_sha256/);
   assert.match(common, /candidate_manifest_sha256/);
   assert.match(common, /git_blob_oid/);
@@ -223,7 +237,10 @@ test("M4/T5 binds backup, recovery, and live mutation to one ownership interval"
   );
   assert.match(live, /Accepted candidate evidence is immutable/);
   assert.match(live, /status = "REMOTE-PENDING"/);
-  assert.match(remote, /git merge-base --is-ancestor/);
+  assert.match(
+    remote,
+    /git -C \$script:T5RepositoryRoot merge-base --is-ancestor/,
+  );
   assert.match(
     remote,
     /Remote candidate path completeness or Git-blob manifest changed/,

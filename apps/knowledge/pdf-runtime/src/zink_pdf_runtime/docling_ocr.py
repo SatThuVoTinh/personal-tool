@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import os
+import shutil
 import stat
 import tempfile
 import time
@@ -21,7 +22,43 @@ from docling.utils.ocr_utils import tesseract_box_to_bounding_rectangle
 from docling_core.types.doc import BoundingBox, CoordOrigin
 from docling_core.types.doc.page import TextCell
 
-from .ocr import OcrRuntimeError, run_tesseract
+from .ocr import OcrRuntimeError, region_deadline, require_deadline, run_tesseract
+
+# F-284 (R7-C3-03): the deadline the parent sent for this extraction. The
+# child runtime is a one-shot process that performs exactly one extraction,
+# so the deadline is a property of that extraction and not state shared
+# between concurrent requests.
+_EXTRACTION_DEADLINE: float | None = None
+
+
+def set_extraction_deadline(deadline: float | None) -> None:
+    """Bind (or clear) the deadline that bounds this extraction."""
+
+    global _EXTRACTION_DEADLINE
+    _EXTRACTION_DEADLINE = deadline
+
+
+def _prepare_temp_root() -> Path:
+    """Create the child's private temp root and remove a killed child's residue.
+
+    F-442 (R9-L09-6): each region lives inside a ``TemporaryDirectory`` that
+    only the context manager or ``atexit`` removes.  The parent kills the
+    child's whole process group when its deadline expires, so neither runs and
+    the region directory survived inside the container's tmpfs.  The parent
+    serialises runtime invocations, so every pre-existing child of this root is
+    residue from a killed invocation and is safe to remove here.
+    """
+
+    temp_root = Path(os.environ["ZINK_PDF_TEMP_ROOT"])
+    temp_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if temp_root.is_symlink() or stat.S_IMODE(temp_root.stat().st_mode) != 0o700:
+        raise OcrRuntimeError("PDF_RUNTIME_UNAVAILABLE")
+    for entry in temp_root.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+    return temp_root
 
 
 class M4TesseractOcrModel(BaseOcrModel):
@@ -52,10 +89,7 @@ class M4TesseractOcrModel(BaseOcrModel):
         if not self.enabled:
             yield from page_batch
             return
-        temp_root = Path(os.environ["ZINK_PDF_TEMP_ROOT"])
-        temp_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if temp_root.is_symlink() or stat.S_IMODE(temp_root.stat().st_mode) != 0o700:
-            raise OcrRuntimeError("PDF_RUNTIME_UNAVAILABLE")
+        temp_root = _prepare_temp_root()
         for page in page_batch:
             if page._backend is None or not page._backend.is_valid():
                 yield page
@@ -67,12 +101,15 @@ class M4TesseractOcrModel(BaseOcrModel):
             for rect in rects:
                 if rect.area() == 0:
                     continue
+                # F-284 (R7-C3-03): every region is bounded by the deadline the
+                # parent sent, not by a fresh ninety seconds.
+                overall_deadline = require_deadline(_EXTRACTION_DEADLINE)
                 image = page._backend.get_page_image(scale=self.scale, cropbox=rect)
                 with tempfile.TemporaryDirectory(dir=temp_root) as directory:
                     image_path = Path(directory) / "region.png"
                     image.save(image_path, format="png")
                     image_path.chmod(0o600)
-                    tsv = run_tesseract(image_path, deadline=time.monotonic() + 90)
+                    tsv = run_tesseract(image_path, deadline=region_deadline(overall_deadline))
                 cells.extend(_tsv_cells(tsv, rect, image.size, self.scale))
             self.post_process_cells(cells, page, conv_res)
             yield page

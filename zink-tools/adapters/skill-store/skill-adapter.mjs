@@ -8,6 +8,7 @@ import {
   CANONICAL_DOMAINS,
   KNOWN_TAXONOMY_MAP,
   NAMESPACE_ALIAS_MAP,
+  RETRIEVAL_MIN_RELEVANCE,
 } from "../../common/semantic-contract.mjs";
 import {
   generateSkillEmbeddings,
@@ -15,8 +16,17 @@ import {
   EXPECTED_MODEL_NAME,
   toPostgresArrayLiteral,
   escapeSqlLiteral,
+  checkIndexFreshness,
 } from "../../../zink-skill-store/src/vector-sync.mjs";
-import { scanCatalog } from "../../../zink-skill-store/src/catalog.mjs";
+import {
+  scanCatalog,
+  withSkillStoreWriterLock,
+  PROVENANCE_SOURCE_TYPES,
+} from "../../../zink-skill-store/src/catalog.mjs";
+
+// F-OC-012: the proposal path and the approval path validate against the one
+// vocabulary the store defines, never a per-layer copy.
+export { PROVENANCE_SOURCE_TYPES };
 
 export class SkillAdapterError extends Error {
   constructor(message, code = "SKILL_ADAPTER_ERROR") {
@@ -24,6 +34,43 @@ export class SkillAdapterError extends Error {
     this.name = "SkillAdapterError";
     this.code = code;
   }
+}
+
+/**
+ * F-448 (R9-L07a-3) / F-555 (R10-T06-7): the sentences an agent-facing failure
+ * may carry.
+ *
+ * F-145 (R1-A14-08) applied this rule to the sibling knowledge adapter and
+ * `knowledge-adapter.mjs:893-907` records why: a Node fs error embeds the
+ * absolute path it tried to open, a JSON.parse SyntaxError quotes the upstream
+ * bytes, and a socket error names the host and port — all of them reached the
+ * caller, and therefore the model and the cards. This adapter re-serialised
+ * whatever the write helper threw instead, so the same class of operator
+ * topology left the module. The raw text is now sent only to a trusted sink
+ * (`options.onAdapterFailure` / `options.logger.warn`); the envelope, or the
+ * thrown SkillAdapterError, carries a fixed sentence and a code.
+ */
+const SKILL_FAILURE_SENTENCES = Object.freeze({
+  SKILL_ADAPTER_ERROR: "The Skill Store request could not be completed.",
+  SKILL_PROPOSAL_PERSIST_FAILED: "The skill proposal could not be persisted.",
+  PROVENANCE_SOURCE_TYPE_INVALID:
+    "The skill proposal did not declare a valid provenance source type.",
+});
+
+function fixedFailureSentence(code) {
+  return (
+    SKILL_FAILURE_SENTENCES[code] ?? SKILL_FAILURE_SENTENCES.SKILL_ADAPTER_ERROR
+  );
+}
+
+/**
+ * The envelope sentence for a code. `SkillAdapterError` already prefixes the
+ * code in its constructor; the returned envelope is not an Error, so it names
+ * the same code itself. Either way the caller can tell WHICH failure it got
+ * (F-008's named refusals, R10-T06-1) while the prose stays fixed (F-555).
+ */
+function fixedFailureMessage(code) {
+  return `[${code}] ${fixedFailureSentence(code)}`;
 }
 
 const ALLOWED_ACTIONS = new Set([
@@ -54,6 +101,22 @@ export const VETTED_ROOT_NAMESPACES = new Set([
   ...Object.keys(NAMESPACE_ALIAS_MAP),
 ]);
 
+// R25: how many SEGMENT rows one skill can contribute to a search.
+//
+// The search LIMIT is a limit on rows, but the caller asks for skills and the
+// loop deduplicates to skills. With the old `limit * 4`, three long skills at
+// 16 segments each consumed the entire 40-row budget for a request of 10, and
+// seven further qualifying skills never appeared at all - silently, with
+// governed_status SUCCESS and nothing signalling truncation.
+//
+// Derived rather than guessed: the catalog refuses a SKILL.md above 262_144
+// bytes (catalog.mjs, enforced on both write and scan) and the chunker emits
+// at most one segment per MAX_SEGMENT_CONTENT_BYTES = 16_384
+// (vector-sync.mjs). So 262144 / 16384 = 16 is the hard maximum, and a row
+// budget of limit * 16 provably still yields `limit` distinct skills.
+//
+// If either ceiling changes, this must change with it.
+const MAX_SEGMENTS_PER_SKILL_VERSION = Math.ceil(262_144 / (16 * 1024));
 export const MAX_PROPOSAL_CONTENT_BYTES = 128 * 1024; // 128KB
 export const MAX_PROPOSAL_REASON_BYTES = 4 * 1024; // 4KB
 
@@ -78,43 +141,226 @@ export function deriveProposalId({
     .slice(0, 32);
 }
 
-function findSkillRecordOnDisk(skillsDir, targetSkillId) {
-  if (!fs.existsSync(skillsDir)) return null;
-  const targetSlug = targetSkillId.split("/").pop();
-
-  function walk(dir) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      if (ent.isDirectory()) {
-        const full = path.join(dir, ent.name);
-        const manifestPath = path.join(full, "manifest.json");
-        const skillMdPath = path.join(full, "SKILL.md");
-        if (fs.existsSync(manifestPath) && fs.existsSync(skillMdPath)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-            const idInfo = manifest.identity || {};
-            const cap = idInfo.capability || ent.name;
-            const ns = Array.isArray(idInfo.namespace)
-              ? idInfo.namespace.join("/")
-              : String(idInfo.namespace || "");
-            const fullId = `${ns}/${cap}`;
-            if (
-              fullId === targetSkillId ||
-              cap === targetSkillId ||
-              fullId.endsWith(targetSkillId) ||
-              cap === targetSlug
-            ) {
-              return { dir: full, manifest, skillMdPath };
-            }
-          } catch {}
-        }
-        const sub = walk(full);
-        if (sub) return sub;
-      }
-    }
-    return null;
+/**
+ * Read a record's bytes and PROVE they are the approved ones — through the
+ * canonical catalog, never a private disk walk.
+ *
+ * M11/T1-R1 2.1: the previous implementation re-read `SKILL.md` and
+ * `manifest.json` itself with lax `JSON.parse`, so a manifest that
+ * `scanCatalog` refuses (extra keys, bad lifecycle, oversized, symlinked)
+ * could still be served to an agent by `read`/`apply` while `discover`
+ * failed closed on the same bytes. Resolution now goes through the catalog
+ * validator, strict JSON parser, `lstat` non-link rules and per-file byte
+ * ceilings, and the content is the one the scanner decoded after digest
+ * verification. Any catalog error ⇒ fail closed, no fallback: a digest
+ * mismatch keeps the R25 `SKILL_SOURCE_DRIFT` taxonomy, everything else is
+ * reported as `SKILL_CATALOG_INVALID`.
+ *
+ * M11/T1-R1 2.5: a bare (unqualified) slug matching capabilities under more
+ * than one namespace is `SKILL_ID_AMBIGUOUS`, never an enumeration-order
+ * pick. Qualified ids are matched whole (R25 behavior preserved).
+ */
+/**
+ * F-187 (R5-E06-08): an absent, unmounted or unreadable directory is not an
+ * empty one. `existsSync` cannot tell them apart either, so availability is a
+ * `statSync` question asked once and used for both the scan gate and the
+ * verdict.
+ */
+function isReadableDirectory(dirPath) {
+  try {
+    return fs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
   }
-  return walk(skillsDir);
+}
+
+async function loadVerifiedRecord(skillsDir, targetSkillId) {
+  const catalog = await scanCatalog(skillsDir);
+  if (catalog.errors.length > 0) {
+    if (catalog.errors.some((e) => e.code === "CONTENT_DIGEST_MISMATCH")) {
+      throw new SkillAdapterError(
+        `SOURCE_DRIFT_DETECTED: the catalog refused bytes that do not match their manifest digest (${targetSkillId})`,
+        "SKILL_SOURCE_DRIFT",
+      );
+    }
+    throw new SkillAdapterError(
+      `Skill catalog is invalid (${catalog.errors[0]?.code ?? "unknown"}); refusing to serve ${targetSkillId}`,
+      "SKILL_CATALOG_INVALID",
+    );
+  }
+
+  // R25: a qualified id must be matched WHOLE. Matching on the bare last
+  // segment let two namespaces that share a capability slug collide, and
+  // `fullId.endsWith(targetSkillId)` matched any id by suffix.
+  const qualified = targetSkillId.includes("/");
+  const targetSlug = targetSkillId.split("/").pop();
+  const resolved = [];
+  const identitiesSeen = new Set();
+
+  for (const rec of catalog.records) {
+    const idInfo = rec.manifest?.identity || {};
+    const cap = idInfo.capability;
+    const ns = Array.isArray(idInfo.namespace)
+      ? idInfo.namespace.join("/")
+      : String(idInfo.namespace || "");
+    const fullId = `${ns}/${cap}`;
+    const matches = qualified
+      ? fullId === targetSkillId
+      : cap === targetSkillId || cap === targetSlug;
+    if (!matches) continue;
+    resolved.push(rec);
+    identitiesSeen.add(fullId);
+    if (qualified) break;
+  }
+
+  if (resolved.length === 0) return null;
+  if (!qualified && identitiesSeen.size > 1) {
+    throw new SkillAdapterError(
+      `SKILL_ID_AMBIGUOUS: '${targetSkillId}' resolves under multiple namespaces: ${[...identitiesSeen].sort().join(", ")} — use a qualified id`,
+      "SKILL_ID_AMBIGUOUS",
+    );
+  }
+
+  // Catalog records are sorted by relative path, so the first match is the
+  // lowest version in the namespace — the same deterministic pick the old
+  // sorted walk made. The caller enforces the ACTIVE lifecycle gate.
+  const record = resolved[0];
+  const content = record.markdown;
+  const digest = createHash("sha256").update(content, "utf8").digest("hex");
+  return { record: { manifest: record.manifest }, content, digest };
+}
+
+/**
+ * F-028 (R1-A04-03): the served skill is BOUND to the namespace the caller
+ * gated on.
+ *
+ * Measured at HEAD: `loadVerifiedRecord(skillsDir, targetSkillId)` took no
+ * namespace at all, so the served skill was decided by the caller's
+ * `skill_id` alone while the gated `namespace` was echoed back and never
+ * compared. A caller that asked for the `research` namespace could therefore
+ * be served the `excel` stack's approved skill bytes — the namespace the
+ * authorization gate was asked about was not the namespace the answer came
+ * from.
+ *
+ * This adapter does not own the per-agent apply scope (that is the OpenClaw
+ * governance layer's `lib/policy.mjs`), and it must not: it is a thin
+ * adapter-contract boundary. What it DOES own is the binding between the
+ * namespace the caller gated on and the skill the caller is served, so the
+ * answer can never come from another namespace than the one that was asked
+ * for.
+ *
+ * A request that names no namespace, or names `all`, does not narrow
+ * anything and is therefore not constrained here; a request that names a
+ * namespace is served only a skill that belongs to it. Both sides are
+ * compared in their CANONICAL spelling (the shared alias registry), so
+ * `bi` and `power-bi` name the same namespace and an alias is not a way to
+ * smuggle a different one past the binding.
+ *
+ * @param {unknown} servedNamespace - the namespace(s) of the served record
+ * @param {unknown} requestedNamespace - the namespace the caller gated on
+ * @param {string} skillId - the id that was asked for (for the message)
+ */
+function assertNamespaceBinding(servedNamespace, requestedNamespace, skillId) {
+  const asList = (value) =>
+    (Array.isArray(value) ? value : [value])
+      .filter((entry) => typeof entry === "string" && entry.trim())
+      .map((entry) => entry.trim());
+  const canonical = (namespace) => NAMESPACE_ALIAS_MAP[namespace] ?? namespace;
+
+  const requested = asList(requestedNamespace).filter(
+    (namespace) => namespace !== "all",
+  );
+  if (requested.length === 0) return;
+
+  const served = asList(servedNamespace);
+  const requestedCanonical = new Set(requested.map(canonical));
+  const servedCanonical = served.map(canonical);
+  if (servedCanonical.some((namespace) => requestedCanonical.has(namespace))) {
+    return;
+  }
+  throw new SkillAdapterError(
+    `SKILL_NAMESPACE_MISMATCH: '${skillId}' belongs to namespace(s) ${
+      served.length > 0 ? served.join(", ") : "(none)"
+    }, which the requested namespace ${requested.join(", ")} does not select; refusing to serve it`,
+    "SKILL_NAMESPACE_MISMATCH",
+  );
+}
+/**
+ * F-296 (R7-C5-04): fsync the PARENT DIRECTORY after a rename.
+ *
+ * A rename is only durable once the directory entry that carries it is
+ * flushed. The file's own fsync flushes the BYTES; the directory entry that
+ * names them is a separate record, so a crash right after the rename can
+ * still revert the publication to the pre-rename file. For this writer that
+ * reverted file is the owner's recorded decision about a governed skill.
+ *
+ * The sibling writers in this repository (`topology/lib/ledger.mjs`,
+ * `lib/queue-manager.mjs`, `lib/decision-ledger.mjs`,
+ * `lib/artifact-validator.mjs`) all fsync the parent directory for exactly
+ * this reason. Windows cannot fsync a directory handle, so the platform error
+ * is tolerated there and only there, exactly as the sibling writers do.
+ */
+function syncDirectory(directory) {
+  let directoryFd;
+  try {
+    directoryFd = fs.openSync(directory, "r");
+    fs.fsyncSync(directoryFd);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error?.code)
+    ) {
+      throw error;
+    }
+  } finally {
+    if (directoryFd !== undefined) fs.closeSync(directoryFd);
+  }
+}
+
+/**
+ * Atomically persists one JSON record: temp file, write, fsync, rename,
+ * parent-directory fsync.
+ * A partially written file is never treated as a valid proposal.
+ */
+function writeJsonAtomicSync(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, filePath);
+  // The rename is atomic, not durable: without this the directory entry can
+  // still be lost on a crash and the publication reverts to the previous
+  // proposal record.
+  syncDirectory(path.dirname(filePath));
+}
+
+function readProposalRecordSync(filePath) {
+  // Absent and unreadable are not the same answer. Returning null for both made
+  // the caller's sameBytes check false, so both terminal-status guards fell
+  // through and an owner's recorded decision was overwritten.
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new SkillAdapterError(
+      `Skill proposal record exists but cannot be read (${error?.code ?? "unknown"}).`,
+      "SKILL_PROPOSAL_UNREADABLE",
+    );
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new SkillAdapterError(
+      "Skill proposal record exists but is not valid JSON.",
+      "SKILL_PROPOSAL_UNREADABLE",
+    );
+  }
 }
 
 export class SkillAdapter {
@@ -126,8 +372,29 @@ export class SkillAdapter {
     this.options = options;
   }
 
+  /**
+   * F-448 / F-555: route raw failure detail to a trusted sink only.
+   *
+   * The caller-facing failure carries a fixed sentence and a code; this helper
+   * is where the verbatim message (which may quote an absolute path, upstream
+   * body bytes or a host:port) is allowed to go. Both sinks are optional and
+   * are supplied by trusted runtime code, never by model input.
+   *
+   * @param {string} code
+   * @param {unknown} error
+   */
+  reportAdapterFailure(code, error) {
+    const detail = error?.stack || error?.message || String(error);
+    if (typeof this.options.onAdapterFailure === "function") {
+      this.options.onAdapterFailure({ code, error });
+    }
+    if (typeof this.options.logger?.warn === "function") {
+      this.options.logger.warn(`[${code}] ${detail}`);
+    }
+  }
+
   async querySkillStore(input = {}, context = {}) {
-    const { action, namespace, skill_id, version } = input;
+    const { action, namespace, skill_id } = input;
 
     if (!action || FORBIDDEN_ACTIONS.has(action)) {
       throw new SkillAdapterError(
@@ -151,11 +418,45 @@ export class SkillAdapter {
         const found = [];
         const skillsDir = this.skillsRoot;
 
-        if (fs.existsSync(skillsDir)) {
+        const rootAvailable = isReadableDirectory(skillsDir);
+        if (rootAvailable) {
           let catalog = null;
           try {
             catalog = await scanCatalog(skillsDir);
-          } catch {}
+          } catch (err) {
+            catalog = { records: [], errors: [String(err?.message ?? err)] };
+          }
+
+          // M10/T2-R20: an INVALID catalog must never degrade to the permissive
+          // disk walk below. `scanCatalog` returns `records: []` whenever
+          // `errors` is non-empty (catalog.mjs:732), so ONE tampered skill made
+          // this branch fall through to a walk that re-reads the very same files
+          // with NO content-digest and NO manifest validation, then reported
+          // `governed_status: "SUCCESS"` and listed the tampered skill as
+          // discoverable. Proven by execution: a skill whose SKILL.md no longer
+          // matched its manifest digest still came back discoverable, readable
+          // and applicable, while `validate` correctly raised drift.
+          //
+          // The other two consumers of the same scan already fail closed —
+          // `getActiveSkill` (catalog.mjs:738) and `syncSkillsToVectorStore`
+          // (vector-sync.mjs:358). Discovery now matches them.
+          const catalogErrors = catalog?.errors ?? [];
+          if (catalogErrors.length > 0) {
+            // F-125 (R1-A10-03): the shape here is pinned by the repository's
+            // own closed evidence (F-187's runtime assertions and R20-01's
+            // source-text assertions), so the CONTRACT is the side that was
+            // wrong: `zink-skill.schema.json` declared a vocabulary the
+            // adapter never used and omitted the key it always emits. The
+            // contract now declares what is actually emitted, so this envelope
+            // passes its own declared output schema.
+            return {
+              action: "discover",
+              namespace: namespace ?? "all",
+              skills: [],
+              governed_status: "FAILED",
+              error_code: "SKILL_CATALOG_INVALID",
+            };
+          }
 
           if (catalog && catalog.records && catalog.records.length > 0) {
             for (const rec of catalog.records) {
@@ -187,110 +488,39 @@ export class SkillAdapter {
                 capability: idInfo.capability,
                 version: idInfo.version,
                 lifecycle_state: "ACTIVE",
-                description:
-                  rec.manifest?.metadata?.description ||
-                  `Governed skill: ${idInfo.capability}`,
+                // M11/T1-R1 2.1: canonical manifests carry no `metadata` key
+                // (the catalog schema forbids it), so this description source
+                // is the capability name — the old `metadata?.description`
+                // read could only ever be undefined.
+                description: `Governed skill: ${idInfo.capability}`,
               });
             }
-          } else {
-            // Direct disk walk when scanCatalog has partial diagnostics or errors
-            function walkActive(dir) {
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                if (ent.isDirectory()) {
-                  const full = path.join(dir, ent.name);
-                  const manifestPath = path.join(full, "manifest.json");
-                  const skillMdPath = path.join(full, "SKILL.md");
-                  if (
-                    fs.existsSync(manifestPath) &&
-                    fs.existsSync(skillMdPath)
-                  ) {
-                    try {
-                      const manifest = JSON.parse(
-                        fs.readFileSync(manifestPath, "utf8"),
-                      );
-                      const lifecycle = manifest.lifecycle;
-                      const isActive =
-                        Array.isArray(lifecycle) &&
-                        lifecycle.at(-1)?.status === "ACTIVE";
-                      if (isActive) {
-                        const idInfo = manifest.identity || {};
-                        const nsArr = Array.isArray(idInfo.namespace)
-                          ? idInfo.namespace
-                          : [idInfo.namespace];
-                        const nsStr = nsArr.join("/");
-
-                        if (
-                          !namespace ||
-                          namespace === "all" ||
-                          nsStr === namespace ||
-                          nsArr.includes(namespace)
-                        ) {
-                          found.push({
-                            skill_id: `${nsStr}/${idInfo.capability}`,
-                            name: idInfo.capability,
-                            namespace: nsArr,
-                            capability: idInfo.capability,
-                            version: idInfo.version,
-                            lifecycle_state: "ACTIVE",
-                            description:
-                              manifest.metadata?.description ||
-                              `Governed skill: ${idInfo.capability}`,
-                          });
-                        }
-                      }
-                    } catch {}
-                  } else {
-                    walkActive(full);
-                  }
-                }
-              }
-            }
-            walkActive(skillsDir);
           }
         }
 
-        // Fallback: check namespaces directory if skillsDir is empty
-        if (found.length === 0) {
-          const namespacesDir = path.join(this.root, "namespaces");
-          if (fs.existsSync(namespacesDir)) {
-            const entries = fs.readdirSync(namespacesDir, {
-              withFileTypes: true,
-            });
-            for (const ent of entries) {
-              if (ent.isDirectory() && !ent.name.startsWith("_")) {
-                const manifestPath = path.join(
-                  namespacesDir,
-                  ent.name,
-                  "manifest.json",
-                );
-                let isActive = true;
-                let desc = `Governed skill category: ${ent.name}`;
-                if (fs.existsSync(manifestPath)) {
-                  try {
-                    const mf = JSON.parse(
-                      fs.readFileSync(manifestPath, "utf8"),
-                    );
-                    isActive =
-                      mf.lifecycle?.at(-1)?.status === "ACTIVE" ||
-                      mf.status === "ACTIVE";
-                    desc = mf.description || desc;
-                  } catch {
-                    isActive = false;
-                  }
-                }
-                if (isActive) {
-                  found.push({
-                    skill_id: `skill-${ent.name}`,
-                    name: ent.name,
-                    namespace: ent.name,
-                    lifecycle_state: "active",
-                    description: desc,
-                  });
-                }
-              }
-            }
-          }
+        // The legacy `namespaces/` tree is not a canonical source. It bypasses
+        // catalog validation, lifecycle rules and content hashing, so it must
+        // never yield a discoverable skill. There is no fallback: when the
+        // canonical `skills/` tree holds no ACTIVE skill, discovery is empty.
+
+        // F-187 (R5-E06-08): an absent, unmounted or unreadable root is a store
+        // availability failure, not an empty catalog. Measured at HEAD:
+        // `if (fs.existsSync(skillsDir)) { ... }` had no `else`, so this
+        // function fell through to `governed_status: "SUCCESS"` with
+        // `skills: []` and the model concluded that no governed skill existed
+        // and proceeded without the Skill Store, while only the catalog-error
+        // branch failed closed. "available, holds no ACTIVE skill" and "not
+        // available at all" are different answers and are now reported as such.
+        if (!rootAvailable) {
+          // F-125 (R1-A10-03): the same pinned shape as the catalog-error
+          // branch above, and declared by the contract for the same reason.
+          return {
+            action: "discover",
+            namespace: namespace ?? "all",
+            skills: [],
+            governed_status: "FAILED",
+            error_code: "SKILL_ROOT_UNAVAILABLE",
+          };
         }
 
         return {
@@ -313,28 +543,12 @@ export class SkillAdapter {
         }
 
         let storedSkill = null;
-        const record = findSkillRecordOnDisk(this.skillsRoot, skill_id);
+        // R25: digest verified for EVERY action, not just validate.
+        // M11/T1-R1: resolution/verification now runs through the catalog.
+        const verified = await loadVerifiedRecord(this.skillsRoot, skill_id);
 
-        if (record) {
-          const content = fs.readFileSync(record.skillMdPath, "utf8");
-          const currentHash = createHash("sha256")
-            .update(content, "utf8")
-            .digest("hex");
-          const recordedHash =
-            record.manifest?.content?.sha256 ||
-            record.manifest?.verification?.content_sha256;
-
-          if (
-            action === "validate" &&
-            recordedHash &&
-            currentHash !== recordedHash
-          ) {
-            throw new SkillAdapterError(
-              `SOURCE_DRIFT_DETECTED: content hash ${currentHash} does not match manifest ${recordedHash}`,
-              "SKILL_SOURCE_DRIFT",
-            );
-          }
-
+        if (verified) {
+          const { record, content, digest } = verified;
           const lifecycle = record.manifest?.lifecycle;
           const lifecycleState = Array.isArray(lifecycle)
             ? lifecycle.at(-1)?.status
@@ -344,8 +558,12 @@ export class SkillAdapter {
             skill_id,
             lifecycle_state: lifecycleState,
             content,
-            signature:
-              record.manifest?.verification?.signature || "verified-provenance",
+            // R25: the digest of the bytes actually served, which is what was
+            // just proved to equal the approved content. The old literal
+            // "verified-provenance" was a constant: manifest.verification
+            // does not exist in the canonical schema, so EVERY skill was
+            // stamped with it, verified or not.
+            signature: `sha256:${digest}`,
             namespace: record.manifest?.identity?.namespace,
             capability: record.manifest?.identity?.capability,
             version: record.manifest?.identity?.version,
@@ -358,6 +576,12 @@ export class SkillAdapter {
             "SKILL_NOT_FOUND",
           );
         }
+
+        // F-028 (R1-A04-03): the record served is the record the gated
+        // namespace selects. Without this the namespace was echoed and never
+        // compared, so a caller that gated on one namespace could be served
+        // another stack's skill bytes.
+        assertNamespaceBinding(storedSkill.namespace, namespace, skill_id);
 
         if (storedSkill.lifecycle_state !== "ACTIVE") {
           throw new SkillAdapterError(
@@ -387,10 +611,16 @@ export class SkillAdapter {
         }
 
         let storedSkill = null;
-        const record = findSkillRecordOnDisk(this.skillsRoot, skill_id);
+        // R25: apply served unverified bytes and labelled them
+        // "verified-provenance". It now goes through the same loader, so the
+        // procedure handed to an agent is the one the owner approved. The
+        // loader resolves, reads and verifies in one pass through the catalog
+        // (M11/T1-R1); the separate disk walk it replaces never validated.
+        const verified = await loadVerifiedRecord(this.skillsRoot, skill_id);
 
-        if (record) {
-          const lifecycle = record.manifest?.lifecycle;
+        if (verified) {
+          const { record: verifiedRecord, content, digest } = verified;
+          const lifecycle = verifiedRecord.manifest?.lifecycle;
           const status = Array.isArray(lifecycle)
             ? lifecycle.at(-1)?.status
             : null;
@@ -400,14 +630,19 @@ export class SkillAdapter {
               "SKILL_NOT_ACTIVE",
             );
           }
-          const content = fs.readFileSync(record.skillMdPath, "utf8");
 
           storedSkill = {
             skill_id,
-            lifecycle_state: "active",
+            // F-204 (R1-A10-07): one store state, one spelling. `apply` used to
+            // stamp "active" while `discover` stamped "ACTIVE" and `read`
+            // refused anything that was not "ACTIVE", so the same ACTIVE skill
+            // was described two different ways depending on the action.
+            lifecycle_state: "ACTIVE",
             content,
-            signature:
-              record.manifest?.verification?.signature || "verified-provenance",
+            signature: `sha256:${digest}`,
+            namespace: verifiedRecord.manifest?.identity?.namespace,
+            capability: verifiedRecord.manifest?.identity?.capability,
+            version: verifiedRecord.manifest?.identity?.version,
           };
         }
 
@@ -417,6 +652,11 @@ export class SkillAdapter {
             "SKILL_NOT_FOUND",
           );
         }
+
+        // F-028 (R1-A04-03): `apply` is the action that hands an agent a
+        // procedure to execute, so the served skill must be the one the gated
+        // namespace selects — not any skill whose id the caller named.
+        assertNamespaceBinding(storedSkill.namespace, namespace, skill_id);
 
         return {
           action,
@@ -444,7 +684,7 @@ export class SkillAdapter {
         const minScore =
           typeof input.min_score === "number"
             ? input.min_score
-            : (this.options.minScore ?? 0.3); // K05: minimum similarity threshold
+            : (this.options.minScore ?? RETRIEVAL_MIN_RELEVANCE); // K05: minimum similarity threshold
 
         // Separate query text from metadata filters (BUG-02)
         const { queryTextForEmbedding, metadataFilters } =
@@ -476,25 +716,78 @@ export class SkillAdapter {
           );
         }
 
-        // K09: both namespace and secondary_topics applied in SQL
+        // K09: the namespace filter is applied in SQL. (The secondary_topics
+        // half of this clause was withdrawn — F-008, see below.)
+        // M11/T1: array-valued namespaces used to skip the B15 taxonomy
+        // validation (which only covers the string form) and the literal was
+        // interpolated unquoted — invalid SQL for any real psql, and a
+        // quote-breakout channel for tool-controlled strings. Elements are
+        // now validated through the shared semantic contract and the whole
+        // array literal passes through escapeSqlLiteral.
         const targetNs = metadataFilters.namespace || input.namespace;
         if (targetNs && targetNs !== "all") {
           const nsList = Array.isArray(targetNs) ? targetNs : [targetNs];
+          for (const ns of nsList) {
+            if (typeof ns !== "string" || !ns.trim()) {
+              throw new SkillAdapterError(
+                "namespace filter elements must be non-empty strings",
+                "SKILL_NAMESPACE_FILTER_INVALID",
+              );
+            }
+          }
+          const nsCheck = deriveSemanticMetadata({
+            namespace: nsList,
+            capability: "filter-validation",
+          });
+          if (
+            Array.isArray(nsCheck.unresolved_namespaces) &&
+            nsCheck.unresolved_namespaces.length > 0
+          ) {
+            throw new SkillAdapterError(
+              `UNKNOWN_NAMESPACE_FILTER: ${JSON.stringify(
+                nsCheck.unresolved_namespaces,
+              )} are not canonical namespaces or known aliases`,
+              "SKILL_NAMESPACE_FILTER_INVALID",
+            );
+          }
+          // Match the canonical form the writer stored, not the raw alias.
+          const canonicalNs = nsCheck.resolved_namespaces ?? nsList;
           whereClauses.push(
-            `c.namespace @> ${toPostgresArrayLiteral(nsList)}::text[]`,
+            `c.namespace @> ${escapeSqlLiteral(
+              toPostgresArrayLiteral(canonicalNs),
+            )}::text[]`,
           );
         }
 
-        const targetSecTopics =
-          metadataFilters.secondary_topics || input.secondary_topics;
-        if (Array.isArray(targetSecTopics) && targetSecTopics.length > 0) {
-          whereClauses.push(
-            `c.secondary_topics && ${toPostgresArrayLiteral(targetSecTopics)}::text[]`,
-          );
-        }
+        // F-008 (R1-A10-06): the `secondary_topics` predicate is WITHDRAWN
+        // here, together with the contract-layer forwarding it depended on
+        // (zink-tools/common/semantic-contract.mjs).
+        //
+        // The column it compared against is always empty: the writer passes
+        // `canonicalSecondaryTopics = []` (zink-skill-store/src/vector-sync.mjs),
+        // because a canonical skill manifest carries no metadata key to derive
+        // topics from. So the overlap test could only remove rows — and it
+        // removed them silently, answering NO_MATCH, which no caller can tell
+        // from "no such skill". The contract layer refuses the filter by name,
+        // so no statement can carry it any more.
 
         // K08: Use json_build_object to prevent pipe-character splitting corruption
+        //
+        // M11/T1-R1 2.2 (H5): the same psql invocation also reads the newest
+        // READY sync timestamp. `to_char` renders a fixed, parseable UTC shape
+        // (Postgres' native timestamptz text carries a "+07"-style offset that
+        // JS Date cannot reliably parse), and the marker row is consumed by
+        // the freshness gate below before any row is served.
+        //
+        // F-434 (R9-T05-1): the marker above is a table-wide MAX and proves only
+        // that SOME row was synced recently. The rows below carry their own
+        // `synced_at`, and the gate refuses when the OLDEST returned row is
+        // past the SLA, so one re-synced skill cannot vouch for an aged one.
         const sql = `
+          SELECT 'ZINK_FRESHNESS|' || COALESCE(
+            to_char(max(synced_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            ''
+          ) FROM skills.catalog_index WHERE status = 'ACTIVE' AND sync_status = 'READY';
           SELECT json_build_object(
             'skill_id', c.id::text,
             'namespace', array_to_json(c.namespace),
@@ -504,17 +797,22 @@ export class SkillAdapter {
             'primary_topic', c.primary_topic,
             'subtopic', c.subtopic,
             'content', s.content,
-            'score', (1 - (s.embedding <=> '${vectorStr}'::vector))
+            'score', (1 - (s.embedding <=> '${vectorStr}'::vector)),
+            'synced_at', to_char(c.synced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
           )::text AS row_json
           FROM skills.segments s
           JOIN skills.catalog_index c ON s.skill_id = c.id
           WHERE ${whereClauses.join(" AND ")}
           ORDER BY s.embedding <=> '${vectorStr}'::vector ASC, s.segment_ordinal ASC, c.capability ASC
-          LIMIT ${boundedLimit * 4};
+          -- R25: the budget is in SEGMENT rows, so it must be scaled by the
+          -- maximum number of segments one skill can contribute, or a few long
+          -- skills can consume the whole budget and starve every other skill.
+          LIMIT ${boundedLimit * MAX_SEGMENTS_PER_SKILL_VERSION};
         `;
 
         const queryResult = await executePostgresQuery(sql, this.options);
         const parsedRows = [];
+        let freshnessSyncedAt = null;
 
         if (
           queryResult &&
@@ -525,6 +823,12 @@ export class SkillAdapter {
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
+
+            if (trimmed.startsWith("ZINK_FRESHNESS|")) {
+              const stamp = trimmed.slice("ZINK_FRESHNESS|".length).trim();
+              freshnessSyncedAt = stamp.length > 0 ? stamp : null;
+              continue;
+            }
 
             // Attempt JSON parsing (K08)
             if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -556,6 +860,10 @@ export class SkillAdapter {
                   subtopic: obj.subtopic || null,
                   content: obj.content,
                   score: scoreNum,
+                  // F-434: the stamp this row was actually synced at. The
+                  // table-wide marker above cannot bound an individual row.
+                  synced_at:
+                    typeof obj.synced_at === "string" ? obj.synced_at : null,
                 });
                 continue;
               } catch (e) {
@@ -576,6 +884,7 @@ export class SkillAdapter {
                 subtopicVal,
                 content,
                 scoreStr,
+                syncedAtVal = null,
               ] = parts;
 
               const scoreNum = parseFloat(scoreStr);
@@ -603,8 +912,62 @@ export class SkillAdapter {
                 subtopic: subtopicVal || null,
                 content,
                 score: scoreNum,
+                synced_at:
+                  typeof syncedAtVal === "string" && syncedAtVal.length > 0
+                    ? syncedAtVal
+                    : null,
               });
             }
+          }
+        }
+
+        // M11/T1-R1 (2.2): freshness gate. The ZINK_FRESHNESS marker came from
+        // the SAME psql invocation as the rows, so it cannot describe a newer
+        // index than the one just read. An absent, empty, or stale stamp means
+        // the derived index is not provably current, and serving it would let
+        // an agent act on deleted or drifted skill content with no signal —
+        // so this fails closed instead of stale-serving.
+        const freshness = checkIndexFreshness(freshnessSyncedAt);
+        if (!freshness.fresh) {
+          throw new SkillAdapterError(
+            `SKILL_INDEX_STALE: derived skill index is not fresh (${freshness.reason}); refusing to serve possibly stale rows`,
+            "SKILL_INDEX_STALE",
+          );
+        }
+
+        // F-434 (R9-T05-1): the table-wide MAX above is necessary but not
+        // sufficient — one freshly re-synced skill makes the marker fresh for
+        // EVERY query. The rows this query returns carry their own stamp, and
+        // the OLDEST one decides, so a skill synced before the 7-day SLA can
+        // never be served because another skill was synced moments ago. The
+        // shipped SQL always projects the stamp; only a legacy stub response
+        // that carries none falls back to the marker alone.
+        const servedStamps = parsedRows
+          .map((row) => row.synced_at)
+          .filter((value) => typeof value === "string" && value.length > 0);
+        if (servedStamps.length > 0) {
+          let oldestMs = Number.POSITIVE_INFINITY;
+          let oldestStamp = null;
+          let invalidStamp = false;
+          for (const value of servedStamps) {
+            const ms = Date.parse(value);
+            if (!Number.isFinite(ms)) {
+              invalidStamp = true;
+              break;
+            }
+            if (ms < oldestMs) {
+              oldestMs = ms;
+              oldestStamp = value;
+            }
+          }
+          const servedFreshness = checkIndexFreshness(oldestStamp);
+          if (invalidStamp || !servedFreshness.fresh) {
+            throw new SkillAdapterError(
+              `SKILL_INDEX_STALE: a returned skill row is not fresh (${
+                invalidStamp ? "INVALID_SYNC_TIMESTAMP" : servedFreshness.reason
+              }); refusing to serve possibly stale rows`,
+              "SKILL_INDEX_STALE",
+            );
           }
         }
 
@@ -617,12 +980,25 @@ export class SkillAdapter {
           if (seenSkillIds.has(item.skill_id)) continue;
           seenSkillIds.add(item.skill_id);
 
-          // K05: Filter by minimum similarity threshold
+          // K05: Filter by minimum similarity threshold.
+          //
+          // R25: the dedup above is correct only because the rows arrive
+          // ordered by ascending vector distance, so the first row seen for a
+          // skill is that skill's BEST segment. If it were ordered any other
+          // way, claiming the skill id before the threshold test would discard
+          // a skill on the strength of a weaker segment. Pinned by test.
           if (item.score < minScore) continue;
 
           // K11: Include embedding model, version, and input hash provenance
+          const hitNamespace = Array.isArray(item.namespace)
+            ? item.namespace
+            : [item.namespace];
           results.push({
             skill_id: item.skill_id,
+            // Canonical reuse identity: the search hit alone is a segment
+            // excerpt, never the procedure. This id resolves through the
+            // canonical read/apply boundary to the exact approved SKILL.md.
+            canonical_skill_id: `${hitNamespace.join("/")}/${item.capability}`,
             namespace: item.namespace,
             capability: item.capability,
             version: item.version,
@@ -651,7 +1027,10 @@ export class SkillAdapter {
 
         return {
           action: "search",
-          query: queryTextForEmbedding,
+          // F-125 (R1-A10-03): the top-level `query` key was outside the
+          // declared output object (which closes it), so the search envelope
+          // could not pass its own contract. The query text is not part of
+          // the answer.
           results,
           total_count: results.length,
           governed_status,
@@ -667,11 +1046,24 @@ export class SkillAdapter {
           version: skillVersion,
           content,
           reason,
-          requesting_agent,
-          nonce: inputNonce,
-          expires_at: inputExpiresAt,
           tags: inputTags,
+          source_type: sourceType,
         } = input;
+        // F-010 (R1-A16-08): the proposal's requester identity comes from
+        // trusted runtime context only. A model-supplied `requesting_agent` is
+        // business metadata and is never read here — the plugin supplies the
+        // identity under `requestingAgent` (`index.mjs:3687-3693`). When the
+        // trusted context carries none, the field is omitted rather than
+        // replaced by a constant such as "specialist" or "unknown".
+        const trustedRequestingAgent =
+          typeof context?.requestingAgent === "string" &&
+          context.requestingAgent.trim()
+            ? context.requestingAgent.trim()
+            : undefined;
+
+        // NOTE: nonce/expiry are never accepted from model input. Replay
+        // boundaries are generated in trusted code below; a model must not
+        // decide its own replay window.
 
         if (!capability || !SLUG_PATTERN.test(capability)) {
           throw new SkillAdapterError(
@@ -698,6 +1090,17 @@ export class SkillAdapter {
           throw new SkillAdapterError(
             "reason is required for skill proposal",
             "SKILL_REASON_REQUIRED",
+          );
+        }
+
+        // F-045/F-OC-012: provenance is declared where the skill is proposed,
+        // never invented at approval. The store validates the same set again;
+        // this check refuses an unnamed source before a durable proposal or an
+        // owner-facing packet exists.
+        if (!PROVENANCE_SOURCE_TYPES.includes(sourceType)) {
+          throw new SkillAdapterError(
+            `source_type is required for a skill proposal and must be one of ${PROVENANCE_SOURCE_TYPES.join(", ")}`,
+            "PROVENANCE_SOURCE_TYPE_INVALID",
           );
         }
 
@@ -752,24 +1155,26 @@ export class SkillAdapter {
           );
         }
 
-        // K14: Expiry, nonce, and proposal replay token
-        const nonce = inputNonce || null;
-        const expires_at =
-          inputExpiresAt ||
-          new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        // K14: trusted replay boundary. Expiry and nonce are generated here,
+        // never taken from model input.
+        const nonce = randomBytes(8).toString("hex");
+        const expires_at = new Date(
+          Date.now() + 7 * 24 * 60 * 60 * 1000,
+        ).toISOString();
         const proposal_token = createHash("sha256")
           .update(
-            `${parsedNamespace.join("/")}:${capability}:${skillVersion}:${content_sha256}:${nonce || "none"}:${expires_at}`,
+            `${parsedNamespace.join("/")}:${capability}:${skillVersion}:${content_sha256}:${nonce}:${expires_at}`,
           )
           .digest("hex");
 
-        // K17: Proposal ID with nonce support to avoid collapsing independent proposals
+        // K17: proposal identity is deterministic over skill identity plus
+        // exact content bytes, so an identical repeat proposal is the same
+        // proposal rather than a duplicate.
         const proposal_id = deriveProposalId({
           namespace: parsedNamespace,
           capability,
           version: skillVersion,
           content_sha256,
-          nonce,
         });
 
         const proposal = {
@@ -783,14 +1188,26 @@ export class SkillAdapter {
           domain: semanticMeta.domain,
           primary_topic: semanticMeta.primary_topic,
           content_sha256,
-          requesting_agent:
-            requesting_agent || context?.agentId || "specialist",
+          // The exact bytes the owner will approve. The durable proposal is
+          // the authority for what materialization may write.
+          content: rawContent,
+          // F-010: only ever the trusted requester, never the payload's claim;
+          // the key is omitted — not defaulted to a constant — when the trusted
+          // context carries no identity.
+          ...(trustedRequestingAgent
+            ? { requesting_agent: trustedRequestingAgent }
+            : {}),
+          // F-045/F-OC-012: the provenance the approver will see. It travels
+          // with the durable proposal so approval never has to guess it.
+          source_type: sourceType,
           reason: reason.trim(),
           status: "CANDIDATE",
           created_at: new Date().toISOString(),
         };
 
-        // Proposal persistence is part of the governed transaction.
+        // Proposal persistence is part of the governed transaction and is
+        // atomic: temp file, fsync, rename. An identical live CANDIDATE is
+        // returned as-is so repeats keep one stable identity.
         const proposalsDir = this.options.proposalStorageDir;
         if (!proposalsDir || typeof proposalsDir !== "string") {
           throw new SkillAdapterError(
@@ -799,15 +1216,65 @@ export class SkillAdapter {
           );
         }
         try {
-          fs.mkdirSync(proposalsDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(proposalsDir, `${proposal_id}.json`),
-            JSON.stringify(proposal, null, 2),
-            "utf8",
+          // M11/T3 B6: the read, the decision and the write are one unit under
+          // the canonical Skill Store writer lock — the same lock promotion and
+          // rejection already take. Unguarded, a propose could read a still
+          // undecided record and then write over a rejection committing in
+          // another process, erasing the owner's decision.
+          const alreadyDecided = await withSkillStoreWriterLock(
+            this.skillsRoot,
+            () => {
+              const proposalPath = path.join(
+                proposalsDir,
+                `${proposal_id}.json`,
+              );
+              const existing = readProposalRecordSync(proposalPath);
+              const sameBytes =
+                existing?.proposal_id === proposal_id &&
+                existing?.content_sha256 === content_sha256 &&
+                typeof existing?.content === "string";
+              if (
+                sameBytes &&
+                existing?.status === "CANDIDATE" &&
+                typeof existing?.expires_at === "string" &&
+                Date.parse(existing.expires_at) > Date.now()
+              ) {
+                return {
+                  action: "propose",
+                  proposal: existing,
+                  governed_status: "SUCCESS",
+                };
+              }
+              if (
+                sameBytes &&
+                (existing?.status === "APPROVED" ||
+                  existing?.status === "MATERIALIZED" ||
+                  existing?.status === "READY" ||
+                  existing?.status === "INDEX_FAILED" ||
+                  // M11/T3 B6: a rejection is as terminal as an approval. It was
+                  // missing here, so re-proposing the identical bytes fell
+                  // through to the atomic write below and silently erased the
+                  // owner's rejection.
+                  existing?.status === "REJECTED")
+              ) {
+                // Already decided past candidacy: never regress the durable
+                // record back to CANDIDATE.
+                return {
+                  action: "propose",
+                  proposal: existing,
+                  governed_status: "SUCCESS",
+                };
+              }
+              writeJsonAtomicSync(proposalPath, proposal);
+              return null;
+            },
           );
+          if (alreadyDecided) return alreadyDecided;
         } catch (error) {
+          if (error instanceof SkillAdapterError) throw error;
+          this.reportAdapterFailure("SKILL_PROPOSAL_PERSIST_FAILED", error);
           throw new SkillAdapterError(
-            `Skill proposal persistence failed: ${error?.message}`,
+            fixedFailureSentence("SKILL_PROPOSAL_PERSIST_FAILED"),
             "SKILL_PROPOSAL_PERSIST_FAILED",
           );
         }
@@ -823,19 +1290,34 @@ export class SkillAdapter {
         };
       }
 
-      throw new SkillAdapterError(
-        `Unsupported action: ${action}`,
-        "SKILL_ACTION_INVALID",
-      );
+      // F-204 (R1-A10-07): the invalid-action rejection is the pre-dispatch
+      // check above, which already rejects every action outside ALLOWED_ACTIONS
+      // (and a forbidden one) before this block runs. A second, identical
+      // rejection used to close this try block; no input could reach it - each
+      // of the six allowed branches returns - so it made the rejection look like
+      // it lived where it could never fire.
     } catch (error) {
       if (error instanceof SkillAdapterError) throw error;
+      // F-448/F-555: the code the envelope carries is itself interpolated into
+      // the fixed sentence, so only a token-shaped code is admitted; anything
+      // else (which could quote a path or upstream bytes) falls back to the
+      // adapter's own code.
+      const failureCode =
+        typeof error?.code === "string" && /^[A-Za-z0-9_]+$/.test(error.code)
+          ? error.code
+          : "SKILL_ADAPTER_ERROR";
+      this.reportAdapterFailure(failureCode, error);
       return {
         action,
         skills: [],
         results: [],
         governed_status: "CONTROLLED_FAILURE",
-        error: error.code || "SKILL_ADAPTER_ERROR",
-        message: error.message,
+        // F-555 (R10-T06-7): the code survives (R10-T06-1 requires it), but the
+        // sentence is fixed. A filesystem error's message carries the absolute
+        // path it opened; that text is for the trusted sink above, not for the
+        // envelope the plugin renders to the model.
+        error: failureCode,
+        message: fixedFailureMessage(failureCode),
       };
     }
   }

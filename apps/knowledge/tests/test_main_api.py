@@ -6,8 +6,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 
 os.environ.setdefault("KNOWLEDGE_DATABASE_PASSWORD", "unit-test-only")
+
+_TOKENIZER = os.environ.get("KNOWLEDGE_TOKENIZER_PATH")
+if not _TOKENIZER or not Path(_TOKENIZER).is_file():
+    pytest.skip(
+        "the pinned tokenizer is not provisioned; CI fetches it "
+        "(.github/workflows/ci.yml), so this module is NOT RUN rather than passed",
+        allow_module_level=True,
+    )
 
 from app.config import Settings
 from app.main import app as module_app

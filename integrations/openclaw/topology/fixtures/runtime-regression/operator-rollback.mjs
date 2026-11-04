@@ -33,6 +33,7 @@ import process from "node:process";
 import {
   restoreNativePatch,
   inspectNativePatch,
+  nativeDiscordChannelRoot,
 } from "../../lib/native-patch.mjs";
 import { restoreT1RuntimeFiles } from "../../lib/runtime-backup.mjs";
 import {
@@ -44,9 +45,43 @@ import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../../../lib/policy.mjs";
+import {
+  STATE_DIR_NOT_NAMED,
+  resolveStateRoot,
+  rootDisclosure,
+} from "./operator-state-root.mjs";
 
-const stateDir = "/home/hoang_vinh/.openclaw-zink";
+// F-219: the machine-specific state root is NOT a literal. The operator
+// names it (ZINK_OPERATOR_STATE_DIR or the first argument) and the driver
+// refuses to run without one, exactly like live-governance-probe.mjs: a
+// driver that silently points at one operator's machine root says nothing
+// about any other, and a hardcoded root is what let these files drift.
+//
+// M12/T9 F-560 (R10-T07-6): the TYPED argument outranks an inherited
+// environment value. This is the most destructive operator command in the
+// repository, so a stale export in the operator's shell profile must never
+// decide which tree it dismantles, and every record it prints names the
+// resolved root by digest.
+//
+// M12/T9 F-556 (R10-T07-1): the positional root is consumed HERE, before the
+// strict flag parser, so the form this driver documents - a first argument that
+// names the root - reaches the gate instead of being reported as
+// `UNSUPPORTED_ARGUMENT`. The parser keeps the flags it owns.
+const stateRoot = resolveStateRoot({ argv: process.argv.slice(2) });
+const stateDir = stateRoot.stateDir;
+const stateRootSource = stateRoot.source;
+if (!stateDir) {
+  process.stderr.write(`${STATE_DIR_NOT_NAMED}\n`);
+  process.exit(2);
+}
 const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";
+// M10/T2-R8: restore must resolve the SAME governed roots that produced the
+// patch, including the installed Discord channel package, or the ingress repair
+// would survive a rollback as an untracked mutation.
+const discordChannelRoot = nativeDiscordChannelRoot(stateDir);
+// M12/T9 F-011: the state directory is part of the governed roots, so
+// the post-image is stated against the INSTALLED channel package.
+const nativeRoots = { runtimeRoot, discordChannelRoot, stateDir };
 const nativeBackup = path.join(stateDir, "operator", "m7-t2", "native-r12");
 const t1Config = path.join(
   stateDir,
@@ -68,6 +103,11 @@ const authorizationPath = path.join(
   "operator/m7-t2/recovery-authorization.json",
 );
 
+// A refusal is terminal, so it unwinds out of the try below instead of running on
+// into the restore it was meant to gate. `configure.mjs` and `verify.mjs` stop the
+// same way — throw, report once from the one catch — and neither calls `process.exit`.
+class RecoveryRefused extends Error {}
+
 function refuse(refusal, extra = {}) {
   process.stdout.write(
     `${JSON.stringify({
@@ -76,10 +116,12 @@ function refuse(refusal, extra = {}) {
       action: "HISTORICAL_RECOVERY",
       isTransactionRollback: false,
       installed_mutation: false,
+      ...rootDisclosure(stateDir, stateRootSource),
       ...extra,
     })}\n`,
   );
   process.exitCode = 1;
+  throw new RecoveryRefused(refusal);
 }
 
 function identifiers() {
@@ -91,7 +133,7 @@ function identifiers() {
 }
 
 try {
-  const { options, refusal } = parseRecoveryArguments(process.argv.slice(2));
+  const { options, refusal } = parseRecoveryArguments(stateRoot.rest);
   if (refusal) refuse(refusal);
 
   assertNoSymlinkComponents(authorizationPath);
@@ -104,11 +146,18 @@ try {
   });
   if (!verdict.proceed) refuse(verdict.refusal, { ...verdict });
 
-  // Disclose the target before anything is written.
-  process.stdout.write(`${JSON.stringify(verdict.disclosure)}\n`);
+  // Disclose the target before anything is written. M12/T9 F-560: the root
+  // this run resolved is part of that disclosure, so the operator can see that
+  // the tree about to be dismantled is the one they named.
+  process.stdout.write(
+    `${JSON.stringify({
+      ...verdict.disclosure,
+      ...rootDisclosure(stateDir, stateRootSource),
+    })}\n`,
+  );
 
   const values = identifiers();
-  restoreNativePatch(runtimeRoot, nativeBackup);
+  restoreNativePatch(nativeRoots, nativeBackup);
   await restoreT1RuntimeFiles({ stateDir, identifiers: values });
   execFileSync(
     "systemctl",
@@ -119,7 +168,7 @@ try {
       maxBuffer: 65536,
     },
   );
-  const baseline = inspectNativePatch(runtimeRoot);
+  const baseline = inspectNativePatch(nativeRoots);
   if (!Object.values(baseline).every((entry) => entry.state === "BASELINE"))
     throw new Error("NATIVE_RESTORE_FAILED");
   process.stdout.write(
@@ -129,28 +178,37 @@ try {
       requestedTarget: options.target,
       runtime: "T1_RESTORED",
       isTransactionRollback: false,
+      ...rootDisclosure(stateDir, stateRootSource),
     })}\n`,
   );
 } catch (error) {
-  // Only a fixed, disclosable reason. Never a path, never child stderr.
-  const known = [
-    "NATIVE_RESTORE_FAILED",
-    "RESTORE_QUARANTINE_CONFLICT",
-    "RESTORE_VERIFICATION_FAILED",
-    "BACKUP_MANIFEST_INVALID",
-    "NATIVE_BACKUP_MANIFEST_INVALID",
-    "INVALID_IDENTIFIER_FILE",
-  ];
-  process.stdout.write(
-    `${JSON.stringify({
-      status: "FAIL",
-      reason: known.includes(error?.message)
-        ? error.message
-        : "HISTORICAL_RECOVERY_FAILED",
-      action: "HISTORICAL_RECOVERY",
-      isTransactionRollback: false,
-      installed_mutation: true,
-    })}\n`,
-  );
-  process.exitCode = 1;
+  if (error instanceof RecoveryRefused) {
+    // `refuse()` already wrote the single record this command may emit for a
+    // refusal, and nothing was installed. Reporting again here would claim a
+    // mutation the refusal prevented.
+    process.exitCode = 1;
+  } else {
+    // Only a fixed, disclosable reason. Never a path, never child stderr.
+    const known = [
+      "NATIVE_RESTORE_FAILED",
+      "RESTORE_QUARANTINE_CONFLICT",
+      "RESTORE_VERIFICATION_FAILED",
+      "BACKUP_MANIFEST_INVALID",
+      "NATIVE_BACKUP_MANIFEST_INVALID",
+      "INVALID_IDENTIFIER_FILE",
+    ];
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "FAIL",
+        reason: known.includes(error?.message)
+          ? error.message
+          : "HISTORICAL_RECOVERY_FAILED",
+        action: "HISTORICAL_RECOVERY",
+        isTransactionRollback: false,
+        installed_mutation: true,
+        ...rootDisclosure(stateDir, stateRootSource),
+      })}\n`,
+    );
+    process.exitCode = 1;
+  }
 }

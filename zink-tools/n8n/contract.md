@@ -16,6 +16,7 @@ The n8n interface supports a single operation:
 - `trigger`: Triggers an allowlisted webhook workflow. Target: `workflow_id`. Requires owner approval.
 
 Approved workflows are strictly scoped to `stack: "data_plant"`:
+
 - `data_plant_ingest`
 - `data_plant_sync`
 - `pipeline_notify`

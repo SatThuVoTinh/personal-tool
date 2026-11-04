@@ -1,16 +1,93 @@
 const MUTATION_KEYWORDS = new Set([
-  "INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER",
-  "CREATE", "TRUNCATE", "REPLACE", "GRANT", "REVOKE"
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "DROP",
+  "ALTER",
+  "CREATE",
+  "TRUNCATE",
+  "REPLACE",
+  "GRANT",
+  "REVOKE",
 ]);
 
-const FORBIDDEN_KEYWORDS = new Set([
-  "JOIN", "INNER", "OUTER", "LEFT", "RIGHT", "CROSS", "NATURAL",
-  "UNION", "INTERSECT", "EXCEPT", "CTE", "WITH",
-  "GROUP", "HAVING", "WINDOW", "OVER",
-  "EXPLAIN", "NOT", "IN", "BETWEEN", "LIKE", "ILIKE", "SIMILAR",
-  "CASE", "WHEN", "THEN", "ELSE", "END",
-  "INTO", "FOR", "LOCK", "SET", "VALUES"
+// The one forbidden-keyword vocabulary both exported gates use. `NOT` is a
+// member; the tokenizer admits it only in the `IS NOT NULL` grammar the
+// statement validator supports, so a bare NOT is refused by BOTH gates.
+export const SQL_FORBIDDEN_KEYWORDS = Object.freeze([
+  "JOIN",
+  "INNER",
+  "OUTER",
+  "LEFT",
+  "RIGHT",
+  "CROSS",
+  "NATURAL",
+  "UNION",
+  "INTERSECT",
+  "EXCEPT",
+  "CTE",
+  "WITH",
+  "GROUP",
+  "HAVING",
+  "WINDOW",
+  "OVER",
+  "EXPLAIN",
+  "NOT",
+  "IN",
+  "BETWEEN",
+  "LIKE",
+  "ILIKE",
+  "SIMILAR",
+  "CASE",
+  "WHEN",
+  "THEN",
+  "ELSE",
+  "END",
+  "INTO",
+  "FOR",
+  "LOCK",
+  "SET",
+  "VALUES",
 ]);
+const FORBIDDEN_KEYWORDS = new Set(SQL_FORBIDDEN_KEYWORDS);
+
+/**
+ * F-276 (R7-C2-01): the token-level half of the governed read-only subset,
+ * exported so that a provider adapter delegates its statement gate HERE
+ * instead of re-implementing it.
+ *
+ * Measured at HEAD: the BigQuery adapter re-implemented the mutation check as
+ * an uppercased word-boundary regex over the whole query string, with seven
+ * keywords instead of the canonical eleven (MERGE, REPLACE, GRANT and REVOKE
+ * were absent) and no string-literal awareness (so a read whose literal text
+ * merely mentioned a blocked word was refused). This function is the
+ * repository's own tokenizer applied to the same question, so the keyword set,
+ * the literal handling and the refusal codes are the canonical ones.
+ *
+ * The STATEMENT SHAPE (a required FROM clause, alias rules, the projection
+ * grammar) stays with `validateSqlQuery`, which the DuckDB bridge applies in
+ * full. This gate answers the narrower question "does this statement carry a
+ * mutating or reserved token", and it never looks inside a string literal.
+ *
+ * @param {string} query - A single statement
+ * @returns {boolean} true when the statement carries no refused token
+ */
+export function assertReadOnlyStatement(query) {
+  if (typeof query !== "string") {
+    throw new Error("SQL_UNSUPPORTED_SYNTAX");
+  }
+  const tokens = tokenizeSql(query);
+  for (const tok of tokens) {
+    if (tok.type === "MUTATION_KEYWORD") {
+      throw new Error("SQL_MUTATION_NOT_PERMITTED");
+    }
+    if (tok.type === "FORBIDDEN_KEYWORD") {
+      throw new Error("SQL_UNSUPPORTED_SYNTAX");
+    }
+  }
+  return true;
+}
 
 /**
  * Validates a SQL query and parameters according to the Lean Option B minimum safe subset.
@@ -49,7 +126,7 @@ export function validateSqlQuery(query, parameters = []) {
   return true;
 }
 
-function tokenizeSql(sql) {
+export function tokenizeSql(sql) {
   const tokens = [];
   let i = 0;
   const n = sql.length;
@@ -148,7 +225,10 @@ function tokenizeSql(sql) {
         paramName += sql[i];
         i++;
       }
-      if (paramName.length === 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(paramName)) {
+      if (
+        paramName.length === 0 ||
+        !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(paramName)
+      ) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
       }
       tokens.push({ type: "PARAM", value: paramName });
@@ -191,11 +271,7 @@ function tokenizeSql(sql) {
     }
 
     // Signed or unsigned numeric literals
-    if (
-      ch === "+" ||
-      ch === "-" ||
-      /\d/u.test(ch)
-    ) {
+    if (ch === "+" || ch === "-" || /\d/u.test(ch)) {
       // Check if +/- is followed by a digit
       if ((ch === "+" || ch === "-") && !/\d/u.test(sql[i + 1] || "")) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
@@ -239,9 +315,31 @@ function tokenizeSql(sql) {
         tokens.push({ type: "NULL", value: null });
       } else if (
         [
-          "SELECT", "FROM", "WHERE", "ORDER", "BY", "LIMIT", "OFFSET",
-          "ASC", "DESC", "AND", "OR", "IS", "NOT", "AS"
+          "SELECT",
+          "FROM",
+          "WHERE",
+          "ORDER",
+          "BY",
+          "LIMIT",
+          "OFFSET",
+          "ASC",
+          "DESC",
+          "AND",
+          "OR",
+          "IS",
+          "AS",
         ].includes(upper)
+      ) {
+        tokens.push({ type: "KEYWORD", value: upper, raw: word });
+      } else if (
+        // `IS NOT NULL` is part of the admitted subset; a bare NOT is not.
+        // Classifying the exception HERE keeps NOT a FORBIDDEN_KEYWORD for
+        // every other position, so the token gate and the grammar gate answer
+        // the same question instead of the KEYWORD branch shadowing the
+        // forbidden entry.
+        upper === "NOT" &&
+        tokens[tokens.length - 1]?.type === "KEYWORD" &&
+        tokens[tokens.length - 1]?.value === "IS"
       ) {
         tokens.push({ type: "KEYWORD", value: upper, raw: word });
       } else if (FORBIDDEN_KEYWORDS.has(upper)) {
@@ -250,7 +348,10 @@ function tokenizeSql(sql) {
         // Valid identifier
         if (dotCount === 1) {
           const parts = word.split(".");
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[0]) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[1])) {
+          if (
+            !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[0]) ||
+            !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(parts[1])
+          ) {
             throw new Error("SQL_UNSUPPORTED_SYNTAX");
           }
         } else {
@@ -268,6 +369,98 @@ function tokenizeSql(sql) {
   }
 
   return tokens;
+}
+
+/**
+ * F-459 (R9-T08-1): the ONE SQL mask both artifact decisions read.
+ *
+ * The artifact gate used to apply its `UNSAFE_SQL` pattern to the raw file text
+ * and to count brackets with a hand-rolled backslash-parity quote toggle. That
+ * scanner disagreed with the canonical lexer in both directions: it refused a
+ * benign `'DROP DATABASE'` string (over-reject) while it accepted a backslash
+ * escape and miscounted an apostrophe inside a `--` comment as an unclosed
+ * literal (under-reject and a false `MALFORMED_SQL_SYNTAX`).
+ *
+ * This mask blanks every single-quoted literal, `--` line comment and
+ * `/* ... *\/` block comment at its own length, so neither a keyword nor a
+ * bracket inside data can be read as syntax, and it reports the file-level
+ * refusals the canonical lexer would make: an unterminated literal or comment,
+ * and a backslash escape inside a literal (`tokenizeSql` throws
+ * `SQL_UNSUPPORTED_SYNTAX` for that). Comments are MASKED rather than refused
+ * because the artifact gate validates a FILE, and the canonical file analyzer
+ * (`validateSqlFileContent`) strips them: a migration carrying an apostrophe
+ * inside a comment is valid input, not malformed SQL.
+ *
+ * It lives in THIS module, not in the artifact gate, so the artifact scanner
+ * and the canonical validator share one implementation instead of growing two
+ * dialects. The owner authorized the resulting static edge on 2026-10-25;
+ * `integrations/openclaw/lib/policy.mjs` rewrites the repository-relative
+ * import for the deployed tree.
+ *
+ * @param {string} content raw SQL file text
+ * @returns {{ masked: string, unterminatedLiteral: boolean, unterminatedComment: boolean, backslashInLiteral: boolean }}
+ */
+export function maskSqlLiteralsAndComments(content) {
+  const text = typeof content === "string" ? content : "";
+  let masked = "";
+  let unterminatedLiteral = false;
+  let unterminatedComment = false;
+  let backslashInLiteral = false;
+  let i = 0;
+  const blank = (from, to) => " ".repeat(to - from);
+  while (i < text.length) {
+    const ch = text[i];
+    // `--` line comment: blank the body, keep the newline for the next pass.
+    if (ch === "-" && text[i + 1] === "-") {
+      let end = text.indexOf("\n", i);
+      if (end === -1) end = text.length;
+      masked += blank(i, end);
+      i = end;
+      continue;
+    }
+    // `/* ... */` block comment.
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) {
+        unterminatedComment = true;
+        masked += blank(i, text.length);
+        i = text.length;
+      } else {
+        masked += blank(i, close + 2);
+        i = close + 2;
+      }
+      continue;
+    }
+    // Single-quoted literal: emit an empty `''` placeholder, one quote pair.
+    if (ch === "'") {
+      masked += "''";
+      i += 1;
+      let closed = false;
+      while (i < text.length) {
+        if (text[i] === "\\") backslashInLiteral = true;
+        if (text[i] === "'") {
+          if (text[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          closed = true;
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      if (!closed) unterminatedLiteral = true;
+      continue;
+    }
+    masked += ch;
+    i += 1;
+  }
+  return {
+    masked,
+    unterminatedLiteral,
+    unterminatedComment,
+    backslashInLiteral,
+  };
 }
 
 function parseAndValidateSelect(tokens, parameters) {
@@ -301,7 +494,11 @@ function parseAndValidateSelect(tokens, parameters) {
       if (!tok) break;
       if (tok.type === "KEYWORD" && tok.value === "FROM") break;
 
-      if (tok.type === "FORBIDDEN_KEYWORD" || tok.type === "LPAREN" || tok.type === "RPAREN") {
+      if (
+        tok.type === "FORBIDDEN_KEYWORD" ||
+        tok.type === "LPAREN" ||
+        tok.type === "RPAREN"
+      ) {
         throw new Error("SQL_UNSUPPORTED_SYNTAX");
       }
 
@@ -372,7 +569,14 @@ function parseAndValidateSelect(tokens, parameters) {
   // 4. Optional WHERE clause
   if (peek()?.type === "KEYWORD" && peek()?.value === "WHERE") {
     next(); // consume WHERE
-    parseWhereClause(tokens, () => idx, (newIdx) => { idx = newIdx; }, placeholdersFound);
+    parseWhereClause(
+      tokens,
+      () => idx,
+      (newIdx) => {
+        idx = newIdx;
+      },
+      placeholdersFound,
+    );
   }
 
   // 5. Optional ORDER BY clause
@@ -382,7 +586,13 @@ function parseAndValidateSelect(tokens, parameters) {
     if (!byTok || byTok.type !== "KEYWORD" || byTok.value !== "BY") {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
-    parseOrderByClause(tokens, () => idx, (newIdx) => { idx = newIdx; });
+    parseOrderByClause(
+      tokens,
+      () => idx,
+      (newIdx) => {
+        idx = newIdx;
+      },
+    );
   }
 
   // 6. Optional LIMIT clause
@@ -393,7 +603,10 @@ function parseAndValidateSelect(tokens, parameters) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (lim.type === "PARAM") placeholdersFound.push(lim.value);
-    if (lim.type === "NUMBER" && (!/^\d+$/u.test(lim.value) || Number(lim.value) < 1)) {
+    if (
+      lim.type === "NUMBER" &&
+      (!/^\d+$/u.test(lim.value) || Number(lim.value) < 1)
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
   }
@@ -406,7 +619,10 @@ function parseAndValidateSelect(tokens, parameters) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (off.type === "PARAM") placeholdersFound.push(off.value);
-    if (off.type === "NUMBER" && (!/^\d+$/u.test(off.value) || Number(off.value) < 0)) {
+    if (
+      off.type === "NUMBER" &&
+      (!/^\d+$/u.test(off.value) || Number(off.value) < 0)
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
   }
@@ -427,7 +643,11 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
     const tok = tokens[idx++];
     if (!tok) throw new Error("SQL_UNSUPPORTED_SYNTAX");
 
-    if (tok.type === "LPAREN" || tok.type === "RPAREN" || tok.type === "FORBIDDEN_KEYWORD") {
+    if (
+      tok.type === "LPAREN" ||
+      tok.type === "RPAREN" ||
+      tok.type === "FORBIDDEN_KEYWORD"
+    ) {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
     if (
@@ -447,7 +667,9 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
   }
 
   function parseCondition() {
-    const left = parseExpressionItem();
+    // Each parse* call advances `idx` and throws on unsupported syntax; the
+    // returned node is not needed because this validator only rejects or accepts.
+    parseExpressionItem();
     const nextTok = tokens[idx];
     if (!nextTok) throw new Error("SQL_UNSUPPORTED_SYNTAX");
 
@@ -470,7 +692,7 @@ function parseWhereClause(tokens, getIdx, setIdx, placeholdersFound) {
 
     if (nextTok.type === "OP") {
       idx++; // consume operator
-      const right = parseExpressionItem();
+      parseExpressionItem();
       return;
     }
 
@@ -500,7 +722,10 @@ function parseOrderByClause(tokens, getIdx, setIdx) {
     if (!col || col.type !== "IDENTIFIER") {
       throw new Error("SQL_UNSUPPORTED_SYNTAX");
     }
-    if (tokens[idx]?.type === "KEYWORD" && (tokens[idx]?.value === "ASC" || tokens[idx]?.value === "DESC")) {
+    if (
+      tokens[idx]?.type === "KEYWORD" &&
+      (tokens[idx]?.value === "ASC" || tokens[idx]?.value === "DESC")
+    ) {
       idx++;
     }
     if (tokens[idx]?.type === "COMMA") {
@@ -544,8 +769,17 @@ function validateParameterBinding(placeholders, parameters) {
 // ---------------------------------------------------------------------------
 
 const FILE_MUTATION_KEYWORDS = new Set([
-  "INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "ALTER",
-  "CREATE", "TRUNCATE", "REPLACE", "GRANT", "REVOKE",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "DROP",
+  "ALTER",
+  "CREATE",
+  "TRUNCATE",
+  "REPLACE",
+  "GRANT",
+  "REVOKE",
 ]);
 
 /**

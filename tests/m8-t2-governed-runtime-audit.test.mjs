@@ -5,6 +5,7 @@ import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { crc32, deflateRawSync } from "node:zlib";
 import { setTimeout } from "node:timers/promises";
 
 import {
@@ -43,6 +44,7 @@ import {
   validateTechnicalArtifact,
   generateArtifactPreview,
   VALIDATION_STATUS,
+  FORMAT_MAX_SIZE_LIMITS,
 } from "../integrations/openclaw/lib/artifact-validator.mjs";
 
 import { validateSqlFileContent } from "../zink-tools/sql/validator.mjs";
@@ -79,7 +81,65 @@ import {
   AGENT_SPAWN_POLICY,
   agentInstructions,
 } from "../integrations/openclaw/lib/policy.mjs";
-import { executeExcelOperation } from "../integrations/openclaw/lib/excel-writer.mjs";
+import {
+  executeExcelOperation,
+  buildMultiSheetWorkbookBuffer,
+  readWorkbookSheetNames,
+  readZipEntries,
+} from "../integrations/openclaw/lib/excel-writer.mjs";
+
+/**
+ * A minimal, CORRECT ZIP writer for the container fixtures.
+ *
+ * M12/T9 F-258: the artifact validator now parses the container's central
+ * directory, so a fixture must be a real container. The previous 7-byte
+ * magic-bytes stub is exactly the truncated input the finding requires to
+ * FAIL, so it is replaced by a real archive and the truncated case is asserted
+ * separately.
+ */
+function buildZip(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameBuf = Buffer.from(name, "utf8");
+    const data = Buffer.from(content, "utf8");
+    const compressed = deflateRawSync(data);
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    locals.push(local, nameBuf, compressed);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central, nameBuf);
+    offset += local.length + nameBuf.length + compressed.length;
+  }
+  const centralBuf = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, centralBuf, eocd]);
+}
 // A14-A22, A24, A30: Discord component callback schema and interaction guards
 import {
   DISCORD_COMPONENT_ACTION_NAMESPACE,
@@ -491,6 +551,61 @@ describe("M8/T2 Governed Runtime, Authority, Memory & Reliability Hardening — 
   });
 
   // =========================================================================
+  // F-510 (R10-L06-1): the seen-set is scoped per type class, so a cross-type
+  // duplicate is not dropped and the retained copy is not chosen by arrival
+  // order. The four items below are one fact reached by two retrieval arms,
+  // plus a skill copy sharing its content hash and a tool copy sharing its
+  // passage id. Dropping the class from the dedup key makes the fact vanish
+  // (measured at HEAD: 1 0 1 2 0).
+  // =========================================================================
+  test("F-510: deduplicateRetrievalContext keeps a cross-type duplicate rather than dropping it", () => {
+    const sharedHash = "f".repeat(64);
+    const sharedPassage = "p-510";
+    const crossTypeDuplicates = [
+      {
+        type: "skill",
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.4,
+      },
+      {
+        type: "fact",
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.9,
+      },
+      {
+        type: "tool",
+        passage_id: sharedPassage,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.5,
+      },
+      {
+        type: "fact",
+        passage_id: sharedPassage,
+        content_hash: sharedHash,
+        text: "Lead time variability is the driver of safety stock.",
+        score: 0.9,
+      }, // within-class duplicate of the fact above
+    ];
+
+    const deduped = deduplicateRetrievalContext(crossTypeDuplicates);
+    assert.equal(deduped.procedures.length, 1);
+    assert.equal(deduped.canonicalFacts.length, 1);
+    assert.equal(deduped.toolReferences.length, 1);
+    assert.equal(deduped.totalCount, 3);
+
+    // The same rule must not depend on which class happened to arrive first.
+    const reversed = deduplicateRetrievalContext(
+      [...crossTypeDuplicates].reverse(),
+    );
+    assert.equal(reversed.procedures.length, 1);
+    assert.equal(reversed.canonicalFacts.length, 1);
+    assert.equal(reversed.toolReferences.length, 1);
+    assert.equal(reversed.totalCount, 3);
+  });
+
+  // =========================================================================
   // BUG-M8T2-09: Direct O1/O2 Clarification in #office
   // =========================================================================
   test("BUG-M8T2-09: formatOfficeClarificationQuestion formats exact ACTIVE.md Section 8 structure", () => {
@@ -781,17 +896,165 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   // -------------------------------------------------------------------------
   // Power BI (.pbix / .pbit)
   // -------------------------------------------------------------------------
-  test("Power BI: validateTechnicalArtifact passes for valid ZIP magic bytes", async () => {
+  test("Power BI: validateTechnicalArtifact passes for a real PBIX container", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbix-"));
     try {
       const pbixFile = path.join(tempDir, "dashboard.pbix");
-      // PK\x03\x04 = ZIP local file header signature
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+      // M12/T9 F-258: the fixture is a REAL container now. The former
+      // 7-byte magic-bytes stub asserted that a truncated archive is a valid
+      // PBIX, which is the defect this finding is about.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["DataModel", "binary-model"],
+        ["Report/Layout", "layout-json"],
+      ]);
       await writeFile(pbixFile, buf);
       const result = validateTechnicalArtifact({ filePath: pbixFile });
       assert.equal(result.status, VALIDATION_STATUS.PASS);
       assert.equal(result.checks.inferredType, "powerbi");
       assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // F-503 / R10-L02-2 — the power-bi structural gate must not be satisfied by
+  // the OPC container shared by every Office document. [Content_Types].xml is
+  // mandated by the OPC spec for xlsx/docx/pptx, so an ANY-of list carrying it
+  // let any renamed OOXML package record powerbiStructureValid: true.
+  // -------------------------------------------------------------------------
+  test("Power BI: a zip holding only [Content_Types].xml is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-opconly-"));
+    try {
+      const file = path.join(tempDir, "bare.pbix");
+      await writeFile(file, buildZip([["[Content_Types].xml", "<Types/>"]]));
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.inferredType, "powerbi");
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_POWERBI_STRUCTURE")),
+        `expected INVALID_POWERBI_STRUCTURE, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a renamed xlsx-shaped OPC package is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-opc-"));
+    try {
+      const file = path.join(tempDir, "renamed.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["_rels/.rels", "<Relationships/>"],
+        ["xl/workbook.xml", "<workbook/>"],
+        ["xl/worksheets/sheet1.xml", "<worksheet/>"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_POWERBI_STRUCTURE")),
+        `expected INVALID_POWERBI_STRUCTURE, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: the repository's own generated workbook is refused as Power BI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-ownxlsx-"));
+    try {
+      const xlsx = buildMultiSheetWorkbookBuffer([
+        {
+          name: "Sheet1",
+          rows: [
+            ["Region", "Amount"],
+            ["North", 10],
+          ],
+        },
+      ]);
+      const file = path.join(tempDir, "own-workbook.pbix");
+      await writeFile(file, xlsx);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(
+        result.checks.powerbiStructureValid,
+        false,
+        "the repository's own workbook must not be accepted as a Power BI artifact",
+      );
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      // The same bytes are still a legitimate Excel artifact.
+      const asExcel = path.join(tempDir, "own-workbook.xlsx");
+      await writeFile(asExcel, xlsx);
+      const excelResult = validateTechnicalArtifact({ filePath: asExcel });
+      assert.equal(excelResult.status, VALIDATION_STATUS.PASS);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a PBIX-shaped archive with Report/Layout and DataMashup passes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-f503-pbix-"));
+    try {
+      const file = path.join(tempDir, "shaped.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, true);
+      assert.equal(result.status, VALIDATION_STATUS.PASS);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // The conjunction, not just the part list, is the control: an ANY-of over the
+  // distinguishing parts still accepts a package that carries only one of them.
+  test("Power BI: Report/Layout without a data half is refused (conjunction is load-bearing)", async () => {
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-f503-layoutonly-"),
+    );
+    try {
+      const file = path.join(tempDir, "layout-only.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Power BI: a data half without Report/Layout is refused (conjunction is load-bearing)", async () => {
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "zink-f503-dataonly-"),
+    );
+    try {
+      const file = path.join(tempDir, "data-only.pbix");
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
+      await writeFile(file, buf);
+      const result = validateTechnicalArtifact({ filePath: file });
+      assert.equal(result.checks.powerbiStructureValid, false);
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -815,13 +1078,31 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-pbixprev-"));
     try {
       const pbixFile = path.join(tempDir, "report.pbix");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+      // M12/T9 F-564: a REAL container now. The former 6-byte PK fragment
+      // pinned exactly the defect F-564 fixed — the preview arm called a
+      // truncated container a valid ZIP from its magic bytes alone. The
+      // preview now reads the technical tier's own structure reader, so the
+      // positive control is a container that actually carries Report/Layout
+      // with its data half; the refusal side (truncated/part-less containers
+      // reported INVALID) is pinned by
+      // tests/m12-t9-r4-f564-preview-verdict.test.mjs.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["Report/Layout", "layout-json"],
+        ["DataMashup", "mashup-bytes"],
+        ["Version", "1"],
+      ]);
       await writeFile(pbixFile, buf);
       const preview = generateArtifactPreview({ filePath: pbixFile });
       assert.equal(preview.available, true);
       assert.equal(preview.type, "powerbi");
       assert.match(preview.previewText, /Power BI/);
       assert.match(preview.previewText, /Container ZIP hợp lệ/);
+      assert.equal(
+        preview.verdict,
+        "VALID",
+        "the preview verdict must agree with the technical tier's structure reader",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -937,16 +1218,23 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
   // -------------------------------------------------------------------------
   // DOCX
   // -------------------------------------------------------------------------
-  test("DOCX: validateTechnicalArtifact passes for valid ZIP magic bytes", async () => {
+  test("DOCX: validateTechnicalArtifact passes for a real DOCX container", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-docx-"));
     try {
       const docxFile = path.join(tempDir, "report.docx");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00]);
+      // M12/T9 F-258: a REAL container now — the former 7-byte magic-bytes
+      // stub asserted that a truncated archive is a valid DOCX.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["word/document.xml", "<document/>"],
+        ["_rels/.rels", "<Relationships/>"],
+      ]);
       await writeFile(docxFile, buf);
       const result = validateTechnicalArtifact({ filePath: docxFile });
       assert.equal(result.status, VALIDATION_STATUS.PASS);
       assert.equal(result.checks.inferredType, "docx");
       assert.equal(result.checks.magicBytesValid, true);
+      assert.equal(result.checks.docxStructureValid, true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -970,13 +1258,26 @@ describe("Data File Format Handler Enrichment — multi-format validation & prev
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zink-fmt-docxprev-"));
     try {
       const docxFile = path.join(tempDir, "contract.docx");
-      const buf = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+      // M12/T9 F-564: a REAL container now — see the Power BI preview case
+      // above. The 6-byte PK fragment was the defect's own input: the preview
+      // called it a valid DOCX while the technical tier requires both OOXML
+      // parts. The refusal side is pinned by
+      // tests/m12-t9-r4-f564-preview-verdict.test.mjs.
+      const buf = buildZip([
+        ["[Content_Types].xml", "<Types/>"],
+        ["word/document.xml", "<document/>"],
+      ]);
       await writeFile(docxFile, buf);
       const preview = generateArtifactPreview({ filePath: docxFile });
       assert.equal(preview.available, true);
       assert.equal(preview.type, "docx");
       assert.match(preview.previewText, /Word Document/);
       assert.match(preview.previewText, /Container ZIP hợp lệ/);
+      assert.equal(
+        preview.verdict,
+        "VALID",
+        "the preview verdict must agree with the technical tier's structure reader",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1688,9 +1989,14 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       });
       const node = {
         node_id: "node1",
-        // o1 cannot be on semantic stack — that belongs to o2
-        agent_id: "o1",
-        stack_id: "semantic",
+        // o2 cannot be on the data_plant stack — that belongs to o1.
+        // M12/T9 F-060 (the owner's restatement of 2026-10-21) moved the
+        // `semantic` stack to @O1 - the meaning layer is DATA work - so the
+        // pairing this case used ("o1 on semantic") is admitted now and the
+        // case's claim is carried by a pairing the canonical table refuses
+        // under both the old and the new table.
+        agent_id: "o2",
+        stack_id: "data_plant",
         dependencies: [],
         required: true,
         input_digest: "a".repeat(64),
@@ -1706,7 +2012,7 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
             nodes: [node],
           }),
         /UNAUTHORIZED_TARGET/,
-        "D10: o1 on semantic stack must be rejected",
+        "D10: o2 on the data_plant stack must be rejected",
       );
     });
 
@@ -2553,19 +2859,30 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
       assert.equal(del.native_run_id, "o1-run-2");
     });
 
-    // D14 & D15: AGENT_STACK_POLICY O1 ETL / O2 Analytics alignment
-    test("D14 & D15: AGENT_STACK_POLICY assigns ETL stacks to O1 and Analytics stacks to O2", async () => {
+    // D14 & D15: AGENT_STACK_POLICY O1 data work / O2 dashboard alignment.
+    //
+    // M12/T9 F-060 (the owner's restatement of 2026-10-21): EVERY work step
+    // that works WITH DATA belongs to @O1, EXCEPT the dashboard and the
+    // data-visualization work, which belongs to @O2. Over the owner's own stack
+    // definitions the `semantic` stack (the layer where meaning is added - KPI,
+    // metric, schema meaning, business rules) is DATA work, so it is @O1's;
+    // `intelligence` (ANALYTICS: charts and dashboards) and `decision` (the
+    // decision report) are the dashboard side, so they are @O2's.
+    //
+    // The table is the ONE ownership statement, so this lane pins the owner's
+    // rule and the derivation reads the same table.
+    test("D14 & D15: AGENT_STACK_POLICY assigns the data work to O1 and the dashboard work to O2", async () => {
       const { AGENT_STACK_POLICY } =
         await import("../integrations/openclaw/lib/authority.mjs");
       assert.deepEqual(
         [...AGENT_STACK_POLICY.o1],
-        ["infrastructure", "data_plant"],
-        "D14: O1 must be assigned ETL stacks (infrastructure, data_plant)",
+        ["infrastructure", "data_plant", "semantic"],
+        "D14: O1 must be assigned the data work (infrastructure, data_plant, semantic)",
       );
       assert.deepEqual(
         [...AGENT_STACK_POLICY.o2],
-        ["semantic", "intelligence", "decision"],
-        "D15: O2 must be assigned Analytics stacks (semantic, intelligence, decision)",
+        ["intelligence", "decision"],
+        "D15: O2 must be assigned the dashboard work (intelligence, decision)",
       );
     });
 
@@ -2647,9 +2964,9 @@ describe("M8/T2.1 Hardening & Regression Suite (A-Series, H-Series, C-Series, D-
 });
 
 describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-A22, A24, A30)", () => {
-  test("A14: DISCORD_COMPONENT_ACTION_NAMESPACE contains exactly 6 canonical action types", () => {
+  test("A14: DISCORD_COMPONENT_ACTION_NAMESPACE contains exactly 8 canonical action types", () => {
     const keys = Object.keys(DISCORD_COMPONENT_ACTION_NAMESPACE);
-    assert.equal(keys.length, 6, "Must define exactly 6 action types");
+    assert.equal(keys.length, 8, "Must define exactly 8 action types");
     assert.ok(
       DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_APPROVE.startsWith(
         "zink:approval:",
@@ -2660,6 +2977,16 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
         "zink:result:",
       ),
     );
+    // M8/T3: the skill-learning pair lives in its own namespace so a skill
+    // approval can never route through the execution approval handler.
+    assert.ok(
+      DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE.startsWith(
+        "zink:skill:",
+      ),
+    );
+    assert.ok(
+      DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT.startsWith("zink:skill:"),
+    );
   });
 
   test("A16: buildComponentCustomId formats custom_id with correct namespace prefix", () => {
@@ -2668,7 +2995,16 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
       "task123",
       "3",
     );
-    assert.equal(customId, "zink:approval:approve:task123:3");
+    // M10/T2-R12: the host only routes interactions whose parsed key is `occomp`,
+    // so the wire id is the host envelope carrying the zink action namespace.
+    // The bare `zink:approval:approve:task123:3` this test used to assert was
+    // never deliverable — every click answered "This component is no longer
+    // valid." (live 2026-10-08 15:45:08).
+    assert.equal(customId, "occomp:cid=zink:approval:approve:task123:3");
+    assert.equal(
+      parseComponentCustomId(customId).actionKey,
+      "APPROVAL_APPROVE",
+    );
   });
 
   test("A16: buildComponentCustomId rejects unknown action type", () => {
@@ -2800,15 +3136,26 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
   });
 
   test("A23: built custom_ids stay compatible with the native 2026.6.34 custom_id grammar", () => {
-    // openclaw@2026.6.34 native parseCustomId splits segments on ";" and
-    // parses name=value pairs; our ids must never contain those delimiters
-    // so the native parser yields key "zink" without misparsing.
+    // openclaw@2026.6.34 native parseCustomId splits segments on ";" and parses
+    // name=value pairs. M10/T2-R12: the built id MUST therefore carry the host
+    // envelope `occomp:cid=<componentId>` as its first segment — that is what
+    // makes the parsed key "occomp". The previous contract ("must never contain
+    // = so the parser yields key zink") described a bare id the host rejects
+    // outright; live failure 2026-10-08 15:45:08, "This component is no longer
+    // valid." A ";" is still forbidden: it would start a host key=value segment
+    // and truncate the envelope.
     for (const actionType of Object.values(
       DISCORD_COMPONENT_ACTION_NAMESPACE,
     )) {
       const customId = buildComponentCustomId(actionType, "task-01", "3");
+      assert.ok(
+        customId.startsWith("occomp:cid="),
+        `${actionType} must carry the host envelope: ${customId}`,
+      );
       assert.equal(customId.includes(";"), false);
-      assert.equal(customId.includes("="), false);
+      // First segment before any ";" must be the envelope, never the bare zink
+      // namespace, so the host's parsed key is exactly "occomp".
+      assert.equal(customId.split(";")[0].split(":")[0], "occomp");
       const parsed = parseComponentCustomId(customId);
       assert.equal(parsed.actionType, actionType);
       assert.equal(parsed.taskId, "task-01");
@@ -2816,13 +3163,40 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
     }
   });
 
+  test("A23: every governed custom_id fits Discord's 100-char ceiling", () => {
+    // M10/T2-R12: a longer id is refused by Discord, so the builder fails closed
+    // instead. APPROVAL_REVISION with a 64-hex task id lands at exactly 100.
+    const taskId = "a".repeat(64);
+    for (const actionType of Object.values(
+      DISCORD_COMPONENT_ACTION_NAMESPACE,
+    )) {
+      const customId = buildComponentCustomId(actionType, taskId, "1");
+      assert.ok(
+        customId.length <= 100,
+        `${actionType} exceeds the ceiling: ${customId.length}`,
+      );
+    }
+    assert.throws(
+      () =>
+        buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REVISION,
+          taskId,
+          "12345",
+        ),
+      /CUSTOM_ID_TOO_LONG/u,
+    );
+  });
+
   test("A23: parseComponentCustomId accepts the native occomp:cid= envelope", () => {
-    const inner = buildComponentCustomId(
+    // The builder already emits the envelope, so the wire id IS what the host
+    // sends. The host may append its own key=value params after it.
+    const wire = buildComponentCustomId(
       DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
       "task-07",
       "1",
     );
-    const parsed = parseComponentCustomId(`occomp:cid=${inner};ttl=60000`);
+    assert.ok(wire.startsWith("occomp:cid="), wire);
+    const parsed = parseComponentCustomId(`${wire};ttl=60000`);
     assert.equal(parsed.actionKey, "RESULT_ACCEPT");
     assert.equal(parsed.taskId, "task-07");
     assert.equal(parsed.revision, "1");
@@ -3001,5 +3375,518 @@ describe("A-Series: Discord Component Callback Schema & Interaction Guards (A14-
       instructions.includes("1545696207316455527"),
       "A30: should use production approvals ID",
     );
+  });
+});
+// =========================================================================
+// M12/T9 F-126 ? zink_excel implements less than its published contract.
+//
+// Measured pre-fix: `template_path` was accepted and then ignored, `generate`
+// wrote only `specification.sheets[0]`, `load` answered a hardcoded
+// `["Sheet1"]` for every workbook, and `validate` answered `valid: exists`
+// while echoing the caller's own rules back as `rules_checked`.
+// =========================================================================
+describe("F-126 ? zink_excel implements its published contract", () => {
+  test("F-126-1: generate writes every declared sheet and load reports the real sheet names", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const generated = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "two-sheets.xlsx",
+          specification: {
+            sheets: [
+              { name: "Alpha", columns: ["a"], rows: [["1"]] },
+              { name: "Beta", columns: ["b"], rows: [["2"]] },
+            ],
+          },
+        },
+        dir,
+      );
+      assert.equal(generated.status, "success");
+      assert.deepEqual(generated.summary.sheets, ["Alpha", "Beta"]);
+
+      const loaded = executeExcelOperation(
+        { operation: "load", file_path: "two-sheets.xlsx" },
+        dir,
+      );
+      assert.equal(loaded.status, "success");
+      assert.deepEqual(
+        loaded.summary.sheets,
+        ["Alpha", "Beta"],
+        "load must report the workbook's real sheet names, not a constant",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-2: validate evaluates every rule and returns a per-rule verdict", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const emptyPath = path.join(dir, "empty.xlsx");
+      writeFileSync(emptyPath, Buffer.alloc(0));
+      const res = executeExcelOperation(
+        {
+          operation: "validate",
+          file_path: emptyPath,
+          rules: ["file_existence", "non_empty", "readable_workbook"],
+        },
+        dir,
+      );
+      assert.equal(res.status, "success");
+      assert.equal(
+        res.summary.valid,
+        false,
+        "a zero-byte workbook is not valid",
+      );
+      const byRule = Object.fromEntries(
+        res.summary.rule_results.map((entry) => [entry.rule, entry.passed]),
+      );
+      assert.equal(byRule.file_existence, true);
+      assert.equal(byRule.non_empty, false);
+      assert.equal(byRule.readable_workbook, false);
+      assert.equal(res.summary.rules_checked.length, 3);
+
+      assert.throws(
+        () =>
+          executeExcelOperation(
+            {
+              operation: "validate",
+              file_path: emptyPath,
+              rules: ["no_such_rule"],
+            },
+            dir,
+          ),
+        /EXCEL_RULE_UNSUPPORTED/u,
+        "a rule this module cannot evaluate is refused, never reported as a success",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-3: populate consumes template_path and preserves the template's sheets", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      const templatePath = path.join(dir, "template.xlsx");
+      const templateBytes = buildMultiSheetWorkbookBuffer([
+        { name: "Header", rows: [["col"]] },
+        { name: "Extra", rows: [["keep"]] },
+      ]);
+      writeFileSync(templatePath, templateBytes);
+
+      const res = executeExcelOperation(
+        {
+          operation: "populate",
+          file_path: path.join(dir, "populated.xlsx"),
+          template_path: templatePath,
+          data: [["value"]],
+        },
+        dir,
+      );
+      assert.equal(res.status, "success");
+      assert.equal(res.summary.template_applied, true);
+      assert.deepEqual(res.summary.sheets, ["Header", "Extra"]);
+
+      const populated = readZipEntries(
+        readFileSync(path.join(dir, "populated.xlsx")),
+      );
+      const sheetXml = populated
+        .get("xl/worksheets/sheet1.xml")
+        .toString("utf8");
+      assert.match(
+        sheetXml,
+        /<t>col<\/t>/u,
+        "the template's own row must survive the population",
+      );
+      assert.match(
+        sheetXml,
+        /<t>value<\/t>/u,
+        "the supplied data must be written into the template",
+      );
+      assert.ok(
+        populated.has("xl/worksheets/sheet2.xml"),
+        "the template's second sheet must survive the population",
+      );
+      assert.deepEqual(
+        readFileSync(templatePath),
+        templateBytes,
+        "the template file itself must not be mutated",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-126-4: a template_path outside the workspace is refused", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f126-"));
+    try {
+      assert.throws(
+        () =>
+          executeExcelOperation(
+            {
+              operation: "populate",
+              file_path: path.join(dir, "populated.xlsx"),
+              template_path: "../outside/template.xlsx",
+              data: [["value"]],
+            },
+            dir,
+          ),
+        /ARTIFACT_PATH_ESCAPE/u,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-258 — artifact "validation" was extension plus size plus substring.
+//
+// Measured pre-fix: a 200-byte text file named `report.xlsx` returned
+// `status: PASS`, because the type came from the extension, the excel branch
+// only failed files under 100 bytes, and the ZIP helper asked whether a
+// keyword appeared anywhere in the file's bytes.
+// =========================================================================
+describe("F-258 — the office/document branches parse the container", () => {
+  test("F-258-1: a garbage file with an .xlsx name FAILS", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      const garbage = path.join(dir, "report.xlsx");
+      await writeFile(garbage, "x".repeat(400), "utf8");
+      const result = validateTechnicalArtifact({ filePath: garbage });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("CORRUPT_EXCEL")),
+        `the garbage workbook must be reported, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-258-2: a TRUNCATED real workbook FAILS", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      const real = buildMultiSheetWorkbookBuffer([
+        { name: "S", rows: [["a", "b"]] },
+      ]);
+      const truncatedPath = path.join(dir, "truncated.xlsx");
+      await writeFile(truncatedPath, real.subarray(0, 200));
+      const result = validateTechnicalArtifact({ filePath: truncatedPath });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("CORRUPT_EXCEL")),
+        `the truncated workbook must be reported, got ${JSON.stringify(result.errors)}`,
+      );
+
+      // And the SAME bytes, complete, are a valid workbook.
+      const wholePath = path.join(dir, "whole.xlsx");
+      await writeFile(wholePath, real);
+      const whole = validateTechnicalArtifact({ filePath: wholePath });
+      assert.equal(whole.status, VALIDATION_STATUS.PASS);
+      assert.equal(whole.checks.excelStructureValid, true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-258-3: a keyword inside payload bytes is not a container entry", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f258-"));
+    try {
+      // The old helper searched the whole file as latin1, so a keyword inside
+      // arbitrary payload bytes counted as a container entry.
+      const impostor = path.join(dir, "impostor.docx");
+      await writeFile(
+        impostor,
+        `PK\x03\x04${"[Content_Types].xml".repeat(40)}`,
+        "binary",
+      );
+      const result = validateTechnicalArtifact({ filePath: impostor });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((e) => e.includes("INVALID_DOCX_STRUCTURE")),
+        `the keyword must not count as an entry, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-259 — the result card sanitizes every sibling field but emitted
+// `preview` raw, so untrusted file bytes reached Discord unredacted.
+//
+// Measured pre-fix: an artifact whose CSV/SQL/markdown bytes contain a
+// Windows path or a token appeared verbatim on the #results card, and a large
+// row set exceeded the 2000-character message ceiling because no chunking was
+// applied on this path.
+// =========================================================================
+describe("F-259 — the result card sanitizes the preview and fits the ceiling", () => {
+  test("F-259-1: a path or a token inside the file bytes never reaches the card", () => {
+    const card = formatGovernedResultCard({
+      taskId: "TASK-042",
+      attempt: 1,
+      preview: [
+        "source: C:\\Users\\admin\\secret\\report.csv",
+        "token: Bearer abc.def.ghi",
+        `hash: ${"a".repeat(64)}`,
+      ].join("\n"),
+      artifact: "s3://bucket/result.xlsx",
+      keyFindings: "Sản lượng tăng 15%",
+    });
+    assert.equal(
+      card.includes("C:\\Users\\admin"),
+      false,
+      "a Windows path in the file bytes must not appear on the card",
+    );
+    assert.equal(
+      card.includes("Bearer"),
+      false,
+      "a token in the file bytes must not appear on the card",
+    );
+    assert.equal(
+      card.includes("a".repeat(64)),
+      false,
+      "a 64-hex hash in the file bytes must not appear on the card",
+    );
+    assert.match(card, /Dữ liệu Mẫu/);
+    assert.match(card, /Sản lượng tăng 15%/);
+  });
+
+  test("F-259-2: the card fits Discord's ceiling with the action footer intact", () => {
+    const card = formatGovernedResultCard({
+      taskId: "TASK-042",
+      attempt: 1,
+      preview: "row\n".repeat(5000),
+      artifact: "s3://bucket/result.xlsx",
+      keyFindings: "Sản lượng tăng 15%",
+    });
+    assert.ok(
+      card.length <= 2000,
+      `the card must fit the 2000-character ceiling, got ${card.length}`,
+    );
+    assert.match(card, /\[ACCEPT \/ COMPLETE\]/);
+    assert.match(card, /\[REJECT\]/);
+    assert.match(card, /\[REQUEST REVISION\]/);
+  });
+});
+// =========================================================================
+// M12/T9 F-464 — the validator read and hashed an artifact in full before it
+// compared the per-format ceiling, so an over-limit file paid the read cost
+// before the guard could refuse it.
+//
+// Measured pre-fix: a 2 MiB + 1 python artifact failed FILE_TOO_LARGE but
+// carried a sha256 and sizeBytes, proving the whole buffer had been read and
+// hashed before the guard refused it.
+// =========================================================================
+describe("F-464 — the validator bounds its own artifact read", () => {
+  test("F-464-1: an over-limit artifact is refused without being read or hashed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f464-"));
+    try {
+      const oversized = path.join(dir, "oversized.py");
+      await writeFile(
+        oversized,
+        Buffer.alloc(FORMAT_MAX_SIZE_LIMITS.python + 1, 0x78),
+      );
+      const result = validateTechnicalArtifact({ filePath: oversized });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.ok(
+        result.errors.some((entry) => entry.includes("FILE_TOO_LARGE")),
+        `expected FILE_TOO_LARGE, got ${JSON.stringify(result.errors)}`,
+      );
+      assert.equal(result.checks.sizeBound, false);
+      assert.equal(result.sha256, undefined, "the body must not be hashed");
+      assert.equal(
+        result.checks.hash,
+        undefined,
+        "the hash check must not run",
+      );
+      assert.equal(result.sizeBytes, undefined, "no buffered digest metadata");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F-464-2: the stat-size guard precedes the artifact read in source order", () => {
+    const source = readFileSync(
+      new URL(
+        "../integrations/openclaw/lib/artifact-validator.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const body = source.slice(
+      source.indexOf("export function validateTechnicalArtifact"),
+    );
+    const guard = body.indexOf("if (fileSizeBytes > maxSize)");
+    const read = body.indexOf("readFileSync(filePath)");
+    assert.ok(guard > 0, "the ceiling guard must be present");
+    assert.ok(read > 0, "the artifact read must be present");
+    assert.ok(
+      guard < read,
+      "the ceiling must be compared before the artifact body is read",
+    );
+  });
+});
+// =========================================================================
+// M12/T9 F-465 — the Excel writer emitted XML-forbidden C0 control characters
+// into inline strings while the validator's "EXCEL valid" tier never opened the
+// sheet XML, so an invalid workbook committed and hashed as PASS.
+//
+// Measured pre-fix: a cell containing U+0001 produced a raw 0x01 byte in
+// xl/worksheets/sheet1.xml and validateTechnicalArtifact returned PASS.
+// =========================================================================
+describe("F-465 — control characters never become a valid workbook", () => {
+  test("F-465-1: the writer refuses a cell carrying a C0 control character", () => {
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["A" + String.fromCharCode(0x00) + "B"]] },
+        ]),
+      /EXCEL_CELL_CONTROL_CHARACTER/u,
+      "U+0000 must be refused at build",
+    );
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["A" + String.fromCharCode(0x0b) + "B"]] },
+        ]),
+      /EXCEL_CELL_CONTROL_CHARACTER/u,
+      "U+000B must be refused at build",
+    );
+  });
+
+  test("F-465-2: the validator EXCEL tier rejects a sheet part with a raw C0 byte", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f465-"));
+    try {
+      const workbook = path.join(dir, "control.xlsx");
+      const control = String.fromCharCode(0x0b);
+      await writeFile(
+        workbook,
+        buildZip([
+          ["[Content_Types].xml", "<Types/>"],
+          ["xl/workbook.xml", "<workbook/>"],
+          [
+            "xl/worksheets/sheet1.xml",
+            `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>A${control}B</t></is></c></row></sheetData></worksheet>`,
+          ],
+        ]),
+      );
+      const result = validateTechnicalArtifact({ filePath: workbook });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.equal(result.checks.sheetXmlValid, false);
+      assert.ok(
+        result.errors.some((entry) =>
+          entry.includes("INVALID_EXCEL_SHEET_XML"),
+        ),
+        `expected INVALID_EXCEL_SHEET_XML, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-473 — Excel's 32,767-character per-cell budget was enforced by no
+// layer: the writer emitted a 40,000-character inline string and the EXCEL
+// validation tier returned PASS on a workbook Excel cannot open.
+// =========================================================================
+describe("F-473 — the per-cell character budget is enforced", () => {
+  test("F-473-1: the writer refuses an over-budget cell and keeps the boundary", () => {
+    assert.throws(
+      () =>
+        buildMultiSheetWorkbookBuffer([
+          { name: "S", rows: [["a".repeat(40000)]] },
+        ]),
+      /EXCEL_CELL_TOO_LONG/u,
+      "a 40,000-character cell must be refused at build",
+    );
+    const boundary = readZipEntries(
+      buildMultiSheetWorkbookBuffer([
+        { name: "S", rows: [["a".repeat(32767)]] },
+      ]),
+    );
+    assert.ok(
+      boundary.has("xl/worksheets/sheet1.xml"),
+      "32,767 characters must still build",
+    );
+  });
+
+  test("F-473-2: the validator EXCEL tier rejects an over-budget cell", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f473-"));
+    try {
+      const workbook = path.join(dir, "long.xlsx");
+      await writeFile(
+        workbook,
+        buildZip([
+          ["[Content_Types].xml", "<Types/>"],
+          ["xl/workbook.xml", "<workbook/>"],
+          [
+            "xl/worksheets/sheet1.xml",
+            `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${"a".repeat(40000)}</t></is></c></row></sheetData></worksheet>`,
+          ],
+        ]),
+      );
+      const result = validateTechnicalArtifact({ filePath: workbook });
+      assert.equal(result.status, VALIDATION_STATUS.FAIL);
+      assert.equal(result.checks.sheetXmlValid, false);
+      assert.ok(
+        result.errors.some((entry) => entry.includes("EXCEL_CELL_TOO_LONG")),
+        `expected EXCEL_CELL_TOO_LONG, got ${JSON.stringify(result.errors)}`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// =========================================================================
+// M12/T9 F-466 — two declared sheet names that sanitise to the same text
+// produced two worksheets with the same name while the tool reported the
+// declared inputs, so the workbook was invalid and the report was untrue.
+// =========================================================================
+describe("F-466 — sanitised sheet names stay unique and are reported truthfully", () => {
+  test("F-466-1: names that sanitise to the same text get distinct entries", () => {
+    const buf = buildMultiSheetWorkbookBuffer([
+      { name: "A B", rows: [["first"]] },
+      { name: "AB", rows: [["second"]] },
+      { name: "ab", rows: [["third"]] },
+    ]);
+    const names = readWorkbookSheetNames(buf);
+    assert.deepEqual(names, ["AB", "AB_2", "ab_3"]);
+    assert.equal(new Set(names.map((name) => name.toLowerCase())).size, 3);
+    const parts = [...readZipEntries(buf).keys()].filter((name) =>
+      /^xl\/worksheets\/sheet\d+\.xml$/u.test(name),
+    );
+    assert.equal(parts.length, 3);
+  });
+
+  test("F-466-2: generate reports the names the workbook declares", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zink-f466-"));
+    try {
+      const result = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "collide.xlsx",
+          specification: {
+            sheets: [
+              { name: "A B", rows: [["1"]] },
+              { name: "AB", rows: [["2"]] },
+            ],
+          },
+        },
+        dir,
+      );
+      const written = readWorkbookSheetNames(
+        readFileSync(path.join(dir, "collide.xlsx")),
+      );
+      assert.deepEqual(result.summary.sheets, written);
+      assert.equal(new Set(written.map((name) => name.toLowerCase())).size, 2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

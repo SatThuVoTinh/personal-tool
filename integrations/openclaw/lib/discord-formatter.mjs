@@ -71,6 +71,21 @@ export function sanitizeDiscordText(
 }
 
 /**
+ * M12/T9 F-463: strips Discord's group-mention tokens from text that is published
+ * as message content. A ledger-derived label must never be able to ping a channel.
+ */
+export function stripDiscordMentions(text, { collapseWhitespace = true } = {}) {
+  if (typeof text !== "string") return "";
+  const stripped = text.replace(
+    /(?<![A-Za-z0-9_])@everyone|(?<![A-Za-z0-9_])@here|<@[!&]?\d+>|<#\d+>/giu,
+    "",
+  );
+  return collapseWhitespace
+    ? stripped.replace(/[^\S\r\n]+/g, " ").trim()
+    : stripped;
+}
+
+/**
  * Formats a governed result or raw output into a clean, human-safe Discord message.
  */
 export function formatForDiscord(rawInput, { agentName = "Zink Bot" } = {}) {
@@ -598,6 +613,208 @@ export function formatOfficeFinalNotification({
 }
 
 /**
+ * M12/T1-R1 — the governed presentation primitives.
+ *
+ * Owner instruction 2026-10-13: an approval card carries ONLY the Task ID (no run
+ * code, no requester, no action line, no `child:` line); `Lý do` spells out the
+ * detailed plan — what will be done, which concrete operations, in which software;
+ * and `Kết quả` shows the expected result with an image that resembles the Excel /
+ * SQL / Python / Power BI screen, because that is what makes "Request Revision" a
+ * meaningful answer.
+ *
+ * The plan is rendered from the durable admitted brief nodes, never from the
+ * model's own card prose, so the owner reads the governed plan itself rather than a
+ * restatement of it.
+ */
+export const SPECIALIST_SOFTWARE_LABELS = Object.freeze({
+  main: "Quản Lý (Main)",
+  // Stack-neutral: the old "Điều phối ETL"/"Điều phối Analytics" wording was
+  // retired L&SC Data Plant branding (`AGENTS.md` §9) and it pre-judged a
+  // coordinator/stack assignment that `docs/architecture/five-stack.md` and
+  // `AGENT_STACK_POLICY` still disagree about. These labels are the owner-facing
+  // half of the `AGENT_DEFINITIONS` rename, so they follow the same vocabulary
+  // the ingress aliases ("điều phối 1/2") already use.
+  o1: "Điều phối 1 (O1)",
+  o2: "Điều phối 2 (O2)",
+  excel: "Microsoft Excel",
+  sql: "SQL Server",
+  python: "Python",
+  "power-bi": "Power BI",
+});
+
+const PLAN_FIELD_LIMIT = 600;
+const DISCORD_BODY_LIMIT = 2000;
+const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
+// M12/T9 F-259: the preview is file content, so it is bounded before it can
+// push the card past Discord's 2000-character ceiling.
+const PREVIEW_FIELD_LIMIT = 900;
+const RESULT_TRUNCATION_MARK = "…(phần dữ liệu bị cắt theo giới hạn Discord)";
+
+function clipField(value, limit = PLAN_FIELD_LIMIT) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}…`;
+}
+
+// M12/T9 F-463: a plan field is ledger-supplied free text, so it carries the same
+// redaction as any other published text before it joins a card body. `clipField`
+// only trims and slices; on its own it let paths, session keys, tokens and digests
+// through to the approval and result surfaces.
+function redactGovernedField(value, limit = PLAN_FIELD_LIMIT) {
+  return clipField(sanitizeDiscordText(value), limit);
+}
+
+export function specialistSoftwareLabel(agentId) {
+  return (
+    SPECIALIST_SOFTWARE_LABELS[agentId] ??
+    clipField(String(agentId ?? ""), 80) ??
+    "không rõ"
+  );
+}
+
+/**
+ * One numbered step per planned node: the software that will be used, the concrete
+ * operations, the constraints it must respect, and the criterion its result is
+ * judged against.
+ */
+export function renderGovernedPlanSteps(nodes, { activeNodeId = null } = {}) {
+  if (!Array.isArray(nodes) || nodes.length === 0) return [];
+  return nodes.map((node, index) => {
+    const nodeId = clipField(node?.node_id, 80);
+    const label = specialistSoftwareLabel(node?.agent_id);
+    const lines = [
+      nodeId
+        ? `${index + 1}. **${label}** — \`${nodeId}\``
+        : `${index + 1}. **${label}**`,
+    ];
+    const operations = redactGovernedField(node?.inputs);
+    if (operations) lines.push(`   - Thao tác: ${operations}`);
+    const constraints = redactGovernedField(node?.constraints);
+    if (constraints) lines.push(`   - Ràng buộc: ${constraints}`);
+    const criteria = redactGovernedField(node?.validation_criteria);
+    if (criteria) lines.push(`   - Nghiệm thu: ${criteria}`);
+    if (node?.required === false) lines.push("   - Không bắt buộc");
+    if (activeNodeId && node?.node_id === activeNodeId) {
+      lines.push("   - **Đang chờ anh duyệt ở bước này**");
+    }
+    return lines.join("\n");
+  });
+}
+
+/**
+ * The `Kết quả` section: the expected outcome in words plus the preview image that
+ * travels with the card. The image is named, never inlined — Discord renders it
+ * from the attachment itself.
+ */
+export function renderGovernedExpectedResult({
+  nodes,
+  outcome = "",
+  previewImage = null,
+}) {
+  const lines = [];
+  const summary = redactGovernedField(outcome, PLAN_FIELD_LIMIT);
+  if (summary) lines.push(summary);
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const criteria = redactGovernedField(node?.validation_criteria, 240);
+    if (criteria) {
+      lines.push(`• ${specialistSoftwareLabel(node?.agent_id)}: ${criteria}`);
+    }
+  }
+  if (lines.length === 0) {
+    lines.push("*(chưa có mô tả kết quả trong kế hoạch đã ghi)*");
+  }
+  if (typeof previewImage === "string" && previewImage.length > 0) {
+    lines.push(
+      `• Hình ảnh kết quả dự kiến: \`${sanitizeDiscordIdentifier(previewImage)}\``,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Assemble the governed approval body. When the plan cannot fit Discord's 2000
+ * character ceiling the plan is cut with an explicit marker and the action footer
+ * is kept whole: a silently truncated plan is exactly how an owner ends up
+ * approving something he never saw.
+ */
+export function renderGovernedApprovalBody({
+  title,
+  taskId,
+  planSteps = [],
+  expectedResult = "",
+  commandToken,
+}) {
+  const head = [
+    `### ${title}`,
+    `**Task ID:** \`${sanitizeDiscordIdentifier(taskId)}\``,
+    // M12/T2-R1 (owner instruction "bỏ dòng trạng thái đi"): the card no longer states its
+    // own status in prose. The state is the forum's STATUS tag, which is what the owner
+    // filters on, and the thread is only ever opened with STATUS: WAITING — a card that
+    // asks is still not a card that authorizes, and the footer keeps saying so explicitly.
+    "",
+    "**Lý do (kế hoạch chi tiết):**",
+    planSteps.length > 0
+      ? planSteps.join("\n")
+      : "*(không có bước nào trong kế hoạch đã ghi)*",
+    "",
+    "**Kết quả dự kiến:**",
+    expectedResult,
+  ].join("\n");
+  const footer = [
+    "",
+    "---",
+    "**Thao tác dành cho User:**",
+    `- Bấm **Approve** hoặc phản hồi \`APPROVE ${commandToken}\` để phê duyệt đưa vào hàng đợi thực thi.`,
+    `- Bấm **Reject** hoặc phản hồi \`REJECT ${commandToken}\` để từ chối kế hoạch.`,
+    `- Bấm **Request Revision** hoặc phản hồi \`REQUEST REVISION ${commandToken}\` để yêu cầu sửa kế hoạch.`,
+  ].join("\n");
+  if (head.length + footer.length <= DISCORD_BODY_LIMIT) {
+    return `${head}${footer}`;
+  }
+  const budget =
+    DISCORD_BODY_LIMIT - footer.length - PLAN_TRUNCATION_MARK.length;
+  const cut = head.lastIndexOf("\n", Math.max(0, budget));
+  return `${head.slice(0, cut > 0 ? cut : budget).trimEnd()}\n${PLAN_TRUNCATION_MARK}${footer}`;
+}
+
+/**
+ * M12/T2-R1: the body of a #results thread. This is deliberately NOT
+ * `formatGovernedResultCard`, which asks the owner for ACCEPT / REJECT: a results thread is
+ * opened after he has already accepted, so asking again would advertise a verdict that has
+ * been made. It states what was delivered, in which software, under which digest.
+ */
+export function renderGovernedResultBody({
+  taskId,
+  software = "",
+  outcomeStatus = "",
+  resultDigest = null,
+  planSteps = [],
+}) {
+  const head = [
+    "### ✅ [KẾT QUẢ] Kết quả đã được nghiệm thu",
+    `**Task ID:** \`${sanitizeDiscordIdentifier(taskId)}\``,
+    `**Phần mềm:** ${clipField(sanitizeDiscordText(software || "(không xác định)", { preserveIdentifiers: true }), 80)}`,
+    `**Kết quả:** \`${sanitizeDiscordIdentifier(outcomeStatus || "COMPLETE")}\``,
+  ];
+  if (resultDigest)
+    head.push(
+      `**Mã băm kết quả:** \`${sanitizeDiscordIdentifier(resultDigest)}\``,
+    );
+  head.push(
+    "",
+    "**Các bước đã thực hiện:**",
+    planSteps.length > 0
+      ? planSteps.join("\n")
+      : "*(không có bước nào trong kế hoạch đã ghi)*",
+  );
+  const body = stripDiscordMentions(head.join("\n"), {
+    collapseWhitespace: false,
+  });
+  if (body.length <= DISCORD_BODY_LIMIT) return body;
+  return `${body.slice(0, DISCORD_BODY_LIMIT - PLAN_TRUNCATION_MARK.length).trimEnd()}\n${PLAN_TRUNCATION_MARK}`;
+}
+
+/**
  * Formats an Approval Card for #approvals with exact fields and buttons.
  * Implements ACTIVE.md Section 8, canonical action IDs, and verifiable digests (F17, F23).
  */
@@ -705,7 +922,13 @@ export function formatGovernedResultCard({
     previewImage &&
     typeof previewImage === "string" &&
     !previewImage.includes("..")
-      ? `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordIdentifier(path.basename(previewImage))}\` *(đã đính kèm)*\n`
+      ? // M12/T9 F-301: the card said the image was ATTACHED. No governed
+        // outbound path in this integration can attach a file — the publish
+        // helper takes no file argument and the transport builds a JSON body —
+        // so the owner was told they had seen a rendered preview that never
+        // left the host. The card now states the truth: the preview is rendered
+        // on the host and is named for the record, and it is NOT attached.
+        `\n🖼️ **Hình ảnh Preview Trực quan (Screenshot/Render):** \`${sanitizeDiscordIdentifier(path.basename(previewImage))}\` *(ảnh đã render trên host — KHÔNG đính kèm vào tin nhắn này)*\n`
       : "";
   const actionAcceptId = `zink:result:accept:${cleanTask}:${attempt}`;
   const actionRejectId = `zink:result:reject:${cleanTask}:${attempt}`;
@@ -729,11 +952,24 @@ export function formatGovernedResultCard({
     );
   }
 
-  return [
+  // M12/T9 F-259: the preview is the artifact's OWN text — its lines, its
+  // paths, its tokens. Every sibling field on this card is sanitised; the
+  // preview was interpolated raw, so a Windows path or a bearer token inside
+  // the file reached Discord unredacted. It now goes through the same
+  // sanitiser as the other free-text fields, and it is bounded.
+  const cleanPreview = sanitizeDiscordText(
+    preview || "*(Không có dữ liệu trích xuất)*",
+  );
+  const cappedPreview =
+    cleanPreview.length > PREVIEW_FIELD_LIMIT
+      ? `${cleanPreview.slice(0, PREVIEW_FIELD_LIMIT).trimEnd()}…`
+      : cleanPreview;
+
+  const head = [
     ...headerLines,
     "",
     "#### 🔍 Dữ liệu Mẫu & Xem trước Thực tế (Actual Preview):",
-    preview || "*(Không có dữ liệu trích xuất)*",
+    cappedPreview,
     previewImgSection,
     "#### 📦 Tệp Sản phẩm (Artifact):",
     `- ${cleanArtifact}`,
@@ -742,20 +978,26 @@ export function formatGovernedResultCard({
     cleanFindings,
     "",
     "---",
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+  const footer = [
     "**Thao tác dành cho User (Buttons & Action IDs):**",
     `- Bấm **[ACCEPT / COMPLETE]** (\`${actionAcceptId}\`) để nghiệm thu và hoàn thành tác vụ.`,
     `- Bấm **[REJECT]** (\`${actionRejectId}\`) để bác bỏ kết quả.`,
     `- Bấm **[REQUEST REVISION]** (\`${actionRevisionId}\`) để yêu cầu chạy lại/tinh chỉnh.`,
-  ]
-    .filter((line) => line !== null)
-    .join("\n");
+  ].join("\n");
+  // The card is one Discord message: it must fit the platform ceiling, and
+  // the action footer must stay whole — a card whose buttons were cut off is
+  // exactly how an owner ends up unable to act.
+  if (head.length + footer.length + 1 <= DISCORD_BODY_LIMIT) {
+    return `${head}\n${footer}`;
+  }
+  const budget =
+    DISCORD_BODY_LIMIT - footer.length - RESULT_TRUNCATION_MARK.length - 2;
+  const cut = head.lastIndexOf("\n", Math.max(0, budget));
+  return `${head.slice(0, cut > 0 ? cut : budget).trimEnd()}\n${RESULT_TRUNCATION_MARK}\n${footer}`;
 }
-
-/**
- * Formats an Incident Card for #incidents with normalized lifecycle.
- * Implements ACTIVE.md Section 9 and sanitized status/severity (F13).
- * States: RECEIVED -> INVESTIGATING -> REPAIRING -> RESOLVED
- */
 export function formatIncidentCard({
   incidentId,
   taskId = null,

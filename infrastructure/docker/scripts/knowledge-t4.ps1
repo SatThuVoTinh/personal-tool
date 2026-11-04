@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
+$runId = New-AcceptanceRunId
 $projectName = "personal-tool-m3-t4"
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $scriptDirectory "..\env\.env" }
@@ -17,6 +19,14 @@ $fixtureRoot = Join-Path $repositoryRoot "apps\knowledge\tests\fixtures\vault"
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m3-t4-$([guid]::NewGuid().ToString('N'))"
 $vaultRoot = Join-Path $temporaryRoot "vault"
 $script:nginxPort = 0
+# F-267 (R7-D13-04): the documented Knowledge memory ceiling and the fraction
+# of it the acceptance gate allows the cgroup peak to reach. The gate reads
+# the limit the container was actually given and fails when that limit is not
+# the documented one, so a lowered limit cannot make the gate lenient while
+# the run still reports PASS. The sibling t5 harness asserts the same ceiling
+# (knowledge-t5-common.ps1: HostConfig.Memory == 4294967296).
+$knowledgeMemoryLimitBytes = 4294967296
+$knowledgeMemoryLimitFraction = 0.8
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -91,6 +101,10 @@ COMMIT;
 function Assert-KnowledgeMemory {
   $containerId = (Invoke-Compose @("ps", "-q", "knowledge")).Trim()
   if (-not $containerId) { throw "Knowledge container id is unavailable." }
+  $memoryLimit = [int64]((& docker inspect --format "{{.HostConfig.Memory}}" $containerId | Select-Object -First 1).Trim())
+  if ($memoryLimit -ne $knowledgeMemoryLimitBytes) {
+    throw "Knowledge container memory limit is $memoryLimit bytes; the documented ceiling is $knowledgeMemoryLimitBytes bytes."
+  }
   & docker exec $containerId test -f /sys/fs/cgroup/memory.peak | Out-Null
   if ($LASTEXITCODE -eq 0) {
     $peakOutput = @(& docker exec $containerId cat /sys/fs/cgroup/memory.peak)
@@ -113,7 +127,8 @@ function Assert-KnowledgeMemory {
     }
   }
   $peak = [int64](($peakOutput -join "").Trim())
-  if ($peak -ge 3435973837) { throw "Knowledge cgroup peak memory exceeded 80% of its 4 GiB ceiling: $peak bytes." }
+  $peakCeiling = [int64][Math]::Ceiling($memoryLimit * $knowledgeMemoryLimitFraction)
+  if ($peak -ge $peakCeiling) { throw "Knowledge cgroup peak memory exceeded 80% of its $memoryLimit byte ceiling: $peak bytes." }
 }
 
 function Wait-Run {
@@ -174,6 +189,18 @@ $beforePdfHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
 $beforeSidecarHash = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256).Hash
 $env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT = $vaultRoot
 $started = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  compose_project = $projectName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   Invoke-Compose @("build", "knowledge")
@@ -244,13 +271,29 @@ ANALYZE knowledge.segments;
   $afterPdfHash = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash
   $afterSidecarHash = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256).Hash
   if ($beforeHash -ne $afterHash -or $beforePdfHash -ne $afterPdfHash -or $beforeSidecarHash -ne $afterSidecarHash) { throw "M3/T4 wrote to the Vault." }
-  Write-Output "M3/T4 hybrid retrieval acceptance passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($started) {
-    $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } finally { $ErrorActionPreference = $previous }
+  Invoke-AcceptanceFinalization -Label "M3/T4" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M3-T4-$runId.json" -Cleanup {
+    $cleanupError = $null
+    if ($started) {
+      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+      try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } catch { $cleanupError = $_.Exception } finally { $ErrorActionPreference = $previous }
+    }
+    Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M3/T4 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M3/T4 hybrid retrieval acceptance passed."

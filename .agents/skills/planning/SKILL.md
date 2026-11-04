@@ -1,20 +1,20 @@
-### Planning
+# Planning
 
 Codex must inspect the actual repository before designing a plan.
 
 Before recommending implementation, challenge the proposal against:
 
-* existing functionality;
-* existing ownership;
-* existing abstractions;
-* completed milestones;
-* planned overlapping tasks;
-* persistent-state ownership;
-* dependency cost;
-* operational cost;
-* resource ceilings;
-* validation burden;
-* architecture boundaries.
+- existing functionality;
+- existing ownership;
+- existing abstractions;
+- completed milestones;
+- planned overlapping tasks;
+- persistent-state ownership;
+- dependency cost;
+- operational cost;
+- resource ceilings;
+- validation burden;
+- architecture boundaries.
 
 Codex should recommend the best repository-level solution even when it differs from the owner's initial implementation idea.
 
@@ -22,7 +22,27 @@ Before owner approval, Codex may freely propose and revise plans.
 
 After approval, the Approved Plan Lock applies.
 
+## Approved Plan Lock
+
+After the owner approves a plan, the approved scope and its material decisions
+are locked. Without a new owner decision, no agent may change:
+
+- task identity, scope, acceptance criteria, or Definition of Done;
+- architecture, ownership, public API, durable schema or migration semantics;
+- persistent state, dependency set, topology, security boundary, resource
+  ceiling, compatibility guarantee, or milestone order;
+- required validation gates.
+
+The owner is the only authority who may lift or narrow the lock; silence is not
+approval. An agent that finds a material conflict or a better option must stop at
+the smallest safe boundary, record the evidence and impact, and use the Owner
+Decision Protocol below. A violation is a RED decision under `AGENTS.md` §7 and
+must be resolved before execution resumes. The revised decision is recorded in
+`PLAN.md` and, when execution is authorized, in the matching
+`docs/contracts/execution/ACTIVE.md`.
+
 ## Requirement
+
 Agents are engineers, not passive instruction followers.
 
 Evaluate proposed work in the context of the **whole repository**.
@@ -42,18 +62,19 @@ Optimize for:
 9. future extensibility only when justified by concrete requirements.
 
 ## Anti over-engineering
+
 Before introducing a new:
 
-* abstraction;
-* service;
-* dependency;
-* queue;
-* worker;
-* state store;
-* configuration layer;
-* compatibility layer;
-* generic framework;
-* extension point;
+- abstraction;
+- service;
+- dependency;
+- queue;
+- worker;
+- state store;
+- configuration layer;
+- compatibility layer;
+- generic framework;
+- extension point;
 
 evaluate:
 
@@ -150,6 +171,7 @@ Codex materializes the new ACTIVE.md and sets authorization to YES
 ↓
 resume
 ```
+
 # Approved Execution Contract
 
 Codex planning mode is read-only by default. Before owner approval, Codex may
@@ -207,16 +229,22 @@ They must never redefine the approved implementation details.
 ## Transient state use
 
 Planning authority lives in `PLAN.md`; approved implementation details live only
-in the matching valid `docs/contracts/execution/ACTIVE.md`. Do not create or use
-`.agents/states/active-task.md`.
+in the matching valid `docs/contracts/execution/ACTIVE.md`. The state protocol
+defines exactly two files, `context.md` and `handoff.md`; no other state file is
+part of it.
 
 Transient state is optional working memory only:
 
 - `.agents/states/context.md` may be created/updated when a long task needs compact
   hot context or resolved discoveries;
-- `.agents/states/findings.md` belongs to review/remediation, not planning authority;
+- `docs/execution/findings.md` belongs to review/remediation, not planning authority;
 - `.agents/states/handoff.md` belongs to execution/review handoff, not planning
   authority.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
+
+**Accountable writer:** Codex review/remediation.
+**Serialization:** one row, one writer — a second lane that finds the same `F-xxx` block already being edited does not edit it and hands the conflict to the orchestrator.
 
 No state file may authorize execution, redefine scope, or duplicate the frozen
 implementation body from `ACTIVE.md`.

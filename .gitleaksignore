@@ -3,3 +3,5 @@ d73f20cc5fd5fd14533b34e2840517c49b9989b1:integrations/openclaw/orchestration/REA
 0e5a899b4b29482a4d927480a47175a5fd3b5616:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3647
 01489aa996aef7ab04789ba3bb08dcd0b0974c68:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3656
 01489aa996aef7ab04789ba3bb08dcd0b0974c68:integrations/openclaw/plugins/zink-governance/index.mjs:discord-client-id:3845
+7d922112f7649e0ff7d2ef9f35f84666ab7b93da:integrations/openclaw/configure.mjs:generic-api-key:62
+7d922112f7649e0ff7d2ef9f35f84666ab7b93da:integrations/openclaw/configure.mjs:generic-api-key:64

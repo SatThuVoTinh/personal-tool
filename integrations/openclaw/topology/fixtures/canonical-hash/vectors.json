@@ -1,0 +1,42 @@
+{
+  "description": "Synthetic canonicalization vectors. The expected digest of every vector is a LITERAL: it was computed once from the published preimage rule (sha256 over `<domain>\\0<canonical json>`) and pinned here, so the lane that reads these vectors compares the production function against a fixed truth instead of against a value it regenerates itself (a lane that regenerates the expectation it compares proves nothing - see F-322).",
+  "preimage_rule": "sha256(domain + \"\\0\" + canonicalJson(value))",
+  "vectors": [
+    {
+      "name": "a plain string",
+      "domain": "zink-fixture-v1",
+      "value": "hello",
+      "expected_sha256": "2f260b02ac9427b76aa25704714bde3d5fc4c6c562f157a588169bb26c76995c"
+    },
+    {
+      "name": "the key order of an object does not matter",
+      "domain": "zink-fixture-v1",
+      "value": { "b": 1, "a": 2 },
+      "expected_sha256": "8d15b470cbfd7553691ca840828f7aab55461766e8ef78f6049d2a46ea5c5cbd"
+    },
+    {
+      "name": "an array keeps its order",
+      "domain": "zink-fixture-v1",
+      "value": [1, 2, 3],
+      "expected_sha256": "4f61680cafb604d967bcae04de181bbd16f219cfa95167403530921e9d0e3aa1"
+    },
+    {
+      "name": "a nested object",
+      "domain": "zink-fixture-v1",
+      "value": { "a": { "b": [1, 2] } },
+      "expected_sha256": "dd1bca65404497ce7edc5ff04cb64e275f3c1e01238bb9ed7e7afd3080aa8101"
+    },
+    {
+      "name": "the same value under another domain is another digest",
+      "domain": "zink-fixture-v2",
+      "value": "hello",
+      "expected_sha256": "71555a31d041c4fa12be685588899a1cbc4eed966e2e7322d0c1921b81fecde9"
+    },
+    {
+      "name": "a null and a boolean are hashed like any other value",
+      "domain": "zink-fixture-v1",
+      "value": { "ok": true, "why": null },
+      "expected_sha256": "20d119426570ba84deb706236b5f7da3c895dbd389496e70b95c924aa6361c7b"
+    }
+  ]
+}

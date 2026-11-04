@@ -1,0 +1,9 @@
+services:
+  nginx:
+    # F-290 (R7-C4-03): the acceptance stack binds an ephemeral loopback
+    # port, so two M3/T1 runs can be in flight at the same time without
+    # contending for the fixed 8080 of the operational stack.
+    ports: !override
+      - target: 8080
+        host_ip: 127.0.0.1
+        protocol: tcp

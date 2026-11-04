@@ -5,12 +5,31 @@ from dataclasses import dataclass, replace
 from urllib.parse import quote
 
 from .database import SearchCandidate
-from .markdown_adapter import TOPIC_TO_TAG
+from .markdown_adapter import CANONICAL_SLUG_TO_TOPIC, TOPIC_TO_TAG
 
 RRF_K = 60
 MAX_BRANCH_CANDIDATES = 40
 MAX_FUSED_CANDIDATES = 80
 MAX_RERANK_CANDIDATES = 20
+
+# F-116 (R5-E02-01): the scope a caller asks for is a scope. `namespace`,
+# `subtopic`, `secondary_topics` and `capability` were DECLARED on the
+# request, accepted under `extra="forbid"` (so an unknown key was refused)
+# and then ignored by every query, so an answer scoped to a namespace was
+# really corpus-wide and the owner cited content from another namespace
+# believing it was governed.
+#
+# The Knowledgebase's own vocabulary is the canonical topic table: a source
+# carries `primary_topic` and `canonical_topics`. A namespace that names one
+# of those topics narrows the result set to it. `core` is the Zink Tools
+# knowledge-tool contract's default namespace and means the default,
+# unscoped corpus. A namespace that names no topic of the corpus matches
+# NOTHING -- fail closed, so a scope can never widen into the whole corpus.
+UNSCOPED_NAMESPACE = "core"
+# The empty topic matches no segment: it is how "this scope names nothing
+# the corpus carries" is expressed in the query, where a NULL parameter is
+# how "no scope" is expressed.
+NO_MATCH_TOPIC = ""
 
 
 class SearchValidationError(ValueError):
@@ -24,6 +43,10 @@ class SearchFilters:
     primary_topic: str | None
     tags_all: tuple[str, ...]
     path_prefix: str | None
+    # F-116 (R5-E02-01): the namespace scope and the secondary topics, both
+    # expressed in the corpus's own canonical topics.
+    namespace_topic: str | None
+    canonical_topics_all: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -71,7 +94,11 @@ class SearchCapacityLimiter:
 
 
 def normalize_filters(
-    primary_topic: str | None, tags_all: list[str] | None, path_prefix: str | None
+    primary_topic: str | None,
+    tags_all: list[str] | None,
+    path_prefix: str | None,
+    namespace: str | None = None,
+    secondary_topics: list[str] | None = None,
 ) -> SearchFilters:
     topic = primary_topic.strip() if primary_topic is not None else None
     if topic is not None:
@@ -83,7 +110,6 @@ def normalize_filters(
             topic = topic.lower().replace("_", "-")
         else:
             raise SearchValidationError("INVALID_SEARCH_REQUEST")
-        from .markdown_adapter import CANONICAL_SLUG_TO_TOPIC
         topic = CANONICAL_SLUG_TO_TOPIC.get(topic, topic)
     normalized_tags: set[str] = set()
     for tag in tags_all or []:
@@ -95,7 +121,85 @@ def normalize_filters(
         if not value or any(character.isspace() for character in value):
             raise SearchValidationError("INVALID_SEARCH_REQUEST")
         normalized_tags.add(value)
-    return SearchFilters(topic, tuple(sorted(normalized_tags)), _normalize_path_prefix(path_prefix))
+    return SearchFilters(
+        topic,
+        tuple(sorted(normalized_tags)),
+        _normalize_path_prefix(path_prefix),
+        normalize_namespace(namespace),
+        normalize_secondary_topics(secondary_topics),
+    )
+
+
+def refuse_unhonourable_scope(subtopic: str | None, capability: str | None) -> None:
+    """Refuse a scope this service has no dimension for.
+
+    F-116 (R5-E02-01): `subtopic` and `capability` name dimensions the
+    Knowledgebase does not have -- the corpus is partitioned by canonical
+    topic, not by a topic subdivision and not by a skill capability.
+    Answering them with the whole corpus is the defect this row is about, so
+    they are refused instead.
+    """
+
+    for value in (subtopic, capability):
+        if value is not None and value.strip():
+            raise SearchValidationError("INVALID_SEARCH_REQUEST")
+
+
+def normalize_namespace(namespace: str | None) -> str | None:
+    """The corpus topic a namespace names.
+
+    F-116 (R5-E02-01): `None` is the unscoped corpus. A namespace that
+    names a topic of the corpus narrows to it. A namespace that names none
+    narrows to nothing, because a scope that cannot be honoured must never
+    be answered with the whole corpus.
+    """
+
+    if namespace is None:
+        return None
+    value = unicodedata.normalize("NFC", namespace.strip())
+    if not value:
+        return None
+    if value.casefold() == UNSCOPED_NAMESPACE:
+        return None
+    topic = _canonical_topic(value)
+    return topic if topic is not None else NO_MATCH_TOPIC
+
+
+def normalize_secondary_topics(secondary_topics: list[str] | None) -> tuple[str, ...]:
+    """The canonical topics a segment must ALSO carry.
+
+    F-116 (R5-E02-01): an empty list is no scope at all. A topic that
+    names nothing the corpus carries narrows to nothing, for the same
+    reason a namespace does.
+    """
+
+    if not secondary_topics:
+        return ()
+    topics: list[str] = []
+    for value in secondary_topics:
+        if not isinstance(value, str):
+            raise SearchValidationError("INVALID_SEARCH_REQUEST")
+        candidate = unicodedata.normalize("NFC", value.strip())
+        if not candidate:
+            raise SearchValidationError("INVALID_SEARCH_REQUEST")
+        topic = _canonical_topic(candidate)
+        topics.append(topic if topic is not None else NO_MATCH_TOPIC)
+    return tuple(dict.fromkeys(topics))
+
+
+def _canonical_topic(value: str) -> str | None:
+    """The corpus topic a spelling names, or None when it names none."""
+
+    lowered = value.casefold()
+    dashed = lowered.replace("_", "-")
+    for candidate in (value, lowered, dashed):
+        topic = CANONICAL_SLUG_TO_TOPIC.get(candidate)
+        if topic is not None:
+            return topic
+    for candidate in (value, lowered, dashed):
+        if candidate in TOPIC_TO_TAG:
+            return candidate
+    return None
 
 
 def normalize_source_types(source_types: list[str] | None) -> tuple[str, ...]:
@@ -158,9 +262,16 @@ def fuse_candidates(
     return fused[:MAX_FUSED_CANDIDATES]
 
 
-def render_citation(title: str, source_path: str, line_start: int, line_end: int) -> str:
+def render_citation(
+    title: str, source_path: str, line_start: int | None, line_end: int | None
+) -> str:
     escaped_title = title.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     encoded_path = quote(source_path, safe="/")
+    # The pair is nullable in the schema, and a PDF row without pages reaches here
+    # with it NULL. Printing the values anyway stated a location no record holds,
+    # in the one field the owner uses to check an answer's provenance.
+    if line_start is None or line_end is None:
+        return f"[{escaped_title}](<{encoded_path}>)"
     return f"[{escaped_title}](<{encoded_path}>) (lines {line_start}-{line_end})"
 
 

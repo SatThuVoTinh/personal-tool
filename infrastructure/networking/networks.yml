@@ -1,1 +1,26 @@
-# Shared Docker network definitions will be added with the Compose implementation.
+# Shared Docker network definitions for this repository.
+#
+# `platform` is the network every service in the platform stack joins. The
+# compose files under `infrastructure/docker/compose/` consume it by this
+# shared name, and the repository policy check reads this file and fails when
+# the declaration and the compose files drift apart. The file used to be a
+# placeholder that said the definitions "will be added with the Compose
+# implementation" while the Compose implementation already existed and
+# nothing read this file.
+#
+# The Docker network a compose project gets is named `<project>_platform`, so
+# the acceptance stacks (`personal-tool-m3-t3`, `personal-tool-m3-t4`,
+# `personal-tool-knowledge-t5-<runId>`, ...) never join the live platform
+# stack's network.
+#
+# Creation step, documented in `docs/runbooks/docker-platform-networks.md`:
+#
+#   docker network create --driver bridge <project>_platform
+#
+# `docker compose up` creates the same network when it is absent, so the
+# explicit step is only needed on a host that provisions the network before
+# the stack starts.
+networks:
+  platform:
+    driver: bridge
+    internal: true

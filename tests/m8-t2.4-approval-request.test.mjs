@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-ledger
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // R6 — no recorded approval request means no approval.
 //
 // Before R6, "approvable" was inferred from `ACTIVE && !approved_at &&
@@ -40,6 +48,18 @@ const OPENED = {
   root_session_key: "root-session",
   root_run_id: "root-run",
 };
+
+// M12/T9 F-529: the approvals thread a surfaced card is recorded in. An
+// APPROVE against a recorded request now requires the durable SURFACED record
+// and must name this thread (the tests/agent-owner-F-123.test.mjs fixture
+// pattern).
+const APPROVAL_THREAD = "900000000000000031";
+
+const surfaced = (taskId) => ({
+  task_id: taskId,
+  channel: "approvals",
+  thread_id: APPROVAL_THREAD,
+});
 
 function lineage(tag) {
   const root = mkdtempSync(path.join(os.tmpdir(), `r6-${tag}-`));
@@ -346,6 +366,13 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         "WORKFLOW_APPROVAL_REQUESTED",
         request(taskId),
       );
+      // M12/T9 F-529: the surfaced record is load-bearing — without it the
+      // APPROVE is now denied with APPROVAL_SURFACE_RECORD_REQUIRED.
+      recordWorkflowEvent(
+        h.paths,
+        "WORKFLOW_APPROVAL_SURFACED",
+        surfaced(taskId),
+      );
       const res = (
         await import("../integrations/openclaw/plugins/zink-governance/index.mjs")
       ).handleDiscordAction({
@@ -354,6 +381,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       assert.equal(res.allowed, true, `expected allow, got ${res.reason}`);
       const task = readSnapshot(h.paths).tasks[taskId];
@@ -406,12 +434,21 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         "WORKFLOW_APPROVAL_REQUESTED",
         request(taskId),
       );
+      // M12/T9 F-529: the first APPROVE is only admissible with the durable
+      // record of the surfaced card; the duplicate below must then be refused
+      // by the STATE guard, not by the record requirement.
+      recordWorkflowEvent(
+        h.paths,
+        "WORKFLOW_APPROVAL_SURFACED",
+        surfaced(taskId),
+      );
       const dup = mod.handleDiscordAction({
         actor: "user",
         channel: "approvals",
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       mod.handleDiscordAction({
         actor: "user",
@@ -419,6 +456,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       const second = mod.handleDiscordAction({
         actor: "user",
@@ -426,6 +464,7 @@ describe("R6 — approval semantics through the deployed plugin", () => {
         taskId,
         action: "APPROVE",
         paths: h.paths,
+        data: { threadId: APPROVAL_THREAD },
       });
       assert.equal(dup.allowed, true);
       assert.equal(second.allowed, false, "duplicate approve must be refused");
@@ -574,7 +613,7 @@ describe("R6 — historical compatibility", () => {
   const hasProduction =
     process.platform === "linux" && existsSync(PRODUCTION_LEDGER);
 
-  it("J, K, L, M. the real 103-event ledger replays unchanged", async (t) => {
+  it("J, K, L, M. the real production ledger replays unchanged", async (t) => {
     if (!hasProduction) return t.skip("production ledger not reachable");
     const root = mkdtempSync(path.join(os.tmpdir(), "r6-history-"));
     const copy = path.join(root, "operator", "m7-t2", "ledger");
@@ -592,10 +631,30 @@ describe("R6 — historical compatibility", () => {
         path.join(copy, "events.jsonl"),
         "utf8",
       );
+      // Read the installed anchor before replay: readSnapshot repairs the
+      // snapshot in place once a tail exists, so the pre-replay projection has
+      // to be captured here to stay a comparison rather than a consequence.
+      const installed = JSON.parse(
+        readFileSync(path.join(copy, "snapshot.json"), "utf8"),
+      );
       const paths = ledgerPaths(root);
       const snap = readSnapshot(paths);
-      assert.equal(snap.sequence, 103, "all 103 events must replay");
-      assert.equal(Object.keys(snap.tasks).length, 37, "37 tasks must survive");
+      // M12/T2-R1: this case originally pinned the literals `103` events and `37` tasks,
+      // which was a photograph of the production ledger on the day it was written. The
+      // running gateway keeps appending, so the case went red on any host that can read
+      // the live tree while nothing about the ledger's meaning changed. The invariant is
+      // the one that matters: every event in the real log replays, and the projected
+      // sequence equals the log length.
+      const replayedEvents = eventsBefore.trim().split("\n").length;
+      assert.equal(
+        snap.sequence,
+        replayedEvents,
+        "every event in the real production ledger must replay",
+      );
+      assert.ok(
+        Object.keys(snap.tasks).length >= 37,
+        "the historical tasks must survive the replay",
+      );
 
       // M: the brief-backed historical approval.
       const withBrief = byPrefix(snap.tasks, "21c7b6e5");
@@ -617,16 +676,30 @@ describe("R6 — historical compatibility", () => {
         );
       }
 
-      // No historical task may become newly approvable.
-      const approvable = Object.values(snap.tasks).filter(
-        (t) =>
-          t.workflow_status === "ACTIVE" &&
-          t.approval_requested_at &&
-          !t.approved_at,
-      );
-      assert.equal(
-        approvable.length,
-        0,
+      // No task may BECOME approvable through replay. This case originally
+      // asserted that zero approvable tasks exist in the production ledger,
+      // which was a photograph of a quiet day: the live gateway legitimately
+      // parks tasks in "requested, not yet decided", and those pending approvals
+      // are real state, not replay artifacts. The invariant under test is that
+      // reading history cannot invent an opportunity the deployed writer never
+      // recorded — so the projection is compared against its own anchor.
+      const approvableIds = (tasks) =>
+        new Set(
+          Object.values(tasks ?? {})
+            .filter(
+              (t) =>
+                t.workflow_status === "ACTIVE" &&
+                t.approval_requested_at &&
+                !t.approved_at,
+            )
+            .map((t) => t.task_id),
+        );
+      const before = approvableIds(installed.tasks);
+      const after = approvableIds(snap.tasks);
+      const invented = [...after].filter((id) => !before.has(id));
+      assert.deepEqual(
+        invented,
+        [],
         "replay must not create approval opportunities",
       );
 

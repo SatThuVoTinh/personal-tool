@@ -14,7 +14,7 @@ agents use the exact pinned effective-tool matrix: coordinators receive only
 their required status/spawn/yield surface and specialists receive native
 `session_status`. The harmless specialist re-allow avoids the exact-version
 empty-tool model failure observed on OpenClaw `2026.6.34`. Model policy still limits
-session overrides to the two approved Google aliases. Every agent
+session overrides to the router's five governed model ids. Every agent
 uses a separate non-repository workspace and agent state directory plus a Docker
 sandbox with no network, read-only root, all capabilities dropped and no binds.
 This does not put the Gateway, channel plugin or internal routing inside the
@@ -22,11 +22,11 @@ sandbox; gateway loopback/auth, plugin inventory and Discord access gates remain
 separate controls.
 
 Plugin discovery is fail-closed with `plugins.bundledDiscovery="allowlist"` and
-`plugins.allow=["google","discord","zink-governance"]`. Google remains the
-only model provider plugin and Discord is the only channel plugin; the local
-governance plugin is model-invisible, has no network capability and is not a
-Zink Tools adapter. Browser, OpenAI, ACP and all other bundled or external
-plugins are ineligible to load. The implicit memory slot is explicitly disabled.
+`plugins.allow=["discord","zink-governance"]`. The `router` is the only model
+provider and Discord is the only channel plugin; the local governance plugin is
+model-invisible, has no network capability and is not a Zink Tools adapter.
+Browser, OpenAI, ACP and all other bundled or external plugins are ineligible to
+load. The implicit memory slot is explicitly disabled.
 
 The operator ledger lives outside every model workspace at
 `~/.openclaw-zink/operator/m7-t2/ledger/` and uses append-only JSONL plus an
@@ -58,23 +58,26 @@ invented key and the runtime has no join/onboarding post behavior to enable.
 Supplemental history, quote, and thread context is filtered to the owner
 allowlist.
 
-Only these moving Google aliases are permitted:
+Only these router model ids are permitted, in this order:
 
 ```text
-google/gemini-flash-latest
-google/gemini-flash-lite-latest
+gemini/gemini-3.8-flash
+gemini/gemini-3.7-flash
+muse-spark-1.3-contributor-free
+gemini/gemini-3.6-flash
+gemini/gemini-3.5-flash-lite
 ```
 
-Fallback stays within Google. A failure of both aliases is closed; no OpenAI,
-Codex or another provider is configured. The exact profiles
-`google:zink-01` through `google:zink-21` each use one structured `exec`
-SecretRef, never an inline value. The keys are partitioned without sharing:
-three consecutive profiles per agent in roster order. The resolver can read
-only those 21 Gemini entries, seven account-specific Discord entries and the
-Gateway entry from the encrypted `pass` password store.
+Fallback stays within the `router` provider. A failure of every id is closed;
+no OpenAI, Codex or another provider is configured. The router holds **one**
+credential, `ZINK_ROUTER_API_KEY`, and there is no per-agent auth order: the
+policy's own auth-order plan is empty by design, because one router credential
+serves every agent. The resolver can read only the seven account-specific
+Discord entries, the Gateway entry and the router entry from the encrypted
+`pass` password store.
 
 The builder persists `agents.defaults.thinkingDefault="low"`. For the approved
-Flash aliases this avoids the unsupported Gemini `MINIMAL` request level and
+Flash ids this avoids the unsupported Gemini `MINIMAL` request level and
 keeps the provider payload deterministic at `LOW` unless a later approved task
 changes the policy.
 
@@ -114,15 +117,18 @@ node integrations/openclaw/configure.mjs --dry-run \
   --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
   --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
   --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
+```
 
-node integrations/openclaw/configure.mjs --apply \
-  --state-dir "$ZINK_STATE_DIR" \
-  --discord-guild-id "$ZINK_DISCORD_GUILD_ID" \
-  --discord-owner-id "$ZINK_DISCORD_OWNER_ID" \
-  --discord-office-channel-id "$ZINK_DISCORD_OFFICE_CHANNEL_ID" \
-  --discord-results-forum-id "$ZINK_DISCORD_RESULTS_FORUM_ID" \
-  --discord-approvals-forum-id "$ZINK_DISCORD_APPROVALS_FORUM_ID" \
-  --discord-incidents-forum-id "$ZINK_DISCORD_INCIDENTS_FORUM_ID"
+**The deploy path is the operator driver, not the builder.** A bare
+`configure.mjs --apply` is refused with `APPLY_REQUIRES_TRANSACTION`: the apply
+must name the transaction whose snapshot is the rollback target, so a spent or
+unrelated transaction cannot be replayed. The driver takes the transaction
+snapshot itself, runs the builder's `--preflight` first, and issues the
+`--apply` with `--apply-transaction <id>`:
+
+```bash
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs \
+  "$ZINK_STATE_DIR"
 ```
 
 The builder creates only regular owner-private state/config files, seven exact
@@ -143,7 +149,7 @@ over the new file.
 
 ```bash
 systemctl --user stop openclaw-gateway-zink.service
-# Run the exact configure.mjs --apply command above.
+# Run the exact operator-apply.mjs command above.
 systemctl --user start openclaw-gateway-zink.service
 ```
 
@@ -190,20 +196,18 @@ gpg --batch --pinentry-mode loopback --passphrase '' \
 pass init 'Zink OpenClaw Service'
 ```
 
-Insert all 21 Gemini values, seven Discord bot tokens and the Gateway token
+Insert the seven Discord bot tokens, the Gateway token and the router's own key
 interactively. Secret values must be entered only at the `pass` prompts; never
 put them in these commands or shell history.
 
 ```bash
-for index in $(seq -w 1 21); do
-  pass insert "zink/openclaw/GEMINI_API_KEY_${index}"
-done
 for agent in main o1 o2 excel power-bi sql python; do
   entry="${agent^^}"
   entry="${entry//-/_}"
   pass insert "zink/openclaw/DISCORD_BOT_TOKEN_${entry}"
 done
 pass insert zink/openclaw/ZINK_OPENCLAW_GATEWAY_TOKEN
+pass insert zink/openclaw/ZINK_ROUTER_API_KEY
 ```
 
 The setup must pass a non-interactive resolver probe under the same
@@ -212,7 +216,7 @@ unreadable, or expired credentials fail closed; do not weaken GPG or store
 permissions as a workaround.
 
 Then let OpenClaw, not this repository, write exactly three agent-local auth
-records per agent from the generated 21-target ref-only plan:
+records per agent from the generated ref-only plan:
 
 ```bash
 export OPENCLAW_PROFILE=zink
@@ -226,26 +230,11 @@ openclaw secrets apply \
   --allow-exec
 ```
 
-OpenClaw natively reads the default agent's auth store through secondary-agent
-runtime views. Lock each stored per-agent order to its own three profiles so
-that inherited main profiles remain ineligible:
-
-```bash
-openclaw models auth order set --agent main --provider google \
-  google:zink-01 google:zink-02 google:zink-03
-openclaw models auth order set --agent o1 --provider google \
-  google:zink-04 google:zink-05 google:zink-06
-openclaw models auth order set --agent o2 --provider google \
-  google:zink-07 google:zink-08 google:zink-09
-openclaw models auth order set --agent excel --provider google \
-  google:zink-10 google:zink-11 google:zink-12
-openclaw models auth order set --agent power-bi --provider google \
-  google:zink-13 google:zink-14 google:zink-15
-openclaw models auth order set --agent sql --provider google \
-  google:zink-16 google:zink-17 google:zink-18
-openclaw models auth order set --agent python --provider google \
-  google:zink-19 google:zink-20 google:zink-21
-```
+**There is no per-agent auth order to set.** The build emits one model
+provider — the `router` — and one router credential serves every agent, so the
+policy's auth-order plan is empty by design and no `openclaw models auth order
+set` command is printed here. Setting one would name a provider the build does
+not emit.
 
 The generated order plan is the comparison source for verification. A missing,
 extra or reordered profile is a failure; never clear these overrides while the
@@ -271,15 +260,19 @@ The utility accepts only OpenClaw `2026.6.34` and exact known original, R18
 predecessor, or fully patched SHA-256 state across four frozen bundle artifacts.
 It validates every artifact before writing, rolls back completed writes if a
 later write fails, rejects any other partial state, and makes repeated
-apply/check calls safe. The generated service drop-in runs `--check` in
-`ExecStartPre`, so a package update or restored vendor file cannot silently
-start without review.
+apply/check calls safe. The generated service drop-in runs `--ensure` in
+`ExecStartPre`: when the hotfix applies to the installed runtime it puts it in
+place and verifies it, so a fresh `configure --apply` followed by a start
+boots instead of failing the unit five times in 60 s (M12/T9 F-179). When the
+installed release is not the one this hotfix targets, the gate says so in the
+journal and does not fail the unit; a runtime that cannot be repaired still
+fails the boot.
 
 For an owner-approved rollback, stop the named service first, run `--revert`,
 and restore the exact pre-hotfix drop-in from the matching repository revision before
-starting the service. The R17 drop-in intentionally refuses to start against an
-unpatched artifact. Do not remove the preflight alone or resume on another
-OpenClaw release.
+starting the service. `--revert` restores the pristine vendor artifacts, and the
+`--ensure` gate then finds nothing to repair. Do not remove the preflight
+alone or resume on another OpenClaw release.
 
 Install the named service using the same profile/state environment and reload
 the drop-in:

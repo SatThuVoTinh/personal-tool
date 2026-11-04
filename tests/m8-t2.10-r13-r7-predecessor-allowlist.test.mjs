@@ -40,6 +40,17 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
+// M12/T9 F-111: the apply is bound to the transaction the apply orchestration
+// took; a lane that drives the builder directly takes the same one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -51,6 +62,14 @@ const BOUNDARY = path.join(
   "topology",
   "lib",
   "native-boundary.mjs",
+);
+const PLUGIN_ENTRYPOINT_SOURCE = path.join(
+  REPO,
+  "integrations",
+  "openclaw",
+  "plugins",
+  "zink-governance",
+  "index.mjs",
 );
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -67,10 +86,207 @@ const R5_NATIVE_BOUNDARY_SHA256 =
 const R5_ENTRYPOINT_SHA256 =
   "e77689c94ba066bd854549750044f78dcf9d97cc3de73420893851c0a800b10a";
 
-/** The CURRENT build digests (owner-identity hygiene). NOT listed. */
-const R10_NATIVE_BOUNDARY_SHA256 =
-  "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
+/**
+ * The CURRENT build digests. M10/T2-R12: resolveGovernance is exported as a
+ * read-only test seam (no behavior change). The outgoing R10 build
+ * (`9e735185…`) is now the listed predecessor in configure.mjs. The outgoing
+ * R6 build remains listed as a recognized predecessor.
+ */
+/**
+ * M10/T2-R12 .. M11/T1: the boundary build the LIVE runtime carries. M11/T3 A3
+ * gave the three silent governance seams cause-preserving diagnostics, so these
+ * bytes are no longer the current build and must be an admitted predecessor.
+ */
+const R12_OUTGOING_NATIVE_BOUNDARY_SHA256 =
+  "97c7f3e15d2845474ded9bbe908893bbeca6c655a7cecf37b816490693e8d52c";
+/**
+ * M12/T2.2 B-16 (owner grant §0.5-F extended by §0.5-I): the CURRENT boundary.
+ * Four seams also name the guard's reason in the diagnostic channel; every
+ * host-visible code, verdict and return shape is unchanged. Accepted by content
+ * comparison and deliberately NOT listed.
+ *
+ * M12/T9 F-506: the published preflight predicate is now a view of the
+ * registration set instead of a capture of the last entry, and the last release
+ * retracts it. The verdicts the seams return are unchanged; `a4e30801…` was
+ * never installed, so it stays unlisted like the other undeployed candidates.
+ */
+const M11_T3_NATIVE_BOUNDARY_SHA256 =
+  "ff6b57a9d27666e26a0b37ae342e30fbb71a0f25a66e460703520871d22b5d67";
+/**
+ * M12/T2.2-R2 J-1: the boundary build the LIVE runtime ACTUALLY carries,
+ * byte-proven by `sha256sum` of the installed asset on the WSL host. B-16 rolled
+ * the three current-build pins from `5966d446…` to `fceefc0d…` without admitting
+ * the outgoing value, which left the deployed extension reachable to neither
+ * `--preflight` nor `--apply` — the M11/T1-R2 blocker recurring, caught only by
+ * `R13 P1` on the WSL lane (Windows skips it: 48 skips, the live tree is not
+ * mountable there). Admitted here as the predecessor it is, and re-derived from
+ * its source commit in `R13 P6` rather than transcribed.
+ */
+const B16_OUTGOING_NATIVE_BOUNDARY_SHA256 =
+  "5966d446258259407ccd4a349b1d6df75dccc2a75c651a149caa92d4fa8393d0";
+const R6_OUTGOING_NATIVE_BOUNDARY_SHA256 =
+  "bccfa8616dc89fbb3764d53ad6ea11f5cfbc445bc076e4270f2678c6c1e18c3a";
+assert.ok(
+  CONFIGURE_SOURCE.includes(R6_OUTGOING_NATIVE_BOUNDARY_SHA256),
+  "the outgoing R6 boundary must remain an admitted predecessor",
+);
+/**
+ * The CURRENT packaged entrypoint, after ingress verdict observability
+ * (denial reasons + allow signals logged; verdicts unchanged). Updated
+ * from 0fb628e8… exactly as prior revisions moved their pins when the
+ * entrypoint changed. NOT listed.
+ */
+/**
+ * M10/T2-R8: the entrypoint that R9-A replaces. Duplicate detection precedes the
+ * admission signal, the pure preflight intake predicate is present, and the
+ * DUPLICATE_DISCORD_EVENT denial carries no runId.
+ */
 const R10_ENTRYPOINT_SHA256 =
+  "f4ed9d9c54ccf486a30425b98a549cab5aebbbe8e9ee7f2d32bfc6795598c4a3";
+/**
+ * M10/T2-R14/R15: the entrypoint M11/T1-R1 Phase 2 replaces. The R14 review
+ * fixes changed packaged bytes (text-approval dispatch ordering,
+ * queue-completion success reporting, owner-gate guards, the internal-run
+ * classifier's real ledger-ownership flag, byte-budgeted `safeReason`) and R15
+ * dropped the duplicated `truncateUtf8`. It is now an admitted predecessor in
+ * BOTH per-mode lists, so the next authorized deployment stays reachable from it.
+ */
+const R14_OUTGOING_ENTRYPOINT_SHA256 =
+  "230f3c79d0a35c2261129ddc0048ad4f0ae4fc6d86a5c49e444594a446bd2982";
+/**
+ * M11/T1-R1: the entrypoint build the LIVE runtime carries (PLAN.md records the
+ * live digest as `e8f084ab…`). M11/T3 Phase 1 changed the packaged entrypoint —
+ * A1 resolved the bot-token helper through argv instead of a shell, A2 bounded
+ * the Discord REST calls — so these bytes became an admitted predecessor. They
+ * were installed, so unlike the never-deployed `81b9a9c7…` Phase-2 build they
+ * MUST be listed; without this entry --preflight refuses the deployed extension.
+ */
+const M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256 =
+  "e8f084ab5593a093a2075db8167ce6db4ea39e87141dc4a2ba4dee99fb4fccaa";
+assert.ok(
+  CONFIGURE_SOURCE.includes(M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256),
+  "the live M11/T1-R1 entrypoint must remain an admitted predecessor",
+);
+/**
+ * M12/T2.2-R1 A-3: the CURRENT entrypoint build. Accepted by content comparison
+ * and deliberately NOT listed. The constant name is a carrier for "the current
+ * packaged build", not a claim about which milestone produced it.
+ *
+ * The build this replaces (`513beb15…`) IS listed as an admitted predecessor,
+ * because the live WSL runtime carries it: re-measured read-only on 2026-10-16
+ * with `sha256sum` against
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`, not
+ * transcribed from the plan. Without that entry `--preflight` refuses the
+ * deployed extension. M12/T1-R1's own candidate (`85fbee50…`) and M12/T2-R1's
+ * (`f9ef77dc…`) are NOT listed: neither was ever deployed, so no runtime can
+ * carry it.
+ *
+ * M12/T9-R4 F-533: this pin moves. Deleting the plugin's never-fixed copy of
+ * `deriveGovernedDispatchTarget` and binding the dispatch, queue-projection and
+ * spawn-gate call sites to the `lib/policy.mjs` export changes packaged
+ * entrypoint bytes, so the build below becomes the admitted predecessor —
+ * `c4d0d92…` is what the live WSL runtime carries, re-measured read-only on
+ * 2026-10-24 with `sha256sum` against
+ * `/home/hoang_vinh/.openclaw-zink/extensions/zink-governance/index.mjs`, and it
+ * is reproduced from its own commit by `R13 P7` below rather than taken on
+ * trust. `513beb15…` stays listed: the runtime carried it before that deploy, so
+ * an operator can still upgrade from either state.
+ */
+const M11_T3_ENTRYPOINT_SHA256 =
+  "c4d0d921d1f0c4ca1eca6e2f3dd6093e7a6a878359ab69779b37b18d0ce1bd1a";
+/**
+ * M12/T9-R4 F-533, then F-470 + F-472, then F-463, then F-402/F-405/F-406, then
+ * the F-529/F-532/F-535/F-542/F-500 cluster: the CURRENT packaged entrypoint
+ * build. Accepted by content comparison and deliberately NOT listed. F-533's
+ * build (`338d1406…`) was never installed, so it joins the other undeployed
+ * candidates rather than the admitted predecessors. F-470's own test seam then
+ * moved the bytes again; `5aacf6a7…` was never installed either. F-463 changes
+ * the same plugin (plan-field redaction, result/forum mention strips, the
+ * delegated approval-body stripper), so `415e2d4b…` also stays unlisted.
+ * F-402/F-405/F-406 change the ACCEPT seam (owner projection, principal mint,
+ * accepted outcome, ledger reconciliation), so `f67cbc6f…` stays unlisted too.
+ * The approval-surface cluster then moved the same bytes once more: the build
+ * packaged by `85eb094` (`75764d46…`) was never installed either, so it is not
+ * an admitted predecessor — only builds the live runtime actually carried are
+ * listed.
+ */
+const R4_F533_CURRENT_ENTRYPOINT_SHA256 =
+  "705b893377c9753e61d41402c953915ccd07765f37d5109c146c888cba7d30de";
+const M12_T2_2_OUTGOING_ENTRYPOINT_SHA256 =
+  "513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d";
+assert.ok(
+  CONFIGURE_SOURCE.includes(M12_T2_2_OUTGOING_ENTRYPOINT_SHA256),
+  "the entrypoint the live runtime carries must remain an admitted predecessor",
+);
+/** The outgoing entrypoint this deployment replaces; now listed. */
+const R8_OUTGOING_ENTRYPOINT_SHA256 =
+  "6a7968b7d456ff6d3f2c5b9d60c7b6046a702603b880093c33b717d9a37c13b1";
+assert.ok(
+  CONFIGURE_SOURCE.includes(R8_OUTGOING_ENTRYPOINT_SHA256),
+  "the outgoing R8 entrypoint must remain an admitted predecessor in BOTH modes",
+);
+
+/**
+ * The outgoing entrypoint before the coordinator execution-authority
+ * remediation (M10/T2-R2), admitted as a recognized predecessor in BOTH per-mode
+ * lists so the next authorized deployment is reachable.
+ */
+const COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256 =
+  "fa243547f04675685d06bfadd64fa11602fe071fe764a84d328414e7b53dfe89";
+
+/**
+ * The outgoing entrypoint of the first R2 build, superseded when the independent
+ * coverage review added the binding-over-claim-holder rule. Never deployed;
+ * admitted so the deployment path stays reachable from either R2 build.
+ */
+const COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256 =
+  "a1c8957bbeb2845c61953cf12cf395deae4c9dbae536b486d6748c2944961460";
+
+/**
+ * The outgoing entrypoint before coordinator session binding (M10/T2),
+ * admitted so the next authorized deployment is reachable.
+ */
+const SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256 =
+  "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663";
+
+/**
+ * The outgoing entrypoint before the first-approval/duplicate notification
+ * guard was unified, admitted so the next authorized deployment is reachable.
+ */
+const FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256 =
+  "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2";
+
+/**
+ * The outgoing entrypoint before the notification persistence-truth and
+ * concurrency-guard fix, admitted so the next authorized deployment is
+ * reachable.
+ */
+const PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256 =
+  "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9";
+
+/**
+ * The outgoing handoff-semantics entrypoint (before the duplicate-notification
+ * side-effect fix), admitted so the next authorized deployment is reachable.
+ */
+const DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256 =
+  "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845";
+
+/**
+ * The outgoing functional-truth remediation entrypoint, admitted so the next
+ * authorized deployment of the handoff-semantics build is reachable.
+ */
+const HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256 =
+  "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac";
+
+/**
+ * The outgoing M8/T3 entrypoint, admitted as a recognized predecessor so the
+ * next authorized deployment of the remediation build is reachable.
+ */
+const M8T3_OUTGOING_ENTRYPOINT_SHA256 =
+  "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92";
+
+/** The outgoing owner-identity-hygiene entrypoint (M8/T3 predecessor). */
+const HYGIENE_OUTGOING_ENTRYPOINT_SHA256 =
   "2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d";
 
 /**
@@ -104,6 +320,30 @@ const R19_SOURCE_COMMIT = "4b9eb0f";
 /** The commit carrying the R7-era plugin source: R10's immediate parent. */
 const R7_SOURCE_COMMIT = "4f5cc6d";
 
+/**
+ * M11/T1-R1 Phase 2: the commit whose packaged entrypoint is the outgoing
+ * build this deployment replaces (`230f3c79…`). Phase 2 changed only
+ * `plugins/zink-governance/index.mjs` inside the packaged tree, so building
+ * that commit's entrypoint source through the real generator reproduces the
+ * outgoing bytes exactly.
+ */
+const M11_T1_R1_SOURCE_COMMIT = "45e0ee7";
+
+/**
+ * M11/T3 Phase 1: the commit whose packaged entrypoint is the build the LIVE
+ * runtime carries (`e8f084ab…`). M11/T3 changed only packaged sources, so
+ * re-packaging this commit's entrypoint source through the real generator
+ * reproduces the live bytes exactly.
+ */
+const M11_T3_SOURCE_COMMIT = "d7df6d9";
+
+/**
+ * M12/T2.2-R2 J-1: the commit whose packaged boundary is the build the LIVE
+ * runtime carries (`5966d446…`). Phase 1's A3 is the revision that produced
+ * those bytes, so re-reading that commit reproduces them exactly.
+ */
+const A3_BOUNDARY_SOURCE_COMMIT = "3cb8274";
+
 const gitShow = (rev, file) =>
   execFileSync("git", ["show", `${rev}:${file}`], {
     cwd: REPO,
@@ -119,6 +359,30 @@ const R7_ENTRYPOINT_SOURCE = gitShow(
 const R7_BOUNDARY_BODY = gitShow(
   R7_SOURCE_COMMIT,
   "integrations/openclaw/topology/lib/native-boundary.mjs",
+);
+
+// M11/T1-R1 Phase 2: the plugin entrypoint source as committed by the build this
+// deployment replaces.
+const M11_T1_R1_ENTRYPOINT_SOURCE = gitShow(
+  M11_T1_R1_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
+);
+
+// M11/T3 Phase 1: the plugin entrypoint source as committed by the build the
+// live runtime carries, which this task's deployment replaces.
+const M11_T1_R1_LIVE_ENTRYPOINT_SOURCE = gitShow(
+  M11_T3_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
+);
+
+// M12/T9-R4 F-533: the plugin entrypoint source as committed by the build this
+// revision replaces. `1b68586` is the last commit whose packaged entrypoint the
+// live WSL runtime carried, and `R13 P7` re-derives the admitted digest from it
+// instead of trusting the plan's arithmetic.
+const R4_F533_OUTGOING_SOURCE_COMMIT = "1b68586";
+const R4_F533_OUTGOING_ENTRYPOINT_SOURCE = gitShow(
+  R4_F533_OUTGOING_SOURCE_COMMIT,
+  "integrations/openclaw/plugins/zink-governance/index.mjs",
 );
 
 // ---------------------------------------------------------------------------
@@ -153,22 +417,44 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r13-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
-  const run = (mode) => () =>
-    execFileSync(
-      process.execPath,
-      [
-        "--",
-        CONFIGURE,
-        mode,
-        "--state-dir",
-        stateDir,
-        "--systemd-user-dir",
-        systemdUserDir,
-        ...identifierArgs,
-      ],
-      { env, stdio: "pipe" },
-    );
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
+  const run = (mode) => () => {
+    const args = [
+      "--",
+      CONFIGURE,
+      mode,
+      "--state-dir",
+      stateDir,
+      "--systemd-user-dir",
+      systemdUserDir,
+      ...identifierArgs,
+    ];
+    // M12/T9 F-111: the builder's apply is reachable only through the apply
+    // orchestration, which takes the transaction snapshot first and hands the
+    // builder its attempt id. A lane that drives the builder directly takes
+    // the same transaction and passes the same id; the helper is the operator
+    // driver's own two-step, so the record the builder reads is the production
+    // one. A fresh transaction per call, because the builder marks the one it
+    // is given as SPENT.
+    if (mode === "--apply") {
+      args.push(
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
+      );
+    }
+    return execFileSync(process.execPath, args, { env, stdio: "pipe" });
+  };
   run("--apply")();
   const asset = (rel) =>
     path.join(stateDir, "extensions", "zink-governance", ...rel.split("/"));
@@ -194,14 +480,17 @@ const currentBuild = async () =>
 // PROVENANCE
 // ---------------------------------------------------------------------------
 
-test("R13 P1: the R7 boundary digest is proven from BOTH the live runtime and the committed R7 source", async () => {
+test("R13 P1: the R7 boundary digest is proven from the committed R7 source and the live runtime stays reachable", async () => {
   // (1) The repository's R7-era file at the R7 commit.
   assert.equal(
     sha256(R7_BOUNDARY_BODY),
     R7_NATIVE_BOUNDARY_SHA256,
     "the committed R7-era native-boundary.mjs must hash to the approved digest",
   );
-  // (2) The live deployed R7 runtime, at its exact relative path.
+  // (2) The live runtime at its exact relative path. Since the 2026-10-13
+  // M11/T3-R1 deployment it no longer carries the R7 bytes, so this half checks
+  // reachability rather than R7 equality: the installed digest must still be the
+  // build the repository derives or an admitted predecessor.
   const live = "/home/hoang_vinh/.openclaw-zink/extensions/zink-governance";
   let liveDigest = null;
   try {
@@ -213,14 +502,14 @@ test("R13 P1: the R7 boundary digest is proven from BOTH the live runtime and th
     // still a byte-exact proof, so this is a skip, never a silent pass.
   }
   if (liveDigest !== null)
-    assert.equal(
+    await assertLiveReachable(
+      "lib/native-boundary.mjs",
       liveDigest,
-      R7_NATIVE_BOUNDARY_SHA256,
-      "the live R7 file must match",
+      listedAssetDigests("lib/native-boundary.mjs"),
     );
 });
 
-test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committed R7 source", async () => {
+test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committed R7 source and the live runtime stays reachable", async () => {
   // The entrypoint is the plugin source plus deterministic rewrites, so building
   // the R7-era source through the REAL generator must reproduce the deployed
   // entrypoint exactly. This is provenance by construction, not by transcription.
@@ -241,12 +530,23 @@ test("R13 P2: the R7 entrypoint digest is reproduced byte-exact from the committ
   } catch {
     /* not reachable from this platform */
   }
-  if (liveDigest !== null)
-    assert.equal(
+  if (liveDigest !== null) {
+    // The entrypoint has no asset-table key: its admissions are the literal
+    // lists inside the two mode gates. A digest admitted by only one gate is the
+    // exact failure R13 exists to remove (--preflight PASSES, --apply then
+    // refuses), so only the intersection counts.
+    const gates = entrypointGates();
+    assert.equal(gates.length, 2, "expected one entrypoint gate per mode");
+    const digests = (block) => [
+      ...new Set([...block.matchAll(/[0-9a-f]{64}/gu)].map((m) => m[0])),
+    ];
+    const [first, ...rest] = gates.map(digests);
+    await assertLiveReachable(
+      "index.mjs",
       liveDigest,
-      R7_ENTRYPOINT_SHA256,
-      "the live R7 entrypoint must match",
+      first.filter((digest) => rest.every((list) => list.includes(digest))),
     );
+  }
 });
 
 test("R13 P3: the R7 and current builds differ in exactly the two governed files", async () => {
@@ -274,8 +574,109 @@ test("R13 P3: the R7 and current builds differ in exactly the two governed files
   );
 });
 
-/** Build the R7 extension through the real generator, in a scratch tree. */
-async function scratchGenerator() {
+test("R13 P4: the M11/T1-R1 Phase 2 outgoing entrypoint is proven from its commit", async () => {
+  // Provenance by construction, not transcription: the bytes the new
+  // allowlist entry admits are re-derived from the commit that carries them
+  // through the real generator, exactly as the R7 and R19 predecessors are.
+  const outgoing = await outgoingEntrypoint();
+  assert.equal(
+    sha256(outgoing),
+    R14_OUTGOING_ENTRYPOINT_SHA256,
+    "the committed Phase-1 source must reproduce the outgoing digest",
+  );
+  const current = await currentBuild();
+  assert.equal(
+    sha256(current.entrypoint),
+    R4_F533_CURRENT_ENTRYPOINT_SHA256,
+    "the working tree must carry the M11/T3 Phase-1 build",
+  );
+  assert.notEqual(
+    M11_T1_R1_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "M11/T1-R1 must really have moved the plugin entrypoint source",
+  );
+});
+
+test("R13 P5: the entrypoint the live runtime carries is proven from its commit", async () => {
+  // M11/T3 Phase 1 admits a NEW predecessor: the build actually installed on the
+  // WSL runtime. Admitting a digest nobody can reproduce is exactly how an
+  // allowlist silently rots, so the admitted bytes are re-derived from
+  // `M11_T3_SOURCE_COMMIT` through the real generator.
+  const live = await liveOutgoingEntrypoint();
+  assert.equal(
+    sha256(live),
+    M11_T1_R1_OUTGOING_ENTRYPOINT_SHA256,
+    "the committed source must reproduce the live outgoing digest",
+  );
+  assert.notEqual(
+    M11_T1_R1_LIVE_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "M11/T3 must really have moved the plugin entrypoint source",
+  );
+  // The three hunks A1/A2 touched are the only packaged difference.
+  const current = await currentBuild();
+  assert.equal(sha256(current.entrypoint), R4_F533_CURRENT_ENTRYPOINT_SHA256);
+});
+
+test("R13 P7: the entrypoint F-533 replaces is admitted and proven from its commit", async () => {
+  // The rule P5 states for its own predecessor applies to every admission:
+  // an allowlist entry nobody can reproduce is how an allowlist rots.
+  const outgoing = (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", R4_F533_OUTGOING_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint;
+  assert.equal(
+    sha256(outgoing),
+    M11_T3_ENTRYPOINT_SHA256,
+    `the committed source at ${R4_F533_OUTGOING_SOURCE_COMMIT} must reproduce the digest the live runtime carries`,
+  );
+  assert.ok(
+    CONFIGURE_SOURCE.includes(M11_T3_ENTRYPOINT_SHA256),
+    "the entrypoint the live WSL runtime carries must be an admitted predecessor",
+  );
+  assert.notEqual(
+    R4_F533_OUTGOING_ENTRYPOINT_SOURCE,
+    readFileSync(PLUGIN_ENTRYPOINT_SOURCE, "utf8"),
+    "F-533 must really have moved the plugin entrypoint source",
+  );
+});
+
+test("R13 P6: the boundary build the live runtime carries is admitted and proven from its commit", async () => {
+  // Same rule R13 P5 states for the entrypoint: an allowlist entry nobody can
+  // reproduce is how an allowlist rots. `B-16` rolled the three current-build
+  // content pins and stopped there, which left the deployed boundary reachable
+  // to neither `--preflight` nor `--apply`; this pins the missing half.
+  assert.equal(
+    sha256(
+      gitShow(
+        A3_BOUNDARY_SOURCE_COMMIT,
+        "integrations/openclaw/topology/lib/native-boundary.mjs",
+      ),
+    ),
+    B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    "the committed A3 source must reproduce the digest the live runtime carries",
+  );
+  assert.notEqual(
+    B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    M11_T3_NATIVE_BOUNDARY_SHA256,
+    "the admitted predecessor must not be the current build",
+  );
+  assert.ok(
+    listedAssetDigests("lib/native-boundary.mjs").includes(
+      B16_OUTGOING_NATIVE_BOUNDARY_SHA256,
+    ),
+    "configure.mjs must admit the outgoing boundary build the live runtime carries",
+  );
+});
+
+/**
+ * Build a historical extension through the real generator, in a scratch tree.
+ * `overrides` are repository-relative paths under `integrations/openclaw` whose
+ * committed bodies replace the current ones; every other packaged asset is the
+ * current build, which is exactly what the provenance claims require.
+ */
+async function scratchGenerator(overrides) {
   const scratch = mkdtempSync(path.join(tmpdir(), "zink-r13-gen-"));
   try {
     const alt = path.join(scratch, "integrations", "openclaw");
@@ -283,15 +684,21 @@ async function scratchGenerator() {
     cpSync(path.join(REPO, "integrations", "openclaw"), alt, {
       recursive: true,
     });
+    // M12/T9 F-115: the packaged build carries the Skill Store and Zink Tools
+    // runtime modules as well, and the generator reads them from the
+    // REPOSITORY ROOT relative to itself. A scratch tree that holds only
+    // `integrations/openclaw` is not shaped like the repository, so the
+    // generator cannot read them and the build cannot be produced at all.
+    // These are the CURRENT bodies, exactly like every other packaged asset
+    // this scratch build carries.
+    for (const root of ["zink-skill-store", "zink-tools"]) {
+      cpSync(path.join(REPO, root), path.join(scratch, root), {
+        recursive: true,
+      });
+    }
     // The R7 source for the entrypoint, and the R7 file for the boundary asset.
-    writeFileSync(
-      path.join(alt, "plugins", "zink-governance", "index.mjs"),
-      R7_ENTRYPOINT_SOURCE,
-    );
-    writeFileSync(
-      path.join(alt, "topology", "lib", "native-boundary.mjs"),
-      R7_BOUNDARY_BODY,
-    );
+    for (const [rel, body] of overrides)
+      writeFileSync(path.join(alt, rel), body, "utf8");
     const { governancePluginFiles } = await import(
       pathToFileURL(path.join(alt, "lib", "policy.mjs")).href
     );
@@ -301,13 +708,44 @@ async function scratchGenerator() {
   }
 }
 
+const r7Overrides = [
+  ["plugins/zink-governance/index.mjs", R7_ENTRYPOINT_SOURCE],
+  ["topology/lib/native-boundary.mjs", R7_BOUNDARY_BODY],
+];
+
 /**
  * The DEPLOYED R7 entrypoint bytes, generated once. This is NOT the plugin
  * source: `governancePluginFiles()` applies deterministic package rewrites, and
  * it is the rewritten form that was installed and hashed on the live runtime.
  */
 let r7Generated = null;
-const r7Extension = async () => (r7Generated ??= await scratchGenerator());
+const r7Extension = async () =>
+  (r7Generated ??= await scratchGenerator(r7Overrides));
+
+/**
+ * M11/T1-R1 Phase 2: the outgoing packaged entrypoint, re-derived from the
+ * commit that carries it rather than transcribed from a report.
+ */
+let outgoingGenerated = null;
+const outgoingEntrypoint = async () =>
+  (outgoingGenerated ??= (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", M11_T1_R1_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint);
+
+/**
+ * M11/T3 Phase 1: the packaged entrypoint the live runtime carries today
+ * (`e8f084ab…`), re-derived from the commit that carries it rather than
+ * transcribed from a report. This is the state a real operator-apply starts from.
+ */
+let liveOutgoingGenerated = null;
+const liveOutgoingEntrypoint = async () =>
+  (liveOutgoingGenerated ??= (
+    await scratchGenerator([
+      ["plugins/zink-governance/index.mjs", M11_T1_R1_LIVE_ENTRYPOINT_SOURCE],
+    ])
+  ).entrypoint);
 
 /** The bounds of the ALLOWED_GOVERNANCE_ASSET_SHA256 declaration. */
 function assetTable() {
@@ -318,6 +756,49 @@ function assetTable() {
   const end = CONFIGURE_SOURCE.indexOf("\n});", start);
   assert.notEqual(end, -1, "the allowlist table must be terminated");
   return CONFIGURE_SOURCE.slice(start, end);
+}
+
+/** The digests configure.mjs admits for one deployed asset path. */
+function listedAssetDigests(rel) {
+  const table = assetTable();
+  const key = table.indexOf(`"${rel}": Object.freeze([`);
+  if (key === -1) return [];
+  const block = table.slice(key, table.indexOf("]),", key));
+  return [...block.matchAll(/[0-9a-f]{64}/gu)].map((match) => match[0]);
+}
+
+/** The two entrypoint gates (preflight and apply), as source blocks. */
+function entrypointGates() {
+  return [
+    ...CONFIGURE_SOURCE.matchAll(
+      /output\.governancePluginEntrypointPath,\n\s*pluginFiles\.entrypoint,/gu,
+    ),
+  ].map((gate) =>
+    CONFIGURE_SOURCE.slice(
+      gate.index,
+      CONFIGURE_SOURCE.indexOf("  );", gate.index),
+    ),
+  );
+}
+
+/**
+ * What a live-runtime cross-check can honestly prove after a deployment: the
+ * installed bytes no longer have to be any particular historical build, but
+ * every authorized `--preflight` starts from them, so they must be reachable —
+ * either the build the repository derives now or a digest configure.mjs admits.
+ * A live digest that is neither is the M11/T1-R2 blocker recurring.
+ */
+async function assertLiveReachable(rel, liveDigest, admitted) {
+  const current = await currentBuild();
+  const packaged =
+    rel === "index.mjs"
+      ? sha256(current.entrypoint)
+      : sha256(current.assets[rel]);
+  if (liveDigest === packaged) return;
+  assert.ok(
+    admitted.includes(liveDigest),
+    `the live ${rel} digest ${liveDigest.slice(0, 8)}… is neither the current build nor an admitted predecessor`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -379,13 +860,183 @@ test("R13 1: each R7 digest is listed exactly once, under its own path", () => {
 });
 
 test("R13 2: the current build digests are NOT listed anywhere", () => {
-  for (const digest of [R10_NATIVE_BOUNDARY_SHA256, R10_ENTRYPOINT_SHA256]) {
+  // M11/T3: both current-build pins moved (the entrypoint by A1/A2, the
+  // boundary by A3), so their live predecessors are now listed on purpose. Only
+  // the digests of the CURRENT build must be absent from the source.
+  for (const digest of [
+    M11_T3_NATIVE_BOUNDARY_SHA256,
+    R4_F533_CURRENT_ENTRYPOINT_SHA256,
+  ]) {
     assert.equal(
       CONFIGURE_SOURCE.includes(digest),
       false,
       `${digest.slice(0, 16)} is the current build and must not be allowlisted`,
     );
   }
+});
+
+test("R13 2a: the outgoing M8/T3 entrypoint is admitted as a predecessor", () => {
+  // The functional-truth remediation changed the packaged entrypoint, so the
+  // outgoing digest must be recognized as a predecessor exactly like every
+  // prior authorized entrypoint change. Without this, the next authorized
+  // deployment of the remediation build would be unreachable.
+  assert.ok(
+    CONFIGURE_SOURCE.includes(M8T3_OUTGOING_ENTRYPOINT_SHA256),
+    `${M8T3_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  // The remediation pin must not accidentally equal the digest it replaced.
+  assert.notEqual(R10_ENTRYPOINT_SHA256, M8T3_OUTGOING_ENTRYPOINT_SHA256);
+});
+
+test("R13 2b: the outgoing handoff-semantics entrypoint is admitted as a predecessor", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256),
+    `${HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    HANDOFF_SEMANTICS_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2c: the outgoing duplicate-notification-fix entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256),
+    `${DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    DUPLICATE_NOTIFY_FIX_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2f: the outgoing session-binding entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256),
+    `${SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    SESSION_BINDING_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+/**
+ * M10/T2-R2 closure. Six entrypoint predecessors the preflight gate admitted
+ * were missing from the apply-mode list, so an apply run from one of those
+ * intermediate builds would pass `--preflight` and then be refused by `--apply`
+ * — the exact per-mode deadlock R13 documents. Each digest below was re-derived
+ * from the commit named in its comment by materializing that commit's
+ * `integrations/openclaw` tree and hashing the packaged entrypoint, so these are
+ * proven historical builds, not values copied across.
+ */
+const PER_MODE_PARITY_DIGESTS = Object.freeze({
+  "2ef4bd64 M8/T3":
+    "a3dbf945deae82c1c07b419d6f1af1724f70a336c88331d4a772dfc93420ab92",
+  "adc1a49f handoff-semantics":
+    "118db9a746a0757dbea2d15c5d8d9585a298a1ca0d235a6b13a3a8513fb2bcac",
+  "598481c9 duplicate-notify":
+    "4bb0c1e12b4116340fb80f9cc136082200c7506fa691623bc922414f0bd92845",
+  "eed43f60 persistence-truth":
+    "36ed858c74dd09423d0afc74ff2fc8eb589843f163fb8ffccf8bcc912f097ce9",
+  "9f52fcd6 first-approval-guard":
+    "0940eb77d5796f29d819331e92a7c00c4f9230eb1185dce3de7b524a37e2f7c2",
+  "dc868066 session-binding":
+    "4a957b246533ab8e55f88172daa3667ae06cda10dc1d1e8c0858a18e31895663",
+});
+
+test("R13 2h: the six closed apply-mode predecessors are admitted in BOTH per-mode lists", () => {
+  for (const [label, digest] of Object.entries(PER_MODE_PARITY_DIGESTS)) {
+    assert.equal(
+      CONFIGURE_SOURCE.split(digest).length - 1,
+      2,
+      `${label} (${digest.slice(0, 16)}) must be admitted in the preflight list ` +
+        "AND the apply list, or --preflight would PASS and --apply would refuse",
+    );
+    assert.notEqual(
+      R10_ENTRYPOINT_SHA256,
+      digest,
+      `${label} is a predecessor, never the current build`,
+    );
+  }
+  assert.equal(Object.keys(PER_MODE_PARITY_DIGESTS).length, 6);
+});
+
+test("R13 2i: the apply-mode predecessor list never admits fewer entries than the preflight list", () => {
+  // Structural guard for the whole class, not just the six closed here: the two
+  // per-mode lists must stay in parity, so a future entrypoint change cannot
+  // re-open the apply-mode deadlock.
+  const anchor =
+    '"2271b56bc7f0ed3a3446e4474c411c1a6132a4e3c1a2edfedb5e6907d8340b5d"';
+  const first = CONFIGURE_SOURCE.indexOf(anchor);
+  const second = CONFIGURE_SOURCE.indexOf(anchor, first + 1);
+  assert.notEqual(first, -1, "the per-mode anchor must exist");
+  assert.notEqual(second, -1, "the anchor must appear in BOTH per-mode lists");
+  const digestsOf = (from) => {
+    const open = CONFIGURE_SOURCE.lastIndexOf("[", from);
+    const close = CONFIGURE_SOURCE.indexOf("]", from);
+    return [
+      ...new Set(
+        [
+          ...CONFIGURE_SOURCE.slice(open + 1, close).matchAll(
+            /"([a-f0-9]{64})"/g,
+          ),
+        ].map((m) => m[1]),
+      ),
+    ];
+  };
+  const preflight = digestsOf(first);
+  const apply = new Set(digestsOf(second));
+  const missing = preflight.filter((digest) => !apply.has(digest));
+  assert.deepEqual(
+    missing,
+    [],
+    `apply-mode list is missing predecessors: ${missing
+      .map((d) => d.slice(0, 16))
+      .join(", ")}`,
+  );
+});
+
+test("R13 2g: the outgoing coordinator-authority entrypoint is admitted in BOTH per-mode lists", () => {
+  for (const digest of [
+    COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256,
+    COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256,
+  ]) {
+    const occurrences = CONFIGURE_SOURCE.split(digest).length - 1;
+    assert.equal(
+      occurrences,
+      2,
+      `${digest.slice(0, 16)} must be admitted in the preflight list AND the ` +
+        "apply list, or --preflight would PASS and --apply would refuse",
+    );
+    assert.notEqual(R10_ENTRYPOINT_SHA256, digest);
+  }
+  assert.notEqual(
+    COORDINATOR_AUTHORITY_OUTGOING_ENTRYPOINT_SHA256,
+    COORDINATOR_AUTHORITY_REVIEW_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2d: the outgoing persistence-truth entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256),
+    `${PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    PERSISTENCE_TRUTH_OUTGOING_ENTRYPOINT_SHA256,
+  );
+});
+
+test("R13 2e: the outgoing first-approval-guard entrypoint is admitted", () => {
+  assert.ok(
+    CONFIGURE_SOURCE.includes(FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256),
+    `${FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256.slice(0, 16)} must be preserved`,
+  );
+  assert.notEqual(
+    R10_ENTRYPOINT_SHA256,
+    FIRST_APPROVAL_GUARD_OUTGOING_ENTRYPOINT_SHA256,
+  );
 });
 
 test("R13 3: the R5 predecessors R8 added are preserved", () => {
@@ -403,6 +1054,8 @@ test("R13 3b: each outgoing entrypoint is listed in BOTH modes", () => {
   for (const [digest, label] of [
     [R17_OUTGOING_ENTRYPOINT_SHA256, "R17 outgoing"],
     [R19_OUTGOING_ENTRYPOINT_SHA256, "R19 outgoing"],
+    [HYGIENE_OUTGOING_ENTRYPOINT_SHA256, "hygiene outgoing"],
+    [R14_OUTGOING_ENTRYPOINT_SHA256, "M11/T1-R1 Phase 2 outgoing"],
   ]) {
     assert.equal(
       CONFIGURE_SOURCE.split(digest).length - 1,
@@ -461,6 +1114,116 @@ test("R13 B: the R7 index.mjs predecessor is accepted", async () => {
   }
 });
 
+test("R13 B2: the M11/T1-R1 Phase 2 outgoing entrypoint is accepted and converges", async () => {
+  // The state a real operator-apply starts from: the installed extension still
+  // carries the outgoing bytes. Preflight must admit them from BOTH gates and
+  // apply must upgrade them onto the current build.
+  const outgoing = await outgoingEntrypoint();
+  const p = provisioned();
+  try {
+    writeFileSync(p.asset("index.mjs"), outgoing, "utf8");
+    assert.doesNotThrow(p.preflight);
+    assert.doesNotThrow(p.apply);
+    assert.equal(
+      sha256(readFileSync(p.asset("index.mjs"), "utf8")),
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
+      "an accepted predecessor must be upgraded onto the current build",
+    );
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("R13 B3: the build the live runtime carries is accepted and converges", async () => {
+  // M11/T3 Phase 1 moved three packaged digests at once (A1/A2 the entrypoint,
+  // A3 the boundary, A4 the queue manager), and all three are installed on the
+  // WSL runtime. Admitting them one at a time would leave --preflight refusing
+  // the real deployed combination, which is the M11/T1-R2 defect. This test
+  // reproduces that combination exactly and proves the upgrade path is reachable.
+  const liveBoundary = gitShow(
+    M11_T3_SOURCE_COMMIT,
+    "integrations/openclaw/topology/lib/native-boundary.mjs",
+  );
+  const liveQueue = gitShow(
+    M11_T3_SOURCE_COMMIT,
+    "integrations/openclaw/lib/queue-manager.mjs",
+  );
+  assert.equal(sha256(liveBoundary), R12_OUTGOING_NATIVE_BOUNDARY_SHA256);
+  assert.equal(
+    sha256(liveQueue),
+    "f7995d51d2d8f5a73fb3f7a980292236ff76fcc445cf1d769a48d35c84a8f140",
+    "the committed queue source must reproduce the live digest",
+  );
+  const live = await liveOutgoingEntrypoint();
+  const p = provisioned();
+  try {
+    writeFileSync(p.asset("index.mjs"), live, "utf8");
+    writeFileSync(p.asset("lib/native-boundary.mjs"), liveBoundary, "utf8");
+    writeFileSync(p.asset("lib/queue-manager.mjs"), liveQueue, "utf8");
+    assert.doesNotThrow(p.preflight);
+    assert.doesNotThrow(p.apply);
+    assert.equal(
+      sha256(readFileSync(p.asset("index.mjs"), "utf8")),
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
+    );
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
+      M11_T3_NATIVE_BOUNDARY_SHA256,
+    );
+    // M12/T2.2-R2 B-12, re-valued under owner grant §0.5-A. The queue writer's temp is now
+    // created (`"wx"`) behind the shared symlink guard instead of truncating whatever already
+    // sat at its predictable `.tmp-<pid>-<ms>` name, and a failed write removes its own
+    // residue. Moved from `a5580bb67a7ace7edfdaf2595b7245a3be3a6959333ae6cbeaf76d080f49fb37`,
+    // which is proven to have been this file's own digest at HEAD immediately before the edit
+    // (`git show HEAD:integrations/openclaw/lib/queue-manager.mjs | sha256sum`), so the value
+    // replaced here is the one this test was actually pinning. No `configure.mjs` entry is
+    // added: this is the CURRENT build, which is accepted by content comparison and
+    // deliberately never allowlisted; the live `f7995d51…` stays admitted.
+    // M12/T9-R1 F-056 (legacy R1-A06-01), re-valued in band. The queue's
+    // current-execution fence now renews the lease it just verified, so the
+    // lease clock moves in production and a live execution is no longer fenced
+    // out at the lease cliff. The queue writer's bytes therefore changed, and
+    // this pin tracks the CURRENT build of that asset. Moved from
+    // `4e6ae88e9e6fe0b30ebbeb3d655a186c69660b6211103738faaba28f313283aa`,
+    // proven to be this file's own digest at HEAD immediately before the edit
+    // (`git cat-file blob HEAD:integrations/openclaw/lib/queue-manager.mjs`
+    // -> sha256 8cd9446a...), so the value replaced here is the one this test
+    // was actually pinning. No `configure.mjs` entry is added: this is the
+    // CURRENT build, which is accepted by content comparison and deliberately
+    // never allowlisted; the live `a5580bb6...` (measured read-only on the WSL
+    // runtime) and the admitted `f7995d51...` both stay admitted predecessors,
+    // so the upgrade path is unchanged.
+    // M12/T9-R4 F-417 + F-504, re-valued in band. F-417 classifies a
+    // post-rename directory-fsync failure as a committed-but-uncertain write in
+    // this writer (and in `ledger.mjs`), and F-504 makes every result
+    // generation replace or clear its own record, so the queue writer's bytes
+    // changed again. Attribution measured, not assumed: the pre-row blob at
+    // `e24c2d1` hashes to exactly the value replaced here (`f2774f58…`). No
+    // `configure.mjs` entry is added: this is the CURRENT build, accepted by
+    // content comparison and deliberately never allowlisted.
+    // M12/T9-R4 F-402 + F-406, re-valued in band. `completeTask` now writes the
+    // ACCEPTED outcome projected through the queue's own ledger mapping instead
+    // of a hardcoded COMPLETE. The value replaced here (`ede81c64…`) is this
+    // asset's digest at `0114b73` (`git show a41256b^:…/queue-manager.mjs`), the
+    // commit before F-407; F-407's own lease-expiry edit moved the bytes first
+    // and did not roll this pin, so this value covers both rows. No
+    // `configure.mjs` entry is added: this is the CURRENT build, accepted by
+    // content comparison and deliberately never allowlisted.
+    // M12/T9-R4 F-581, re-valued in band. The call budget now reads a monotonic
+    // clock instead of wall-clock time, so the queue writer's bytes moved again.
+    // The value replaced here (`aadfd449…`) is exactly
+    // `git show HEAD:integrations/openclaw/lib/queue-manager.mjs`'s digest, so
+    // the pin this test was actually asserting is the one it replaced.
+    assert.equal(
+      sha256(readFileSync(p.asset("lib/queue-manager.mjs"), "utf8")),
+      "7fe3c3633d935e36cf66643f39124cab36bbf2220df807285e014d94e80910b3",
+      "an accepted predecessor must converge onto the current queue writer",
+    );
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
 test("R13 C: BOTH R7 predecessors together are accepted — the real deployed combination", async () => {
   const r7 = await r7Extension();
   const p = provisioned();
@@ -474,7 +1237,7 @@ test("R13 C: BOTH R7 predecessors together are accepted — the real deployed co
   }
 });
 
-test("R13 C2: the R10 current-build versions remain accepted", async () => {
+test("R13 C2: the current-build versions remain accepted", async () => {
   const p = provisioned();
   try {
     // `provisioned()` already materialized the current build; it must be accepted
@@ -482,11 +1245,11 @@ test("R13 C2: the R10 current-build versions remain accepted", async () => {
     assert.doesNotThrow(p.preflight);
     assert.equal(
       sha256(readFileSync(p.asset("lib/native-boundary.mjs"), "utf8")),
-      R10_NATIVE_BOUNDARY_SHA256,
+      M11_T3_NATIVE_BOUNDARY_SHA256,
     );
     assert.equal(
       sha256(readFileSync(p.asset("index.mjs"), "utf8")),
-      R10_ENTRYPOINT_SHA256,
+      R4_F533_CURRENT_ENTRYPOINT_SHA256,
     );
   } finally {
     rmSync(p.root, { recursive: true, force: true });
@@ -666,6 +1429,472 @@ function takeRunLiveness(runId) {
           context.transcriptPrompt ?? liveness?.transcriptPrompt,
 `,
       ``,
+    ],
+    // M10/T2-R5: the registry read in enterNativeRun. ORDER MATTERS: this
+    // insertion sits between the R4 validation block and `const decision`,
+    // so it must be inverted BEFORE the R4 hunk below can match.
+    [
+      `    // M10/T2-R5: structured Discord inbound metadata, read by inbound
+    // message id from the preflight registry. Unknown/absent degrades to
+    // empty (deny preserved); malformed is normalized by the reader.
+    const ingress = readZinkIngressMetadata(context.currentMessageId);
+`,
+      ``,
+    ],
+    // M10/T2-R4: explicit inbound thread identity typing. Inverted so the
+    // derived R5 body reproduces the packaged R5 digest exactly.
+    [
+      `  try {
+    // M10/T2-R4: the inbound thread identity is typed explicitly. null means
+    // "not a threaded message" (the patch forwards \`?? null\`); anything else
+    // must be a Discord snowflake, otherwise the context is malformed and the
+    // run fails closed before any guard sees it. The original message is
+    // preserved as the cause and logged, while the host-visible contract
+    // string stays GOVERNANCE_RUN_UNAVAILABLE.
+    const threadId = context.threadId ?? null;
+    if (threadId !== null && !/^[1-9][0-9]{16,19}$/u.test(threadId)) {
+      throw new Error("GOVERNANCE_CONTEXT_MISSING");
+    }
+    const decision = await callGuard(`,
+      `  try {
+    const decision = await callGuard(`,
+    ],
+    // M10/T2-R4: the frozen admission-context threadId field.
+    [
+      `        isBot: context.isBot,
+        threadId,
+`,
+      `        isBot: context.isBot,
+`,
+    ],
+    // M10/T2-R5: the preflight-registry reader block. Inverted so the
+    // derived R5 body reproduces the packaged R5 digest exactly.
+    [
+      `const INGRESS_METADATA_KEY = "__zink_ingress_metadata_r5";
+const DISCORD_SNOWFLAKE_RE = /^[1-9][0-9]{16,19}$/u;
+
+const emptyIngressMetadata = () =>
+  Object.freeze({
+    mentionedUserIds: Object.freeze([]),
+    mentionedRoleIds: Object.freeze([]),
+    replyReferenceMessageId: null,
+    replyReferenceAuthorId: null,
+    threadOwnerId: null,
+    authorIsBot: false,
+  });
+
+/**
+ * M10/T2-R5: read the deterministic Discord inbound metadata the preflight
+ * patch recorded for this inbound message id. The write sits on the same
+ * causal inbound path (a turn exists only after its message's preflight
+ * completes), so no ordering assumption is involved. Unknown, malformed or
+ * evicted records normalize to empty (deny preserved). Re-validated here
+ * even though the writer validates too: the registry crosses a bundle
+ * boundary, so neither side trusts the other's bytes.
+ */
+export function readZinkIngressMetadata(messageId) {
+  let record;
+  try {
+    const registry = globalThis[INGRESS_METADATA_KEY];
+    record =
+      typeof messageId === "string" && registry instanceof Map
+        ? registry.get(messageId)
+        : undefined;
+  } catch {
+    return emptyIngressMetadata();
+  }
+  if (!record || typeof record !== "object") return emptyIngressMetadata();
+  const snowflake = (value) =>
+    typeof value === "string" && DISCORD_SNOWFLAKE_RE.test(value)
+      ? value
+      : null;
+  const idList = (entries) => {
+    if (!Array.isArray(entries)) return [];
+    const ids = [];
+    for (const entry of entries) {
+      const id = snowflake(typeof entry === "string" ? entry : entry?.id);
+      if (id) ids.push(id);
+    }
+    return ids;
+  };
+  return Object.freeze({
+    mentionedUserIds: Object.freeze(idList(record.mentionedUserIds)),
+    mentionedRoleIds: Object.freeze(idList(record.mentionedRoleIds)),
+    replyReferenceMessageId: snowflake(record.replyReferenceMessageId),
+    replyReferenceAuthorId: snowflake(record.replyReferenceAuthorId),
+    threadOwnerId: snowflake(record.threadOwnerId),
+    authorIsBot: record.authorIsBot === true,
+  });
+}
+
+`,
+      ``,
+    ],
+    // M10/T2-R5: structured inbound metadata in the frozen admission context
+    // (read by message id from the preflight registry). Inverted so the
+    // derived R5 body reproduces the packaged R5 digest exactly.
+    [
+      `        mentionedUserIds: ingress.mentionedUserIds,
+        mentionedRoleIds: ingress.mentionedRoleIds,
+        replyReferenceMessageId: ingress.replyReferenceMessageId,
+        replyReferenceAuthorId: ingress.replyReferenceAuthorId,
+        threadOwnerId: ingress.threadOwnerId,
+        authorIsBot: context.isBot === true || ingress.authorIsBot,
+`,
+      ``,
+    ],
+    // M10/T2-R8: the Discord preflight seam reaches the canonical intake
+    // predicate through one published global.
+    [
+      `const registryKey = Symbol.for("zink.governance.native.r12");
+// M10/T2-R8: the Discord preflight seam reaches the canonical intake predicate
+// through this global. Published only while a guard is registered.
+const preflightIngressKey = Symbol.for(
+  "zink.governance.native.preflightIngress",
+);`,
+      `const registryKey = Symbol.for("zink.governance.native.r12");`,
+    ],
+    // M10/T2-R8: the pure preflight intake predicate on the registry entry.
+    [
+      `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),
+    // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+    // preflight seam so a direct specialist mention never creates a host run at
+    // all. Side-effect free: it decides, it never writes the ledger.
+    beforePreflightIngress:
+      typeof guard.beforePreflightIngress === "function"
+        ? guard.beforePreflightIngress.bind(guard)
+        : undefined,`,
+      `    beforeToolCall: guard.beforeToolCall.bind(guard),
+    beforeAnnounce: guard.beforeAnnounce.bind(guard),`,
+    ],
+    // M10/T2-R8 + M12/T9 F-506: publishing the seam, its deliberate "absent is
+    // not a deny", and the registration-viewed predicate F-506 published.
+    [
+      `  registry().set(scope, entry);
+  publishPreflightIngress();
+  return () => {
+    if (registry().get(scope) !== entry) return;
+    registry().delete(scope);
+    // M12/T9 F-506: the published predicate belongs to the registration, so the
+    // last release retracts it. A stale closure must not keep deciding admission
+    // for a root that no longer exists.
+    if (registry().size === 0) delete globalThis[preflightIngressKey];
+  };
+}`,
+      `  registry().set(scope, entry);
+  return () => {
+    if (registry().get(scope) === entry) registry().delete(scope);
+  };
+}`,
+    ],
+    [
+      `
+
+/** The one normalization rule shared by \`resolveGovernance\` and the seam. */
+function sameScope(registeredScope, scope) {
+  return (
+    registeredScope.replace(/\\\\/g, "/").replace(/\\/+$/, "") ===
+    scope.replace(/\\\\/g, "/").replace(/\\/+$/, "")
+  );
+}
+
+function findGuardEntry(entries, scope) {
+  const exact = entries.get(scope);
+  if (exact) return exact;
+  for (const [registeredScope, registeredGuard] of entries) {
+    if (sameScope(registeredScope, scope)) return registeredGuard;
+  }
+  return undefined;
+}
+
+/**
+ * M10/T2-R8 — the global the Discord preflight injection calls.
+ *
+ * The preflight runs inside the host's channel bundle, which never imports this
+ * module, so the seam is reached through one published global instead of a
+ * duplicated import or a second copy of the policy. The caller passes the SAME
+ * scope string \`resolveGovernance\` derives from the host config, so there is one
+ * registry and one policy, not two.
+ *
+ * M12/T9 F-506: the published value is a view of the registry, not a capture of
+ * one entry. A scoped call resolves through that scope only — a released root's
+ * traffic is never decided by another root's guard — and an unscoped call is
+ * answered only when exactly one registration exists, because with two roots
+ * there is no truthful way to pick one.
+ *
+ * ABSENT PREDICATE IS NOT A DENY. If governance never registered — the plugin
+ * has not loaded, or a build predates this seam — the preflight must not invent
+ * an admission decision. It returns null and the late \`enterNativeRun\` gate
+ * still governs the run, so enforcement is unchanged and only the timing is lost.
+ */
+function publishPreflightIngress() {
+  if (registry().size === 0) return;
+  globalThis[preflightIngressKey] = (input) => {
+    const entries = registry();
+    const requestedScope =
+      typeof input?.scope === "string" && input.scope.length > 0
+        ? input.scope
+        : null;
+    let entry;
+    if (requestedScope) {
+      entry = findGuardEntry(entries, requestedScope);
+    } else if (entries.size === 1) {
+      entry = entries.values().next().value;
+    }
+    return typeof entry?.beforePreflightIngress === "function"
+      ? entry.beforePreflightIngress(input)
+      : undefined;
+  };
+}
+
+`,
+      `
+
+`,
+    ],
+    [
+      `  const scope = entry.config?.ledgerRoot;
+  let guard =
+    typeof scope === "string" ? findGuardEntry(registry(), scope) : undefined;
+  return {`,
+      `  const scope = entry.config?.ledgerRoot;
+  let guard = typeof scope === "string" ? registry().get(scope) : undefined;
+  if (!guard && typeof scope === "string") {
+    // Normalization check in case of path separator / trailing slash differences
+    const normScope = scope.replace(/\\\\/g, "/").replace(/\\/+$/, "");
+    for (const [registeredScope, registeredGuard] of registry().entries()) {
+      if (
+        registeredScope.replace(/\\\\/g, "/").replace(/\\/+$/, "") === normScope
+      ) {
+        guard = registeredGuard;
+        break;
+      }
+    }
+  }
+  return {`,
+    ],
+    // M10/T2-R8: the model-visible block reason is a refusal sentence. Proven
+    // live: the host copies a block decision's `reason` into the tool result the
+    // MODEL reads, the model repeated it, and the owner's Discord reply carried
+    // the internal code. Reverting these reproduces the R5 body exactly.
+    [
+      `
+/**
+ * M10/T2-R8 — the ONLY text a blocked tool call may hand back to the host.
+ *
+ * The host maps a block decision's \`reason\` to \`blockReason\` and writes that
+ * into the tool-result the model reads, so whatever sits here is model-visible
+ * and, through the model's own answer, owner-visible. It is therefore a plain
+ * refusal sentence and deliberately NOT a governance identifier: repeating it
+ * back to the owner is truthful and harmless. The canonical reason code stays in
+ * the diagnostic channel and in the ledger.
+ */
+export const POLICY_REFUSAL_TEXT = "Action not permitted by workspace policy.";
+`,
+      ``,
+    ],
+    [
+      `  const refuse = (canonical) => {
+    // R8: the host contract turns this return value into the BLOCKED TOOL
+    // RESULT the model reads — \`decision.reason\` becomes \`blockReason\`, which
+    // the host puts verbatim into the tool-result text. Proven live: a block
+    // reason reached the model, the model repeated it, and the owner's Discord
+    // reply carried the internal governance code.
+    //
+    // So the model-visible surface gets a deliberate, non-diagnostic refusal and
+    // never a governance identifier. The canonical code and its detail stay in
+    // the diagnostic channel and in the ledger, where a refusal must remain
+    // auditable. This is not a message filter: the code is never handed to the
+    // host in the first place, so it cannot be echoed by the model.
+    console.error(
+      "[zink-native-gate:error] beforeToolCall blocked:",
+      canonical,
+    );
+    return { block: true, reason: POLICY_REFUSAL_TEXT };
+  };
+`,
+      ``,
+    ],
+    [
+      `        return refuse("YIELD_BATCH_DENIED");`,
+      `        return { block: true, reason: "YIELD_BATCH_DENIED" };`,
+    ],
+    [
+      `      if (decision?.allow !== true) {
+        // The canonical reason code is a fixed governance identifier, never
+        // caller data — but it is NOT safe to surface here, because this return
+        // value is model-visible. See \`refuse\` above. A guard-supplied reason is
+        // recorded as the diagnostic code; the model only ever sees the refusal.
+        const canonical =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return refuse(canonical);
+      }
+`,
+      `      if (decision?.allow !== true) {
+        // A blocked call keeps its canonical reason code when the guard
+        // supplied one. The code is a fixed governance identifier, never
+        // caller data, so surfacing it is safe and makes the refusal
+        // auditable instead of collapsing every denial into one opaque code.
+        const reason =
+          typeof decision?.reason === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+            ? decision.reason
+            : "GOVERNANCE_DENIED";
+        return { block: true, reason };
+      }
+`,
+    ],
+    [
+      `    } catch (err) {
+      // Never return exception text: a provider/plugin error may contain input,
+      // and the reason is model-visible. The diagnostic keeps the detail; the
+      // model only ever sees the refusal.
+      return refuse(err?.message || String(err));
+    }
+`,
+      `    } catch (err) {
+      console.error(
+        "[zink-native-gate:error] beforeToolCall blocked:",
+        err?.message || err,
+      );
+      // Never return exception text: a provider/plugin error may contain input.
+      return { block: true, reason: "GOVERNANCE_UNAVAILABLE" };
+    }
+`,
+    ],
+    // M10/T2-R12: resolveGovernance exported as a read-only test seam.
+    // Inverted so the derived R5 body reproduces the packaged R5 digest.
+    [
+      `// M10/T2-R12: exported as a test seam so suites can drive the registered
+// guard hooks exactly as production does. Read-only accessor; no behavior.
+export function resolveGovernance(config) {`,
+      `function resolveGovernance(config) {`,
+    ],
+    // M11/T3 A3: the three seams gained cause-preserving message-only
+    // diagnostics. Host-visible codes and verdicts are unchanged, so inverting
+    // them keeps the derived R5 body equal to the packaged R5 digest exactly.
+    [
+      `  } catch (error) {
+    // M11/T3 A3: the host-visible verdict is unchanged, but a block with no
+    // diagnostic was unattributable. Message only — never stack or content.
+    console.error(
+      "[zink-native-gate] gateNativeAnnounce:",
+      error?.message ?? error,
+    );
+    return { governed: true, action: "block" };
+  }`,
+      `  } catch {
+    return { governed: true, action: "block" };
+  }`,
+    ],
+    [
+      `  } catch (error) {
+    // M11/T3 A3: same standard as \`enterNativeRun\` — the host-visible contract
+    // string is unchanged, but the guard fault is preserved as the cause so a
+    // policy denial, an unregistered guard and a disk fault stay separable.
+    console.error(
+      "[zink-native-gate] finishNativeRun:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE", { cause: error });
+  }`,
+      `  } catch {
+    throw new Error("GOVERNANCE_COMPLETION_UNAVAILABLE");
+  }`,
+    ],
+    [
+      `  } catch (error) {
+    // M11/T3 A3: cause-preserving sibling of \`enterNativeRun\` at this seam.
+    console.error(
+      "[zink-native-gate] sanitizeNativePrompt:",
+      error?.message ?? error,
+    );
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE", { cause: error });
+  }`,
+      `  } catch {
+    throw new Error("GOVERNANCE_INGRESS_UNAVAILABLE");
+  }`,
+    ],
+    // M12/T2.2 B-16: the four seams now name the guard's reason in the
+    // diagnostic channel. Every host-visible code, verdict and return shape is
+    // unchanged, so inverting these reproduces the R5 body exactly. The reason
+    // is only echoed when it matches the closed governance-code grammar, so no
+    // caller text can reach the log.
+    [
+      `// B-16: a guard verdict that denies carries a canonical reason code, and this
+// boundary used to drop it, so every policy denial reached the operator as the
+// bare class name. The reason is written to the diagnostic channel only when it
+// matches the closed governance-code grammar the tool-gate seam already applies
+// to the same field, which keeps message text, paths and credentials out of the
+// log. Nothing here moves a host-visible code, verdict, or return shape.
+function logDecisionReason(seam, verdict, decision) {
+  const reason =
+    typeof decision?.reason === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/u.test(decision.reason)
+      ? decision.reason
+      : "REASON_UNDECLARED";
+  console.error(\`[zink-native-gate] \${seam} \${verdict}: reason=\${reason}\`);
+}
+
+`,
+      ``,
+    ],
+    [
+      `    if (decision?.allow !== true) {
+      logDecisionReason("enterNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }`,
+      `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
+    ],
+    [
+      `    if (decision?.action === "discard") {
+      logDecisionReason("gateNativeAnnounce", "discarded", decision);
+      return { governed: true, action: "discard" };
+    }`,
+      `    if (decision?.action === "discard")
+      return { governed: true, action: "discard" };`,
+    ],
+    [
+      `    ) {
+      logDecisionReason("gateNativeAnnounce", "refused", decision);
+      throw new Error("GOVERNANCE_RECEIPT_INVALID");
+    }`,
+      `    )
+      throw new Error("GOVERNANCE_RECEIPT_INVALID");`,
+    ],
+    [
+      `    if (decision?.allow !== true) {
+      logDecisionReason("finishNativeRun", "denied", decision);
+      throw new Error("GOVERNANCE_DENIED");
+    }`,
+      `    if (decision?.allow !== true) throw new Error("GOVERNANCE_DENIED");`,
+    ],
+    [
+      `    ) {
+      logDecisionReason("sanitizeNativePrompt", "refused", decision);
+      throw new Error("SCHEMA_INVALID");
+    }`,
+      `    )
+      throw new Error("SCHEMA_INVALID");`,
+    ],
+    // M12/T9 F-371: the spawn label the boundary accepts is now the version-4
+    // UUID the canonical builder renders (the legacy 64-hex rendering still
+    // replays). The host-visible verdict is unchanged - an unusable label is
+    // still refused - so inverting this hunk keeps the derived R5 body equal
+    // to the packaged R5 digest exactly.
+    [
+      `          // M12/T9 F-371: the delegation id is a version-4 UUID rendered from
+          // the canonical digest, and the ledger may still carry the legacy
+          // 64-hex rendering. Both are legitimate identities of the same
+          // proposal, so the spawn label accepts both - and nothing else.
+          !/^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u.test(
+            decision.spawnLabel,
+          )`,
+      `          !/^[a-f0-9]{64}$/u.test(decision.spawnLabel)`,
     ],
   ];
   let derived = readFileSync(BOUNDARY, "utf8");

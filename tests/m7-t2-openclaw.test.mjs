@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -28,6 +29,12 @@ import {
   upgradeEmptyLegacyLedger,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
 import { createGovernanceGuard } from "../integrations/openclaw/topology/lib/guard.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 import {
   AGENT_IDS,
   governancePluginFiles,
@@ -345,10 +352,14 @@ test("Main transitions consume task-global budget before spawn receipts and neve
       root_session_key: "main-session",
       root_run_id: "main-run",
     });
+    // M12/T9 F-060 (the owner's restatement of 2026-10-21): the `semantic`
+    // stack is @O1's - the meaning layer is DATA work - so a node may not pair
+    // it with @O2 any more. This lane measures the BUDGET, not the ownership,
+    // so the fixture uses the pairs the canonical table admits.
     const nodes = Array.from({ length: 12 }, (_, index) => ({
       node_id: `node_${index}`,
       stack_id: index % 2 ? "semantic" : "data_plant",
-      agent_id: index % 2 ? "o2" : "o1",
+      agent_id: "o1",
       dependencies: [],
       required: true,
       input_digest: "b".repeat(64),
@@ -544,7 +555,7 @@ test("materialized plugin imports canonical assets and requires native invocatio
         content: "@main ordinary request",
         mentions: [{ username: "main" }],
         sessionKey: "main-session",
-        runId: "main-run",
+        runId: "main-run-replay",
       }),
       /GOVERNANCE_RUN_UNAVAILABLE/u,
     );
@@ -2081,4 +2092,42 @@ test("budget reservations reject counter rollback and non-integer amounts", () =
       /budget exhausted/u,
     );
   }
+});
+
+// M12/T9 F-018: an operator believed an editable workspace template existed on
+// disk and edited a directory nothing reads. The template is implemented in
+// `policy.mjs`, so the directory must say so, and a tracked empty directory
+// whose name a check claims to use must not exist.
+test("F-018: templates/main-workspace says where the workspace template lives", () => {
+  const directory = path.resolve(
+    "integrations",
+    "openclaw",
+    "templates",
+    "main-workspace",
+  );
+  const entries = readdirSync(directory);
+  assert.ok(
+    entries.includes("README.md"),
+    "the directory must carry a README that says where the template lives",
+  );
+  const readme = readFileSync(path.join(directory, "README.md"), "utf8");
+  assert.match(
+    readme,
+    /integrations\/openclaw\/lib\/policy\.mjs/u,
+    "the README must name the file that implements the template",
+  );
+  assert.match(
+    readme,
+    /assertWorkspaceMatchesTemplate/u,
+    "the README must name the function that implements the template",
+  );
+  const policy = readFileSync(
+    path.resolve("integrations", "openclaw", "lib", "policy.mjs"),
+    "utf8",
+  );
+  assert.match(
+    policy,
+    /export function assertWorkspaceMatchesTemplate\(/u,
+    "the template must exist in code, since nothing reads this directory",
+  );
 });

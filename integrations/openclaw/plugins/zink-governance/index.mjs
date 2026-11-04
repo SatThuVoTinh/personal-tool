@@ -1,13 +1,19 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
+  statSync,
   writeFileSync,
   mkdirSync,
 } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
@@ -15,8 +21,9 @@ import { setTimeout, clearTimeout } from "node:timers";
 import {
   createGovernanceGuard,
   resolveN8nInvocation,
-  bindInvocationApproval,
+  resolveAuthenticatedApproval,
   whenGovernanceDependenciesReady,
+  loadSharedGovernanceModule,
 } from "../../topology/lib/guard.mjs";
 import {
   checkSchema,
@@ -35,8 +42,38 @@ import {
   evaluateCapabilityAccess,
   GOVERNED_SKILL_NAMESPACE_CATALOG,
   AGENT_SPAWN_POLICY,
+  AGENT_STACK_POLICY,
+  ZINK_CAPABILITY_REGISTRY,
+  AUTHORIZATION_MODE_BY_TOOL,
+  OPERATION_POLICY,
+  deriveApprovalMaterialParameters,
+  deriveApprovalScopeDigest,
+  configureGovernedStoreRoot,
+  // M12/T9 F-533: the ONE owner of the dispatch derivation. The plugin binds
+  // and re-exports this function instead of carrying a copy that can drift.
+  deriveGovernedDispatchTarget,
+  // M12/T9 F-049: the ONE referential scheme for Discord identities. The
+  // owner's ruling was "lưu dạng mã băm" — a third party's account id is
+  // stored as a hashed reference, never in the clear.
+  isIdentityKey,
+  tokenizeDiscordPrincipalReferences,
+  tokenizePayloadPrincipalReferences,
+  // M12/T9 F-049/H7: the policy for an UNKNOWN Discord identity — an identity
+  // that is neither the owner nor a member of the roster. The owner's decision
+  // of 2026-10-21 (`H7`) is "record it and flag it": recorded hashed (as
+  // F-049 decided), marked as unknown, and surfaced to the owner.
+  UNKNOWN_PRINCIPAL_CATEGORY,
+  PRINCIPAL_TOKEN_PREFIX,
+  PRINCIPAL_TOKEN_SUFFIX,
+  PROSE_PAYLOAD_FIELDS,
+  rosterPrincipalReferences,
+  unknownPrincipalReferencesInPayload,
 } from "../../lib/policy.mjs";
-import { sanitizeDelegationText } from "../../topology/lib/runtime.mjs";
+import {
+  sanitizeDelegationText,
+  truncateUtf8 as sharedTruncateUtf8,
+  deriveIncidentId,
+} from "../../topology/lib/runtime.mjs";
 import {
   registerNativeGuard,
   recordNativeQuota,
@@ -46,18 +83,30 @@ import {
 import {
   BUDGETS,
   readSnapshot,
-  recordWorkflowEvent,
+  recordWorkflowEvent as writeWorkflowEvent,
 } from "../../topology/lib/ledger.mjs";
 import {
   findSession,
+  findBoundCoordinatorRun,
   resolveCurrentRunOwner,
 } from "../../topology/lib/workflow.mjs";
+
+import {
+  createCoordinatorRuntimeStart,
+  startCoordinatorPickupLoop,
+  PICKUP_SCAN_INTERVAL_MS,
+  parseCoordinatorSessionKey,
+} from "../../lib/coordinator-pickup.mjs";
 import {
   canonicalHash,
+  deriveApprovalPlanDigest,
   derivePrincipalRef,
-  deriveTaskId,
   GOVERNANCE_VERSION,
+  isTaskCodeForm,
+  mintTaskId,
   SCHEMA_VERSION,
+  TASK_CODE_ALPHABET,
+  TASK_ID_PATTERN,
 } from "../../topology/lib/canonical.mjs";
 
 import {
@@ -71,6 +120,14 @@ import {
   formatGovernedApprovalCard,
   formatGovernedResultCard,
   formatIncidentCard,
+  renderGovernedApprovalBody,
+  renderGovernedExpectedResult,
+  renderGovernedPlanSteps,
+  renderGovernedResultBody,
+  sanitizeDiscordText,
+  specialistSoftwareLabel,
+  SPECIALIST_SOFTWARE_LABELS,
+  stripDiscordMentions,
 } from "../../lib/discord-formatter.mjs";
 
 import {
@@ -81,21 +138,56 @@ import {
   CHANNELS,
   TASK_STATES,
   ACTIONS,
+  APPROVAL_SUBJECT_TYPES,
   buildComponentCustomId,
+  buildSkillComponentCustomId,
   parseComponentCustomId,
   DISCORD_COMPONENT_ACTION_NAMESPACE,
   resolveIngressRouting,
+  resolveMainConversationAdmission,
+  resolveMainReplyAdmission,
+  MAIN_CONVERSATION_CONTINUATION,
+  MAIN_DIRECTED,
+  MISSING_MENTION_REFUSAL,
+  DISCORD_BOT_IDS,
+  normalizeAuthorityAction,
+  resolveLedgerDecision,
+  LEDGER_CANCELLATION_DECISION,
 } from "../../lib/authority.mjs";
 
 import { QueueManager, defaultQueueManager } from "../../lib/queue-manager.mjs";
 
 import {
   buildNativeComponentPayload,
+  hostComponentSdkCandidates,
+  registerPostedNativeComponents,
   sendNativePayload,
 } from "../../lib/discord-native-send.mjs";
 
+import { renderExpectedResultPreview } from "../../lib/discord-result-preview.mjs";
+// M12/T2-R1: one tagging system for all three governed forums.
 import {
+  approvalCardExpiresAt,
+  approvalRiskTag,
+  approvalStatusTag,
+  buildSurfaceSelections,
+  createForumTagResolver,
+  incidentSeverityTag,
+  isApprovalCardExpired,
+  incidentStatusTag,
+  openGovernedForumThread,
+  readActiveForumThreads,
+  resultStatusTag,
+  resultTypeTag,
+  surfaceStackTag,
+  transitionGovernedForumStatus,
+} from "../../lib/discord-forum-tags.mjs";
+
+import {
+  deriveType,
   evaluateResultGate,
+  FORMAT_MAX_SIZE_LIMITS,
+  MAX_ARTIFACT_SIZE_BYTES,
   VALIDATION_STATUS,
 } from "../../lib/artifact-validator.mjs";
 
@@ -103,6 +195,8 @@ import {
   DecisionLedger,
   defaultDecisionLedger,
 } from "../../lib/decision-ledger.mjs";
+
+import { lockDirFor, withFileLockSync } from "../../lib/file-lock.mjs";
 
 export {
   formatForDiscord,
@@ -130,6 +224,9 @@ export {
   ZINK_MEMORY_TOOL_REGISTRY,
   effectiveMemoryTools,
   canAccessMemoryTool,
+  // F-533: re-exported for the pickup/dispatch callers and their tests; it is
+  // the SAME function object `lib/policy.mjs` owns, not a local definition.
+  deriveGovernedDispatchTarget,
 };
 
 const PENDING_PROPOSALS_KEY = Symbol.for(
@@ -146,16 +243,398 @@ if (!globalThis[COMPLETED_EXECUTIONS_KEY]) {
   globalThis[COMPLETED_EXECUTIONS_KEY] = new Set();
 }
 
+// M11/T1-R1 (4.2): both caches above live on `globalThis` for the whole process
+// lifetime, so they need explicit ceilings. The durable
+// `<ledgerRoot>/skill-proposals/` store is authoritative for proposals, so an
+// evicted entry costs only a re-read; the completed-execution Set is a replay
+// guard with a bounded idempotency window BY DESIGN — beyond the ceiling the
+// oldest keys stop being recognized as complete, which the ledger-based
+// terminal-state checks in `handleExecutionFinished` still refuse.
+export const PENDING_PROPOSALS_LIMIT = 256;
+export const COMPLETED_EXECUTIONS_LIMIT = 4096;
+// M11/T3 A2: one deadline for every outbound Discord REST call. All three sites
+// awaited `fetch` with no signal, so a stalled socket pinned the gateway hook
+// indefinitely. 10s matches the existing probe deadline (verify.mjs:311).
+export const DISCORD_REST_DEADLINE_MS = 10_000;
+
+/**
+ * M12/T2-R1 (owner decision Q3 = A): the RISK a governed thread advertises is the highest
+ * `riskClass` among the tools the admitted plan can actually reach. A brief node names an
+ * agent, not a tool, so the reachable set is that agent's admitted capabilities plus one
+ * bounded level of the spawn policy — a coordinator admits no capability of its own, yet
+ * the plan it admits runs governed Excel, SQL and n8n tools. Descending further would
+ * describe the whole server rather than this request, and inventing a class for a built-in
+ * session tool would be a claim the policy tables never made.
+ *
+ * These live at module level because the owner's tag rule depends on the classification:
+ * the plugin and its tests must read one function, not two copies.
+ */
+export function riskClassesAdmittedBy(agentIds) {
+  const classes = new Set();
+  const addFor = (agentId) => {
+    for (const tool of TOOL_POLICY[agentId] ?? []) {
+      const risk = ZINK_CAPABILITY_REGISTRY[tool]?.riskClass;
+      if (risk) classes.add(risk);
+    }
+  };
+  for (const agentId of new Set(
+    (Array.isArray(agentIds) ? agentIds : []).filter(Boolean),
+  )) {
+    addFor(agentId);
+    for (const child of AGENT_SPAWN_POLICY[agentId] ?? []) addFor(child);
+  }
+  return [...classes];
+}
+
+export function governedTaskAgents(task, targetAgentId) {
+  const agents = [];
+  if (typeof targetAgentId === "string" && targetAgentId)
+    agents.push(targetAgentId);
+  for (const node of Array.isArray(task?.nodes) ? task.nodes : [])
+    if (typeof node?.agent_id === "string" && node.agent_id)
+      agents.push(node.agent_id);
+  return [...new Set(agents)];
+}
+
+/**
+ * M12/T9 F-123: the moment the approval card was POSTED.
+ *
+ * The durable fact is the `WORKFLOW_APPROVAL_SURFACED` event — the record OF
+ * the surfaced card — and its `created_at` is the moment the card was posted.
+ * The 24 hours are counted from there: not from the moment the request was
+ * written, and not from the moment a decision arrives.
+ *
+ * The journal is append-only and its last line can be torn, so an unparsable
+ * line is skipped rather than fatal. The caller has already verified the
+ * journal's digest chain through `readSnapshot`, so what this reads is the
+ * verified history.
+ */
+export function readSurfacedApprovalPostedAt(paths, taskId) {
+  const eventsPath = paths?.events;
+  if (typeof eventsPath !== "string" || eventsPath.length === 0) return null;
+  if (typeof taskId !== "string" || taskId.length === 0) return null;
+  let raw;
+  try {
+    raw = readFileSync(eventsPath, "utf8");
+  } catch {
+    return null;
+  }
+  let postedAt = null;
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.type !== "WORKFLOW_APPROVAL_SURFACED") continue;
+    if (event?.payload?.task_id !== taskId) continue;
+    const at = Date.parse(event.created_at);
+    if (!Number.isFinite(at)) continue;
+    // The LAST surface is the card the owner is looking at now.
+    if (postedAt === null || at >= postedAt) postedAt = at;
+  }
+  return postedAt;
+}
+
+/**
+ * The approvals trio: the state the card asks about, its risk, its stack. `decision` is only
+ * supplied by the post-verdict tag transition (M12/T2-R2); every publish path leaves it out, so
+ * an opened thread is always `STATUS: WAITING`.
+ */
+export function approvalTagSelectionsFor(task, targetAgentId, decision = null) {
+  return buildSurfaceSelections("approvals", {
+    status: approvalStatusTag(decision),
+    risk: approvalRiskTag(
+      riskClassesAdmittedBy(governedTaskAgents(task, targetAgentId)),
+    ),
+    stack: surfaceStackTag({
+      currentStack: task?.current_stack,
+      nodeStackIds: (Array.isArray(task?.nodes) ? task.nodes : []).map(
+        (node) => node?.stack_id,
+      ),
+    }),
+  });
+}
+
+/**
+ * The results trio. TYPE prefers durable artifact evidence and falls back to the software
+ * the admitted plan named, so a thread is never tagged by a guess about work the ledger
+ * cannot show. `BLOCKED` and `CANCELLED` deliberately have no results tag: they are not
+ * outcomes the owner accepted, and mapping them to FAILED would state a verdict he never
+ * made — the caller then posts nothing and logs the reason.
+ */
+export function resultTagSelectionsFor(task, artifactPaths = []) {
+  const nodeAgents = (Array.isArray(task?.nodes) ? task.nodes : [])
+    .map((node) => node?.agent_id)
+    .filter((agentId) => typeof agentId === "string" && agentId);
+  let type = null;
+  // F-005: the SPECIALIST targets are tried first, so a mixed DAG stays
+  // typed by the software that produced the deliverable. The coordinator
+  // (`undefined`) is the fallback, not the first guess.
+  for (const target of [...nodeAgents, undefined]) {
+    type = resultTypeTag({ artifactPaths, target });
+    if (type) break;
+  }
+  return buildSurfaceSelections("results", {
+    status: resultStatusTag({
+      decision: "ACCEPT",
+      outcomeStatus: task?.root_result?.outcome_status,
+    }),
+    type,
+    stack: surfaceStackTag({
+      currentStack: task?.current_stack,
+      nodeStackIds: (Array.isArray(task?.nodes) ? task.nodes : []).map(
+        (node) => node?.stack_id,
+      ),
+    }),
+  });
+}
+
+/** The software a delivered result belongs to, for the thread body. */
+export function resultSoftwareLabelFor(task) {
+  for (const node of Array.isArray(task?.nodes) ? task.nodes : []) {
+    const agentId = node?.agent_id;
+    if (agentId && agentId in SPECIALIST_SOFTWARE_LABELS && agentId !== "main")
+      return specialistSoftwareLabel(agentId);
+  }
+  return "";
+}
+
+/**
+ * The incidents trio. SEVERITY is what the containment decision actually was, and STACK is
+ * the affected tasks' own recorded stack.
+ *
+ * M12/T9 F-009: the comment this replaces claimed that a containment spanning two stacks
+ * reports unresolved and opens no thread. That is not what `surfaceStackTag` does, and it
+ * has not done since the one-tagging rule landed: the STACK tag is the surface the
+ * containment's OUTPUT belongs to, so a containment that reaches further downstream is
+ * tagged by that downstream surface. The precedence is `decision > intelligence >
+ * data_plant > semantic > infrastructure` (STACK_TAG_PRECEDENCE), and it is applied over
+ * the union of every affected task's node stacks.
+ *
+ * `current_stack` still wins when the ledger has bound one - but only for a SINGLE
+ * affected task, because a containment over several tasks has no single executing stack
+ * and the union decides. Nothing is invented when there is no stack evidence at all:
+ * the caller then reports an unresolved tag and posts nothing.
+ */
+export function incidentTagSelectionsFor(
+  tasks,
+  { reason, scope, ledgerError },
+) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  return buildSurfaceSelections("incidents", {
+    status: incidentStatusTag(),
+    severity: incidentSeverityTag({ reason, scope, ledgerError }),
+    stack: surfaceStackTag({
+      currentStack: list.length === 1 ? list[0]?.current_stack : null,
+      nodeStackIds: list.flatMap((task) =>
+        (Array.isArray(task?.nodes) ? task.nodes : []).map(
+          (node) => node?.stack_id,
+        ),
+      ),
+    }),
+  });
+}
+
+/**
+ * M12/T9 F-016: whether an #incidents thread may be opened for a containment.
+ *
+ * A TRUNCATED listing cannot answer "is this incident already open?", so the honest answer
+ * is "unable to conclude" and the surface is skipped. The owner's rule is that a blind post
+ * is how a duplicate incident gets made, so a partial listing must never be read as "not
+ * open yet". The decision is a pure function so the dedupe rule can be pinned by a test
+ * without a live forum.
+ */
+export function incidentSurfaceDecision(listing, token) {
+  if (listing?.truncated)
+    return { open: false, reason: "THREAD_LIST_TRUNCATED" };
+  const already = (Array.isArray(listing?.threads) ? listing.threads : []).some(
+    (thread) => String(thread?.name ?? "").includes(String(token ?? "")),
+  );
+  if (already) return { open: false, reason: "ALREADY_SURFACED" };
+  return { open: true, reason: null };
+}
+
+/**
+ * A stable per-containment identity. #incidents has no incident record in the ledger and
+ * this task is not authorized to invent one, so the thread title carries this token and the
+ * forum's active-thread list is what makes a retry recognizable instead of duplicated.
+ */
+export function incidentIdentityFor({
+  reason,
+  runId = null,
+  childSessionKey = null,
+  scope = "NONE",
+  taskIds = [],
+}) {
+  const token = deriveIncidentId({
+    reason,
+    runId,
+    childSessionKey,
+    scope,
+    taskIds: [...taskIds].sort(),
+  }).slice(0, 8);
+  return { token, title: `🚨 [SỰ CỐ] ${reason} · ${token}` };
+}
+
+/** Evict oldest insertions until the collection fits its ceiling. */
+function boundCache(collection, limit) {
+  const iterator = collection.keys();
+  while (collection.size > limit) {
+    const oldest = iterator.next();
+    if (oldest.done) break;
+    collection.delete(oldest.value);
+  }
+}
+
 export function registerPendingSkillProposal(approvalRecord) {
   const proposalId =
     approvalRecord.approval_id || approvalRecord.proposal?.proposal_id;
   if (proposalId) {
     globalThis[PENDING_PROPOSALS_KEY].set(proposalId, approvalRecord);
   }
+  const directProposalId =
+    approvalRecord.proposal_id || approvalRecord.proposal?.proposal_id;
+  if (directProposalId && directProposalId !== proposalId) {
+    globalThis[PENDING_PROPOSALS_KEY].set(directProposalId, approvalRecord);
+  }
+  boundCache(globalThis[PENDING_PROPOSALS_KEY], PENDING_PROPOSALS_LIMIT);
+}
+
+/**
+ * Drop a decided proposal from the cache. A proposal that reached a terminal
+ * state (MATERIALIZED / READY / INDEX_FAILED / REJECTED) is decided by the
+ * durable record on disk; keeping the stale in-memory copy alive would let
+ * `getPendingSkillProposal` answer for a proposal that no longer has one.
+ */
+export function forgetPendingSkillProposal(...proposalIds) {
+  for (const proposalId of proposalIds) {
+    if (proposalId) globalThis[PENDING_PROPOSALS_KEY]?.delete(proposalId);
+  }
 }
 
 export function getPendingSkillProposal(proposalId) {
   return globalThis[PENDING_PROPOSALS_KEY]?.get(proposalId) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Durable skill-proposal store.
+//
+// The file under the governed operator state directory
+// (`<ledgerRoot>/skill-proposals/<proposal_id>.json`) is AUTHORITATIVE for
+// pending skill proposals. The in-memory map above is a cache/index only:
+// after a process restart the proposal must still resolve from disk, replay
+// must still be rejected idempotently, and a missing record must fail
+// closed. Proposal ids are 32-hex digests, so the derived filename can
+// never escape the store directory.
+// ---------------------------------------------------------------------------
+
+const PROPOSAL_ID_PATTERN = /^[a-f0-9]{32}$/u;
+const CONTENT_SHA_PATTERN = /^[a-f0-9]{64}$/u;
+
+export function skillProposalFilePath(proposalStorageDir, proposalId) {
+  if (typeof proposalStorageDir !== "string" || !proposalStorageDir)
+    return null;
+  if (typeof proposalId !== "string" || !PROPOSAL_ID_PATTERN.test(proposalId))
+    return null;
+  return path.join(proposalStorageDir, `${proposalId}.json`);
+}
+
+export function skillApprovalFilePath(proposalStorageDir, proposalId) {
+  const proposalFile = skillProposalFilePath(proposalStorageDir, proposalId);
+  if (!proposalFile) return null;
+  return `${proposalFile}.approval.json`;
+}
+
+/**
+ * M12/T9 F-296: flush a directory's own entries.
+ *
+ * A rename is only durable once the PARENT DIRECTORY's entry for the new name
+ * has been flushed. The renamed file's own fsync does not do that: it makes
+ * the file's CONTENT durable, while the directory entry that makes the name
+ * visible survives a crash only if the directory itself was synced. The
+ * publication path below therefore fsyncs the file, renames it, and then
+ * fsyncs the parent directory - and it does so at EVERY rename site, because
+ * a rename without the directory flush can leave a durable file that no
+ * directory points at.
+ *
+ * The pattern is the one `topology/lib/runtime-backup.mjs` already uses.
+ * Windows cannot fsync a directory handle, so the platform error is swallowed
+ * there; every other error is re-thrown, because a publication that cannot
+ * guarantee its own durability must fail loudly rather than pretend.
+ */
+function syncDirectory(directory) {
+  let fd;
+  try {
+    fd = openSync(directory, "r");
+    fsyncSync(fd);
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !["EPERM", "EISDIR", "EINVAL", "ENOTSUP"].includes(error.code)
+    )
+      throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function writeJsonAtomicSync(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const fd = openSync(tmp, "w");
+  try {
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, filePath);
+  // F-296: the rename is not crash-durable until the parent directory entry
+  // is flushed. Every rename site in this file goes through this helper, so
+  // there is exactly one place where the durability step can be removed.
+  syncDirectory(path.dirname(filePath));
+}
+
+function readJsonStrictSync(filePath) {
+  return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+export function readDurableSkillProposal(proposalStorageDir, proposalId) {
+  const file = skillProposalFilePath(proposalStorageDir, proposalId);
+  if (!file) return null;
+  try {
+    const record = readJsonStrictSync(file);
+    if (!record || record.proposal_id !== proposalId) return null;
+    return record;
+  } catch {
+    // A partially written or corrupt file is never a valid proposal.
+    return null;
+  }
+}
+
+function rawContentSha256(text) {
+  return createHash("sha256")
+    .update(String(text ?? ""), "utf8")
+    .digest("hex");
+}
+
+/**
+ * Corroborates an approval binding against the durable proposal. A full
+ * 64-hex digest must match exactly; the compact 16-hex button fragment
+ * (Discord caps custom_id at 100 chars) must prefix the stored digest.
+ * This is corroboration only — the approval itself always binds the exact
+ * bytes read back from the durable store.
+ */
+function skillProposalBindingMatches(stored, contentSha256) {
+  if (!stored || typeof contentSha256 !== "string") return false;
+  return (
+    contentSha256 === stored.content_sha256 ||
+    (/^[a-f0-9]{16}$/u.test(contentSha256) &&
+      stored.content_sha256.startsWith(contentSha256))
+  );
 }
 
 const AGENT_DISPLAY_NAMES = {
@@ -170,7 +649,7 @@ const AGENT_DISPLAY_NAMES = {
 
 let skillAdapterModule = null;
 let knowledgeAdapterModule = null;
-let vectorSyncModule = null;
+let skillStoreModule = null;
 let duckDbBridgeModule = null;
 
 function resolveDefaultOllamaUrl() {
@@ -178,28 +657,52 @@ function resolveDefaultOllamaUrl() {
   return configured || null;
 }
 
+/**
+ * M12/T9 F-022: the deployed plugin must never resolve a module through a
+ * MACHINE-SPECIFIC absolute path.
+ *
+ * The candidate list used to carry this workstation's Windows mount
+ * (`/mnt/c/Users/<operator>/...`) as a literal. On a host where that mount
+ * exists, the deployed plugin loaded LIVE REPOSITORY SOURCE instead of its
+ * own digest-gated packaged assets, so a branch switch or an uncommitted edit
+ * changed governed behaviour with no redeploy and no digest change - and the
+ * one gate that looked for machine-specific paths never inspected the
+ * entrypoint that carried the literal.
+ *
+ * The resolution is now machine-independent: the configured root, the module's
+ * own tree, the working directory, and the nearest ANCESTOR of this module
+ * that carries the repository layout. Nothing in it names a machine.
+ */
 function findRepoRoot() {
+  const marker = path.join(
+    "zink-tools",
+    "adapters",
+    "skill-store",
+    "skill-adapter.mjs",
+  );
+  const carriesRepository = (root) => {
+    if (!root) return false;
+    try {
+      return existsSync(path.join(root, marker));
+    } catch {
+      return false;
+    }
+  };
   const candidates = [
     process.env.ZINK_REPO_ROOT,
-    "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool",
     path.resolve(fileURLToPath(import.meta.url), "../../../.."),
     process.cwd(),
   ];
-  for (const c of candidates) {
-    if (
-      c &&
-      existsSync(
-        path.join(
-          c,
-          "zink-tools",
-          "adapters",
-          "skill-store",
-          "skill-adapter.mjs",
-        ),
-      )
-    ) {
-      return c;
-    }
+  for (const candidate of candidates) {
+    if (carriesRepository(candidate)) return candidate;
+  }
+  // The nearest ancestor of this module that carries the repository layout.
+  let current = path.dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    if (carriesRepository(parent)) return parent;
+    current = parent;
   }
   return null;
 }
@@ -296,6 +799,12 @@ export function isIngressSenderAuthorized(context, ownerDiscordId) {
   if (context.isBot === true || context.author?.bot === true) {
     return { ok: false, reason: "BOT_INGRESS_DENIED" };
   }
+  // M10/T2-R5: the structured author bot flag forwarded from the Discord
+  // inbound event. Previously this check was vacuous at the native seam
+  // (neither field was ever forwarded); now bot authorship denies.
+  if (context.authorIsBot === true) {
+    return { ok: false, reason: "BOT_INGRESS_DENIED" };
+  }
   // An absent owner identity is a DENY, never an implicit allow. The previous
   // `ownerDiscordId && ...` guard skipped the comparison entirely when the owner
   // was unset, so any non-bot sender was admitted — the opposite default from
@@ -311,10 +820,247 @@ export function isIngressSenderAuthorized(context, ownerDiscordId) {
   return { ok: true };
 }
 
+// M12/T1-R1: replay detection after the identity stopped being a hash of the
+// origin message. A re-delivered Discord event used to be caught by recomputing
+// `deriveTaskId(origin)` and looking that up as the snapshot key; a minted
+// 12-character identity makes that impossible, so the same fact is now read from
+// the binding every WORKFLOW_OPENED already records.
+//
+// The match is deliberately the SAME set the old derivation consumed: origin,
+// principal ref, message id and agent. The session is NOT part of it, because the
+// old id did not include the session either, and that is what makes a second
+// session quoting the same message land on the existing task and be denied by the
+// duplicate guard instead of silently opening a second task.
+export function findTaskByOriginBinding(
+  snapshot,
+  { origin, origin_principal_ref, origin_message_id, root_agent_id } = {},
+) {
+  const tasks = snapshot?.tasks;
+  if (!tasks || typeof tasks !== "object") return null;
+  if (
+    typeof origin !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(String(origin_principal_ref ?? "")) ||
+    !/^[1-9][0-9]{16,19}$/u.test(String(origin_message_id ?? "")) ||
+    typeof root_agent_id !== "string"
+  ) {
+    return null;
+  }
+  for (const [taskId, task] of Object.entries(tasks)) {
+    if (!new RegExp(TASK_ID_PATTERN, "u").test(taskId)) continue;
+    if (
+      task?.origin === origin &&
+      task?.origin_principal_ref === origin_principal_ref &&
+      task?.origin_message_id === origin_message_id &&
+      task?.root_agent_id === root_agent_id
+    ) {
+      return taskId;
+    }
+  }
+  return null;
+}
+
+// M12/T1-R1: display token for an identity that may be either shape. The
+// 12-character code is short enough to show whole — and truncating it to its first
+// eight characters would leave only the date, so two same-day tasks would look
+// identical. A legacy 64-hex id keeps its 8-character prefix, which is what every
+// existing card and `res-<token>` id already carries.
+export function displayTaskToken(taskId) {
+  const value = String(taskId ?? "");
+  return isTaskCodeForm(value) ? value : value.slice(0, 8);
+}
+
+// M12/T1-R1 (owner option D): a specialist may report its OWN work to the owner.
+// Pure so the rule is testable without a live ledger: everything it reads is the
+// durable task record, never the message text, so a specialist cannot earn admission
+// by what it says.
+export function evaluateSpecialistProvenance({
+  agentId,
+  task = null,
+  delegationAgentId = null,
+  runId = null,
+  delegation = null,
+} = {}) {
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return { allowed: false, reason: "NO_AGENT_IDENTITY" };
+  }
+  if (!task || typeof task !== "object") {
+    return { allowed: false, reason: "TASK_NOT_KNOWN" };
+  }
+  if (delegationAgentId && delegationAgentId !== agentId) {
+    return { allowed: false, reason: "TASK_NOT_OWNED_BY_THIS_AGENT" };
+  }
+  if (!task.approved_at) {
+    return { allowed: false, reason: "TASK_NOT_APPROVED" };
+  }
+  const executing =
+    ["EXECUTING", "RESULT_PENDING_REVIEW"].includes(task.workflow_status) ||
+    (task.workflow_status === "ACTIVE" && Boolean(task.claimed_at));
+  if (!executing) {
+    return {
+      allowed: false,
+      reason: `TASK_NOT_EXECUTING:${task.workflow_status ?? "unknown"}`,
+    };
+  }
+  // F-OC-007: check if run is superseded
+  if (runId && delegation) {
+    if (
+      delegation.native_run_id !== runId &&
+      delegation.previous_native_run_ids?.includes(runId)
+    ) {
+      return {
+        allowed: false,
+        reason: `SUPERSEDED_RUN:${runId}`,
+      };
+    }
+  }
+
+  return { allowed: true, taskId: task.task_id ?? null };
+}
+
 // M8-061: caller identity always derives from trusted runtime context.
 // Tool payload may carry business metadata, never authority identity.
 export function deriveTrustedRequester(_id) {
   return _id?.agent ?? _id?.agentId ?? "unknown";
+}
+
+// M12/T9 F-041: the memory/skill tools' correlation identity is the TRUSTED
+// runtime context, never the tool payload.
+//
+// The registered schemas advertised `session_key`, `run_id` and `task_id` as
+// model-fillable, and the executors read the payload FIRST (the payload's
+// session key won over the trusted one), so a model could name the run its
+// own retrieval was scoped to. The identity now comes from the trusted
+// context alone, and a payload that carries a correlation key has it REFUSED:
+// the key is dropped before the adapter sees the input, the refusal is named
+// (the field only - never the value), and the trusted correlation always
+// reaches the adapter.
+const TRUSTED_IDENTITY_FIELDS = Object.freeze([
+  "session_key",
+  "run_id",
+  "task_id",
+]);
+
+export function deriveTrustedToolIdentity(_id, params = null) {
+  const input = { ...(params ?? {}) };
+  const refused = [];
+  for (const field of TRUSTED_IDENTITY_FIELDS) {
+    if (!Object.hasOwn(input, field)) continue;
+    refused.push(field);
+    delete input[field];
+  }
+  return {
+    input,
+    refused,
+    context: {
+      sessionKey: _id?.sessionKey || "unbound-session",
+      runId: _id?.runId || "unbound-run",
+      taskId: _id?.taskId || "unbound-task",
+      requestingAgent: deriveTrustedRequester(_id),
+    },
+  };
+}
+
+// M12/T9 F-227: the owner-visible task code IS the task identity, so it is
+// minted from a cryptographic byte source. The ambient PRNG is not a source of
+// authority: it is not unpredictable and it is not reproducible for a forensic
+// re-derivation, which is exactly what `topology/lib/canonical.mjs` documents
+// as forbidden for an identity.
+//
+// The alphabet has 21 symbols, so a plain byte modulo 21 would bias the first
+// five values. Rejection sampling removes the bias: a byte at or above the
+// largest multiple of 21 is discarded and another one is drawn.
+export function createTaskCodeRandomSource() {
+  const limit = 256 - (256 % TASK_CODE_ALPHABET.length);
+  return () => {
+    for (;;) {
+      const byte = randomBytes(1)[0];
+      if (byte < limit) return byte % TASK_CODE_ALPHABET.length;
+    }
+  };
+}
+
+// M12/T9 F-109: the announce seam READS the publish verdict.
+//
+// The seam used to await the publish and throw its verdict away, so a card
+// that was never published was indistinguishable from one that was: the host
+// was told the announcement was delivered when it never left the process, and
+// an unparsable payload dropped with no log line at all.
+//
+// The verdict is the ONE source of truth for the publish outcome:
+//   - `PUBLISHED`     - the card is in the owner's forum; the host's decision
+//                       (the guard's) stands.
+//   - `NOT_APPLICABLE`- this announce was never a governed approval card; the
+//                       host's decision stands.
+//   - `BLOCKED`       - a governed card was expected and could not be
+//                       published. The announce is DISCARDED with the declared
+//                       runtime reason, so the host is never told a card it
+//                       cannot act on was delivered.
+export function resolveAnnouncePublishDecision({ decision, verdict } = {}) {
+  if (verdict?.status === "BLOCKED") {
+    return { action: "discard", reason: verdict.error };
+  }
+  return decision;
+}
+
+// M12/T9 F-104: the account that opens an #approvals thread is the one the
+// LEDGER assigned to the task.
+//
+// The posting account used to be parsed out of the event's child session key
+// (`/^agent:([^:]+)/`), so an announce could name an account the ledger never
+// assigned to that task and the card was re-routed to another bot's token.
+// The ledger's own owning run is the authority: a coordinator run names its
+// coordinator, a delegation names its agent, and the root run names the root
+// agent. The event's claim is only ever a CLAIM: it may select an agent when
+// it agrees with the ledger, and a disagreement is refused.
+//
+// The refusals use DECLARED runtime reason codes (see
+// `topology/policy/reason-code-matrix.json`): EXACT_TASK_CORRELATION_REQUIRED
+// when the ledger owns no run for this announce, UNAUTHORIZED_TARGET when the
+// event claims an account the ledger did not assign.
+const GOVERNED_COORDINATOR_ACCOUNTS = Object.freeze(["o1", "o2"]);
+
+export function resolveGovernedAnnouncementAccount({
+  owner,
+  eventAgentId = null,
+} = {}) {
+  const ledgerAgentId =
+    owner?.coordinatorRun?.coordinator ??
+    owner?.delegation?.agent_id ??
+    owner?.task?.root_agent_id ??
+    null;
+  if (!ledgerAgentId) {
+    return { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" };
+  }
+  if (eventAgentId && eventAgentId !== ledgerAgentId) {
+    return { status: "BLOCKED", error: "UNAUTHORIZED_TARGET" };
+  }
+  if (!GOVERNED_COORDINATOR_ACCOUNTS.includes(ledgerAgentId)) {
+    return { status: "NOT_APPLICABLE", agentId: ledgerAgentId };
+  }
+  return { status: "COORDINATOR", agentId: ledgerAgentId };
+}
+
+/**
+ * M12/T9 F-021: the pickup lane's eligibility is decided WHEN work could be
+ * claimed, not once at `register()` time.
+ *
+ * The loop used to be started only when the ledger snapshot already existed at
+ * registration, so a snapshot created afterwards (a first install, or a
+ * guarded lock/snapshot recovery - exactly the state the owner's recovery
+ * procedures leave behind) left the coordinator lane dark until a restart.
+ *
+ * The reader answers "no tasks" while the snapshot is absent, so an absent
+ * snapshot still refuses to claim anything, and a snapshot that appears later
+ * makes the lane eligible on the next tick - no restart, no second scheduler.
+ */
+export function readPickupLedgerTasks({ paths } = {}) {
+  try {
+    if (!paths?.snapshot || !existsSync(paths.snapshot)) return {};
+    return readSnapshot(paths).tasks ?? {};
+  } catch {
+    // An unreadable ledger is never a claim: the lane stays idle.
+    return {};
+  }
 }
 
 // M7-071/M8-062: missing-backend envelope — explicit unavailable/blocked,
@@ -341,26 +1087,23 @@ export function adapterUnavailableResponse(tool, error) {
 let sqlValidatorModule = null;
 let pathSafetyModule = null;
 
+// M12/T9 F-024: the plugin and the guard used to have TWO resolvers for the
+// same zink-tools dependencies — the plugin walked up to a repo root (with a
+// machine-specific absolute path in the list) and the guard resolved from its
+// own module directory plus the working directory — so the same module could
+// be loaded from two different trees and the two copies could disagree about
+// the same decision. There is now ONE resolver, in the guard, and the plugin
+// hands it the repo root it found.
 async function loadRepoModule(relativePath) {
-  const attempts = [];
+  let root = null;
   try {
-    const root = findRepoRoot();
-    if (root) attempts.push(pathToFileURL(path.join(root, relativePath)).href);
+    root = findRepoRoot();
   } catch {
     /* ignore */
   }
-  attempts.push(
-    new URL(`../../../../${relativePath}`, import.meta.url).href,
-    pathToFileURL(path.resolve(process.cwd(), relativePath)).href,
-  );
-  for (const href of attempts) {
-    try {
-      return await import(href);
-    } catch {
-      /* next candidate */
-    }
-  }
-  return null;
+  return loadSharedGovernanceModule(relativePath, {
+    roots: root ? [root] : [],
+  });
 }
 
 export async function validateLiveSqlQuery(query, parameters) {
@@ -397,37 +1140,67 @@ export async function validateLiveArtifactPath(logicalPath) {
   }
 }
 
-async function getVectorSyncModule() {
-  if (!vectorSyncModule) {
-    const root = findRepoRoot();
-    if (root) {
-      try {
-        const p = path.join(root, "zink-skill-store/src/vector-sync.mjs");
-        vectorSyncModule = await import(pathToFileURL(p).href);
-      } catch (err) {
-        console.error("[zink-governance] Failed to import vector sync:", err);
-      }
-    }
-    if (!vectorSyncModule) {
-      try {
-        vectorSyncModule = await import(
-          new URL(
-            "../../../../zink-skill-store/src/vector-sync.mjs",
-            import.meta.url,
-          ).href
-        );
-      } catch {
-        try {
-          vectorSyncModule = await import(
-            path.resolve(process.cwd(), "zink-skill-store/src/vector-sync.mjs")
-          );
-        } catch {
-          // Module not accessible in isolated test directory
-        }
-      }
+/**
+ * M12/T9 F-156: the Skill Store's PUBLIC DOOR.
+ *
+ * The plugin used to load the store's internals (the catalog and the
+ * vector-sync modules under the store's own `src/` tree) by relative path,
+ * with its own three-candidate fallback chain. That welded
+ * the plugin to the store's private file layout: the OpenClaw tree had no
+ * governed Skill Store boundary at all, and a rename inside `src/` broke the
+ * plugin.
+ *
+ * The store now publishes ONE public module - `zink-skill-store/index.mjs` -
+ * which exports exactly the three entry points a caller needs (the canonical
+ * promotion, the store-wide writer lock and the derived pgvector sync). The
+ * plugin loads THAT module, through the ONE shared-module resolver, so the
+ * repository layout and the packaged tree resolve it the same way.
+ */
+async function getSkillStoreModule() {
+  if (!skillStoreModule) {
+    skillStoreModule = await loadRepoModule("zink-skill-store/index.mjs");
+    if (!skillStoreModule) {
+      console.error(
+        "[zink-governance] Skill Store public module is unavailable",
+      );
     }
   }
-  return vectorSyncModule;
+  return skillStoreModule;
+}
+
+/**
+ * M12/T9 F-156/F-176: the derived-index sync, through the Skill Store's public
+ * door.
+ *
+ * `expectedStoreId` is the identity of the store this deployment means to
+ * sync. It is operator configuration, never a constant: an unconfigured
+ * deployment syncs without naming the store, and the sync then refuses the
+ * zero-row tombstone instead of guessing.
+ */
+async function syncSkillsThroughDoor(skillsRoot, options, expectedStoreId) {
+  const skillStore = await getSkillStoreModule();
+  if (!skillStore || typeof skillStore.syncSkillsToVectorStore !== "function") {
+    throw new Error(
+      "SKILL_STORE_PUBLIC_MODULE_UNAVAILABLE: the Skill Store public module is unavailable",
+    );
+  }
+  // M12/T9 F-094 (R5-E03-07) / H5: the `skills.*` schema belongs to the
+  // Skill Store now, so the store's OWN migrations are applied through the
+  // same door before the derived index is synced. A deployment that never
+  // applied them has no schema to sync into, and the sync would fail on the
+  // missing table instead of on a missing migration step.
+  //
+  // The runner is idempotent: it applies only the files its own ledger does
+  // not name yet, and it refuses a file whose bytes changed after it was
+  // applied.
+  if (typeof skillStore.applySkillStoreMigrations === "function") {
+    await skillStore.applySkillStoreMigrations(options);
+  }
+  return skillStore.syncSkillsToVectorStore({
+    skillsRoot,
+    ...options,
+    expectedStoreId,
+  });
 }
 
 async function getDuckDbBridge() {
@@ -467,7 +1240,12 @@ export async function handleOwnerSkillApproval({
   ownerDiscordId,
   proposalId,
   contentSha256,
+  namespace,
+  capability,
+  version,
+  subjectType = APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
   skillsRoot,
+  proposalStorageDir,
   // No default, deliberately. A hardcoded default would place a real account
   // identifier in production source — forbidden outside `tests/` by this
   // repository's own `.gitleaks.toml` — and, worse, would keep authorizing that
@@ -475,9 +1253,26 @@ export async function handleOwnerSkillApproval({
   // parameter is required so the exact-identity binding is always explicit, and
   // an omitted value fails the comparison below and denies the approval.
   expectedOwnerId,
+  // M11/T1-R1 (2.4): deliberately no default. A hardcoded default stamped a
+  // false plan reference into EVERY promoted skill's canonical lifecycle,
+  // and kept authorizing approvals whenever a caller forgot to bind the
+  // real decision. The ref is required and validated below; an omitted or
+  // blank value denies the approval before any durable read.
+  decisionRef,
+  // F-OC-012 (owner decision 2026-11-04, option A+B): an explicit
+  // owner-attested provenance. No default: absent means "use what the
+  // proposal declared", and a proposal that declared none requires this.
+  sourceType,
   options = {},
 }) {
-  // Exact owner snowflake binding (BUG-06)
+  // Distinct governance subject: a skill approval is never an execution-plan
+  // approval and vice versa. The wrong subject on this path is denied.
+  if (subjectType !== APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL) {
+    throw new Error(
+      "APPROVAL_SUBJECT_MISMATCH: expected SKILL_CANDIDATE_APPROVAL on the skill approval path",
+    );
+  }
+  // Exact owner snowflake binding (BUG-06). An absent owner identity denies.
   if (ownerDiscordId !== expectedOwnerId) {
     throw new Error(
       "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot approve skills",
@@ -488,83 +1283,1049 @@ export async function handleOwnerSkillApproval({
       "APPROVAL_PROPOSAL_ID_REQUIRED: Missing proposal ID binding",
     );
   }
-  if (!contentSha256 || !/^[a-f0-9]{64}$/u.test(contentSha256)) {
+  if (!contentSha256 || !CONTENT_SHA_PATTERN.test(contentSha256)) {
     throw new Error(
       "APPROVAL_CONTENT_HASH_INVALID: Content hash must be 64-character SHA-256",
     );
   }
-
-  // K18: Distinct approval transaction identity
-  const approvalTransactionId = `appr_${createHash("sha256").update(`${proposalId}:${contentSha256}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
-
-  // K19 & K22: Proposal record verification
-  const pendingRecord =
-    options.proposalRecord || getPendingSkillProposal(proposalId);
-  if (pendingRecord) {
-    const recContentSha =
-      pendingRecord.content_sha256 ||
-      pendingRecord.proposal?.content_sha256 ||
-      pendingRecord.contentSha256;
-    if (recContentSha && recContentSha !== contentSha256) {
-      throw new Error(
-        "APPROVAL_PROPOSAL_MISMATCH: Content hash does not match approved proposal record",
-      );
-    }
-    const recProposalId =
-      pendingRecord.proposal_id ||
-      pendingRecord.approval_id ||
-      pendingRecord.proposal?.proposal_id;
-    if (recProposalId && recProposalId !== proposalId) {
-      throw new Error(
-        "APPROVAL_PROPOSAL_MISMATCH: Proposal ID does not match registered record",
-      );
-    }
-  }
-
-  // K21: Verify skill exists if skillsRoot provided and skill target specified
-  if (
-    skillsRoot &&
-    options.capability &&
-    options.namespace &&
-    options.version
-  ) {
-    const nsParts = Array.isArray(options.namespace)
-      ? options.namespace
-      : [options.namespace];
-    const skillPath = path.join(
-      skillsRoot,
-      ...nsParts,
-      options.capability,
-      options.version,
-      "SKILL.md",
-    );
-    if (!existsSync(skillPath)) {
-      throw new Error(
-        `APPROVAL_SKILL_VERSION_MISSING: Skill version ${options.version} not found in store`,
-      );
-    }
-  }
-
-  // K20: Vector sync module availability (Fail-Closed)
-  const syncMod = await getVectorSyncModule();
-  if (!syncMod || typeof syncMod.syncSkillsToVectorStore !== "function") {
+  if (typeof decisionRef !== "string" || decisionRef.trim().length === 0) {
     throw new Error(
-      "VECTOR_SYNC_UNAVAILABLE: Cannot complete approval without vector sync module",
+      "APPROVAL_DECISION_REF_REQUIRED: an explicit plan decision reference must bind the approval",
+    );
+  }
+  const nsArray = Array.isArray(namespace)
+    ? namespace
+    : typeof namespace === "string" && namespace
+      ? [namespace]
+      : null;
+  if (
+    !nsArray ||
+    typeof capability !== "string" ||
+    typeof version !== "string"
+  ) {
+    throw new Error(
+      "APPROVAL_IDENTITY_REQUIRED: namespace, capability and version must bind the approval",
+    );
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  if (!skillsRoot || typeof skillsRoot !== "string") {
+    throw new Error(
+      "SKILLS_ROOT_REQUIRED: canonical Skill Store root is required",
     );
   }
 
-  // K23: Atomic proposal -> approval -> vector-sync transition
-  const syncResult = await syncMod.syncSkillsToVectorStore({
-    skillsRoot,
-    ...options,
+  // The durable record is authoritative. A missing, unreadable or partial
+  // record fails closed — it is never treated as "probably okay".
+  const stored = readDurableSkillProposal(storeDir, proposalId);
+  if (!stored) {
+    throw new Error(
+      "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this approval",
+    );
+  }
+
+  // Exact proposal binding: identity and content must all match.
+  const storedNs = Array.isArray(stored.namespace)
+    ? stored.namespace
+    : [stored.namespace];
+  if (
+    stored.content_sha256 !== contentSha256 ||
+    storedNs.join("/") !== nsArray.join("/") ||
+    stored.capability !== capability ||
+    stored.version !== version
+  ) {
+    throw new Error(
+      "APPROVAL_PROPOSAL_MISMATCH: approval does not bind the stored proposal exactly",
+    );
+  }
+
+  // Terminal and lifecycle states.
+  if (stored.status === "REJECTED") {
+    throw new Error("APPROVAL_PROPOSAL_REJECTED: candidate was rejected");
+  }
+  if (
+    typeof stored.expires_at === "string" &&
+    Number.isFinite(Date.parse(stored.expires_at)) &&
+    Date.parse(stored.expires_at) <= Date.now()
+  ) {
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        status: "EXPIRED",
+      });
+    } catch {
+      /* best effort */
+    }
+    throw new Error("APPROVAL_PROPOSAL_EXPIRED: candidate is expired");
+  }
+  if (stored.status === "EXPIRED") {
+    throw new Error("APPROVAL_PROPOSAL_EXPIRED: candidate is expired");
+  }
+  if (stored.status === "CONFLICTED") {
+    throw new Error(
+      "APPROVAL_SKILL_CONFLICT: candidate conflicts with canonical state",
+    );
+  }
+  if (
+    stored.status !== "CANDIDATE" &&
+    stored.status !== "APPROVED" &&
+    stored.status !== "MATERIALIZED" &&
+    stored.status !== "READY"
+  ) {
+    throw new Error(
+      `APPROVAL_PROPOSAL_STATE_INVALID: unexpected status ${stored.status}`,
+    );
+  }
+
+  // F-OC-012 (owner decision 2026-11-04, option A+B): resolve the provenance
+  // BEFORE the replay check, so an approval replay cannot attest a different
+  // source type than the record it is replaying. The proposal's declaration is
+  // the default only in the sense that it is the value the author already
+  // declared; a proposal without one is approvable only when the owner
+  // supplies it here.
+  const declaredSourceType =
+    typeof stored.source_type === "string" && stored.source_type.trim()
+      ? stored.source_type.trim()
+      : null;
+  // A supplied-but-blank override is not an attestation; only a non-blank
+  // value changes who is recorded as the attester.
+  const ownerSourceType =
+    typeof sourceType === "string" && sourceType.trim()
+      ? sourceType.trim()
+      : null;
+  const approvedSourceType = ownerSourceType ?? declaredSourceType;
+  if (!approvedSourceType) {
+    throw new Error(
+      "APPROVAL_SOURCE_TYPE_REQUIRED: the proposal declares no provenance source_type and the owner did not attest one",
+    );
+  }
+  const sourceTypeAttestedBy = ownerSourceType
+    ? "owner-at-approval"
+    : "proposal";
+  const provenanceAttestation = Object.freeze({
+    source_type: approvedSourceType,
+    source_type_attested_by: sourceTypeAttestedBy,
   });
 
-  return {
-    ...syncResult,
+  // Idempotent replay: the exact same approval binding already completed.
+  const approvalFile = skillApprovalFilePath(storeDir, proposalId);
+  let completed = null;
+  try {
+    completed = readJsonStrictSync(approvalFile);
+  } catch {
+    /* absent or unreadable: no completed approval */
+  }
+  if (completed?.approval_status === "APPROVED") {
+    const sameBinding =
+      completed.proposal_id === proposalId &&
+      completed.content_sha256 === contentSha256 &&
+      (completed.namespace ?? []).join("/") === nsArray.join("/") &&
+      completed.capability === capability &&
+      completed.version === version &&
+      (completed.provenance?.approved_source_type ?? null) ===
+        approvedSourceType;
+    if (!sameBinding) {
+      throw new Error(
+        "APPROVAL_PROPOSAL_MISMATCH: a different approval already consumed this proposal id",
+      );
+    }
+    // The canonical record must still hold the approved bytes. Approval
+    // replay after canonical tampering is drift, not idempotent success.
+    try {
+      const canonicalBytes = readFileSync(
+        path.join(skillsRoot, ...nsArray, capability, version, "SKILL.md"),
+      );
+      if (rawContentSha256(canonicalBytes) !== contentSha256) {
+        throw new Error(
+          "APPROVAL_CANONICAL_DRIFT: canonical bytes no longer match the approved digest",
+        );
+      }
+    } catch (error) {
+      if (error?.message?.startsWith("APPROVAL_CANONICAL_DRIFT")) throw error;
+      throw new Error(
+        `APPROVAL_CANONICAL_DRIFT: canonical record is unreadable (${error?.code ?? error?.message})`,
+        { cause: error },
+      );
+    }
+    return { ...completed, idempotent: true };
+  }
+
+  // The owner approves the exact bytes that will be persisted.
+  if (
+    typeof stored.content !== "string" ||
+    rawContentSha256(stored.content) !== contentSha256
+  ) {
+    throw new Error(
+      "APPROVAL_PROPOSAL_MISMATCH: durable content does not match the approved digest",
+    );
+  }
+
+  // Canonical Skill Store write is the source-of-truth commit point.
+  // Trusted internal promotion only: agents propose, governance promotes.
+  const skillStore = await getSkillStoreModule();
+  const promoteApproved = skillStore?.promoteApprovedSkill;
+  const underWriterLock = skillStore?.withSkillStoreWriterLock;
+  if (
+    typeof promoteApproved !== "function" ||
+    typeof underWriterLock !== "function"
+  ) {
+    throw new Error(
+      "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
+    );
+  }
+  // F-OC-012: the store owns the provenance vocabulary, and the adapter module
+  // re-exports it. An owner attestation is checked against that same set before
+  // anything durable is written, so an invalid override is refused by name
+  // rather than surfacing later as a store identity error.
+  const skillMod = await getSkillAdapter();
+  const provenanceSourceTypes = skillMod?.PROVENANCE_SOURCE_TYPES;
+  if (
+    !Array.isArray(provenanceSourceTypes) ||
+    !provenanceSourceTypes.includes(approvedSourceType)
+  ) {
+    throw new Error(
+      "APPROVAL_SOURCE_TYPE_INVALID: the approved provenance source_type is not in the store's vocabulary",
+    );
+  }
+  // M11/T1-R1 (2.3): heal → validate → clash-check → staging write → rename →
+  // proposal-status write form ONE critical section under the store-wide
+  // writer lock, so two concurrent approvals (or an approval racing a
+  // rejection or a CLI promotion) cannot interleave clash-check and rename
+  // and fork the canonical tree. The lock is taken exactly here and the
+  // door's refusing `promoteApprovedSkill` — bound from the public door
+  // `zink-skill-store/index.mjs`, which requires the held lock and delegates
+  // to the Unlocked variant — is called inside it. The store's acquiring
+  // wrapper `promoteApprovedSkillWithLock` takes the same lock itself, so
+  // calling THAT from within this section would self-deadlock into
+  // FILE_LOCK_TIMEOUT. The async seam is used rather than the sync one
+  // because the guarded work is async — the sync seam would release while
+  // writes were still in flight.
+  const boundDecisionRef = decisionRef.trim();
+  const planProvenanceRef = boundDecisionRef.replace(/^PLAN:/u, "");
+  const canonical = await underWriterLock(skillsRoot, async () => {
+    // Re-read inside the critical section: a rejection committed by another
+    // process after the checks above must never be overwritten by this one.
+    const current = readDurableSkillProposal(storeDir, proposalId);
+    if (current?.status === "REJECTED") {
+      throw new Error("APPROVAL_PROPOSAL_REJECTED: candidate was rejected");
+    }
+    // F-OC-012: persist the resolved provenance before the canonical write, so
+    // a retry after a partial failure reuses the same attestation instead of
+    // asking the owner again or falling back to a constant.
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...(current ?? stored),
+        ...provenanceAttestation,
+      });
+    } catch {
+      /* best effort: canonical state remains authoritative */
+    }
+    let promoted;
+    try {
+      promoted = await promoteApproved({
+        skillsRoot,
+        namespace: nsArray,
+        capability,
+        version,
+        content: stored.content,
+        requestingActor: stored.requesting_agent ?? "unknown",
+        ownerActor: "owner",
+        decisionRef: boundDecisionRef,
+        // F-OC-012: the provenance the owner approved, declared by the author
+        // or explicitly attested at approval — never a constant.
+        sourceType: approvedSourceType,
+        // M11/T1-R1 (2.4): provenance is derived from the ref this approval
+        // actually carries — never a constant.
+        references: [{ type: "plan", ref: planProvenanceRef }],
+      });
+    } catch (error) {
+      if (
+        error?.code === "SKILL_ACTIVE_CONFLICT" ||
+        error?.code === "SKILL_VERSION_CONFLICT"
+      ) {
+        try {
+          writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+            ...stored,
+            ...provenanceAttestation,
+            status: "CONFLICTED",
+          });
+        } catch {
+          /* best effort */
+        }
+        throw new Error(
+          `APPROVAL_SKILL_CONFLICT: ${error?.message ?? "canonical conflict"}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    }
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        ...provenanceAttestation,
+        status: "MATERIALIZED",
+      });
+    } catch {
+      /* best effort: canonical truth already holds */
+    }
+    return promoted;
+  });
+
+  // pgvector is derived from canonical ACTIVE state, never the reverse. A
+  // sync failure keeps the canonical record authoritative and is reported
+  // as a derived-index failure; it never rolls the canonical write back.
+  // M12/T9 F-176: the derived-index sync must be told WHICH store it is
+  // talking to. The identity is operator configuration - the store carries its
+  // own identity beside its root, and the deployment names the store it
+  // expects - and it is never a constant in the source. An unconfigured
+  // deployment syncs without naming the store, and the sync then refuses the
+  // zero-row tombstone instead of guessing which store it holds.
+  const expectedStoreId =
+    typeof options.expectedStoreId === "string" &&
+    options.expectedStoreId.trim() !== ""
+      ? options.expectedStoreId.trim()
+      : (process.env.ZINK_SKILL_STORE_ID ?? "").trim() || undefined;
+  let vectorSync;
+  try {
+    const report = options.vectorSyncFn
+      ? await options.vectorSyncFn({
+          skillsRoot,
+          proposal: { ...stored, ...provenanceAttestation },
+        })
+      : await syncSkillsThroughDoor(skillsRoot, options, expectedStoreId);
+    vectorSync = {
+      status: report?.status ?? "UNKNOWN",
+      synced_count: report?.synced_count ?? 0,
+    };
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        ...provenanceAttestation,
+        status: report?.status === "READY" ? "READY" : "INDEX_FAILED",
+      });
+    } catch {
+      /* best effort */
+    }
+  } catch (error) {
+    vectorSync = {
+      status: "FAILED",
+      error: String(error?.message ?? error).slice(0, 500),
+    };
+    try {
+      writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+        ...stored,
+        ...provenanceAttestation,
+        status: "INDEX_FAILED",
+      });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  // K18: distinct approval transaction identity for this governance act.
+  const approvalTransactionId = `appr_${createHash("sha256")
+    .update(
+      `${proposalId}:${contentSha256}:${Date.now()}:${randomBytes(8).toString("hex")}`,
+    )
+    .digest("hex")
+    .slice(0, 24)}`;
+  const record = {
     approval_transaction_id: approvalTransactionId,
     proposal_id: proposalId,
+    content_sha256: contentSha256,
+    namespace: nsArray,
+    capability,
+    version,
+    subject_type: APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
     approval_status: "APPROVED",
+    provenance: {
+      declared_source_type: declaredSourceType,
+      approved_source_type: approvedSourceType,
+      attested_by: sourceTypeAttestedBy,
+      overridden: declaredSourceType !== approvedSourceType,
+    },
+    // The approved provenance is bound into the same scope digest the packet
+    // carries, re-derived with the value the owner actually attested.
+    approval_scope_digest: canonicalHash(
+      "zink-approval-scope-v1",
+      `skills/${nsArray.join("/")}/${capability}@${version}|SKILL_CANDIDATE_APPROVAL|${proposalId}:${contentSha256}|${approvedSourceType}`,
+    ),
+    canonical,
+    vector_sync: vectorSync,
+    approved_at: new Date().toISOString(),
   };
+  try {
+    writeJsonAtomicSync(approvalFile, record);
+  } catch {
+    /* best effort: canonical truth already holds */
+  }
+  // M11/T1-R1 (4.2): the durable record just written (MATERIALIZED / READY /
+  // INDEX_FAILED) is terminal for this proposal, so it leaves the pending cache
+  // instead of being re-stamped as READY. Replaying the approval still fails
+  // closed on the disk state, and `getPendingSkillProposal` now answers only
+  // for proposals that are genuinely still pending.
+  forgetPendingSkillProposal(proposalId, stored.proposal_id);
+  return record;
+}
+
+/**
+ * Owner confirmation for a taught decision candidate.
+ *
+ * USER EXPLICITLY TEACHES -> candidate (untrusted, unpersisted) ->
+ * classification -> OWNER CONFIRMS -> DecisionLedger persists -> a new
+ * session looks it up. Only `preference-decision` candidates land in the
+ * ledger; every other classification is routed elsewhere and this call
+ * persists nothing. Observed answers alone never reach the ledger: only
+ * this owner-confirmed path writes.
+ */
+export async function handleOwnerDecisionConfirmation({
+  senderId,
+  config,
+  candidate,
+  ledgerStoragePath,
+  mode = "record",
+  options = {},
+}) {
+  const ownerId = resolveOwnerDiscordId(config);
+  if (!ownerId || senderId !== ownerId) {
+    throw new Error(
+      "DECISION_OWNER_MISMATCH: only the owner can confirm memory",
+    );
+  }
+  if (!candidate || typeof candidate !== "object") {
+    throw new Error("DECISION_CANDIDATE_REQUIRED");
+  }
+  const { MEMORY_CLASSIFICATIONS: classifications } =
+    await import("../../lib/decision-ledger.mjs");
+  if (!classifications.includes(candidate.classification)) {
+    throw new Error(
+      "DECISION_CANDIDATE_AMBIGUOUS: classification is required before memory may form",
+    );
+  }
+  if (candidate.classification !== "preference-decision") {
+    const routes = {
+      "reusable-procedure": "SKILL_PROPOSAL_PATH",
+      "factual-knowledge": "KNOWLEDGE_GOVERNANCE_PATH",
+      "operational-state": "WORKFLOW_STATE_ONLY",
+    };
+    const notes = {
+      "reusable-procedure":
+        "Use proposeSkillFromTeaching to create a governed skill candidate; nothing was persisted by this call.",
+      "factual-knowledge":
+        "User-written Knowledgebase persistence is intentionally deferred in M8/T3: the Knowledgebase adapter forbids ingestion/update by contract and the human-owned Vault is read-only. This routing persists nothing and must not be reported as stored knowledge.",
+      "operational-state":
+        "Current task/execution state only; never long-term memory. Nothing was persisted.",
+    };
+    return {
+      status: "ROUTED",
+      route: routes[candidate.classification] ?? "UNKNOWN",
+      persisted: false,
+      note: notes[candidate.classification] ?? "Nothing was persisted.",
+    };
+  }
+  const storagePath =
+    ledgerStoragePath ??
+    options.ledgerStoragePath ??
+    (path.isAbsolute(config?.ledgerRoot ?? "")
+      ? path.join(config.ledgerRoot, "decision-ledger.json")
+      : null);
+  if (!storagePath) {
+    throw new Error(
+      "DECISION_STORE_UNAVAILABLE: decision ledger path is not configured",
+    );
+  }
+  const { DecisionLedger } = await import("../../lib/decision-ledger.mjs");
+  const ledger = new DecisionLedger({ storagePath });
+  if (mode === "correct") {
+    const corrected = ledger.correctDecision({
+      topic: candidate.topic,
+      question: candidate.question,
+      decision: candidate.proposed_decision,
+      scope: candidate.scope,
+      confirmedBy: ownerId,
+      context: {
+        ...(candidate.context ?? {}),
+        ...(candidate.task_id ? { taskId: candidate.task_id } : {}),
+        ...(candidate.domain ? { domain: candidate.domain } : {}),
+        candidate_key: candidate.candidate_key,
+      },
+      tags: ["owner-confirmed", "correction"],
+    });
+    return {
+      status: "CORRECTED",
+      decision: corrected,
+      persisted: true,
+    };
+  }
+  if (mode !== "record") {
+    throw new Error(`DECISION_MODE_INVALID: unknown mode ${mode}`);
+  }
+  const recorded = ledger.recordDecision({
+    topic: candidate.topic,
+    question: candidate.question,
+    decision: candidate.proposed_decision,
+    scope: candidate.scope,
+    confirmedBy: ownerId,
+    context: {
+      ...(candidate.context ?? {}),
+      ...(candidate.task_id ? { taskId: candidate.task_id } : {}),
+      ...(candidate.domain ? { domain: candidate.domain } : {}),
+      candidate_key: candidate.candidate_key,
+    },
+    tags: ["owner-confirmed"],
+  });
+  return { status: "RECORDED", decision: recorded, persisted: true };
+}
+
+/**
+ * Bridges an owner-confirmed reusable-procedure teaching into the existing
+ * governed skill proposal infrastructure. The teaching must already carry
+ * classification `reusable-procedure` (anything else fails closed here);
+ * the exact procedure bytes become a CANDIDATE proposal that still needs
+ * owner approval — this bridge never activates anything by itself.
+ */
+export async function proposeSkillFromTeaching({
+  teaching,
+  namespace,
+  capability,
+  version,
+  content,
+  reason,
+  // F-OC-012 (owner decision 2026-11-04): the teaching path declares the
+  // provenance it is actually creating. No default: a teaching that does not
+  // name its source type fails closed before a proposal exists.
+  sourceType,
+  requestingAgent,
+  proposalStorageDir,
+  context = {},
+  options = {},
+}) {
+  if (!teaching || teaching.classification !== "reusable-procedure") {
+    throw new Error(
+      "TEACHING_NOT_A_SKILL: only reusable-procedure teachings may enter the skill proposal path",
+    );
+  }
+  const nsArray =
+    namespace ??
+    (Array.isArray(teaching.namespace)
+      ? teaching.namespace
+      : typeof teaching.namespace === "string"
+        ? [teaching.namespace]
+        : null);
+  const capabilitySlug = capability ?? teaching.capability;
+  const versionString = version ?? teaching.version;
+  const procedureBytes = content ?? teaching.content;
+  if (
+    !nsArray ||
+    typeof capabilitySlug !== "string" ||
+    typeof versionString !== "string" ||
+    typeof procedureBytes !== "string" ||
+    !procedureBytes.trim()
+  ) {
+    throw new Error(
+      "TEACHING_CONTENT_REQUIRED: namespace, capability, version and exact procedure bytes are required",
+    );
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  if (typeof sourceType !== "string" || !sourceType.trim()) {
+    throw new Error(
+      "TEACHING_SOURCE_TYPE_REQUIRED: the teaching path must declare the skill's provenance source_type",
+    );
+  }
+  const skillMod = await getSkillAdapter();
+  const Adapter = skillMod?.SkillAdapter;
+  if (typeof Adapter !== "function") {
+    throw new Error(
+      "SKILL_ADAPTER_UNAVAILABLE: cannot propose without the skill adapter",
+    );
+  }
+  const adapter = new Adapter(undefined, {
+    proposalStorageDir: storeDir,
+    ...options,
+  });
+  const result = await adapter.querySkillStore(
+    {
+      action: "propose",
+      namespace: nsArray,
+      capability: capabilitySlug,
+      version: versionString,
+      content: procedureBytes,
+      reason:
+        reason ?? teaching.reason ?? "Promoted from owner-confirmed teaching",
+      source_type: sourceType.trim(),
+      requesting_agent:
+        requestingAgent ?? teaching.requesting_agent ?? context?.agentId,
+    },
+    { agentId: requestingAgent ?? teaching.requesting_agent ?? "unknown" },
+  );
+  if (result?.governed_status !== "SUCCESS" || !result?.proposal) {
+    throw new Error(
+      `SKILL_PROPOSAL_FAILED: ${result?.error ?? "proposal was not accepted"}`,
+    );
+  }
+  return { status: "CANDIDATE_PROPOSED", proposal: result.proposal };
+}
+
+/**
+ * Skill rejection on the dedicated learning path. Owner-only, bound to the
+ * exact durable proposal. A rejected candidate can never become ACTIVE.
+ *
+ * M11/T1-R1 (2.3): the read → CANDIDATE check → REJECTED write runs under
+ * the store-wide writer lock, the same critical section the approval
+ * transaction uses. Without it, a rejection racing an approval could be
+ * decided against a proposal state that the concurrent approval had already
+ * moved past CANDIDATE, and the loser's terminal write would silently
+ * overwrite the winner's. `skillsRoot` is required because the lock is
+ * addressed from it.
+ */
+export async function handleOwnerSkillRejection({
+  ownerDiscordId,
+  expectedOwnerId,
+  proposalId,
+  skillsRoot,
+  proposalStorageDir,
+  options = {},
+}) {
+  if (ownerDiscordId !== expectedOwnerId) {
+    throw new Error(
+      "APPROVAL_OWNER_MISMATCH: Unauthorized principal cannot reject skills",
+    );
+  }
+  if (!skillsRoot || typeof skillsRoot !== "string") {
+    throw new Error(
+      "SKILLS_ROOT_REQUIRED: canonical Skill Store root is required",
+    );
+  }
+  const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+  if (!storeDir || typeof storeDir !== "string") {
+    throw new Error(
+      "PROPOSAL_STORE_UNAVAILABLE: durable proposal store is not configured",
+    );
+  }
+  const skillStore = await getSkillStoreModule();
+  const underWriterLock = skillStore?.withSkillStoreWriterLock;
+  if (typeof underWriterLock !== "function") {
+    throw new Error(
+      "APPROVAL_PROMOTE_UNAVAILABLE: canonical Skill Store writer is unavailable",
+    );
+  }
+  return underWriterLock(skillsRoot, () => {
+    const stored = readDurableSkillProposal(storeDir, proposalId);
+    if (!stored) {
+      throw new Error(
+        "APPROVAL_UNKNOWN_PROPOSAL: no durable proposal for this rejection",
+      );
+    }
+    if (stored.status !== "CANDIDATE") {
+      throw new Error(
+        `APPROVAL_ALREADY_DECIDED: candidate is already ${stored.status}`,
+      );
+    }
+    writeJsonAtomicSync(skillProposalFilePath(storeDir, proposalId), {
+      ...stored,
+      status: "REJECTED",
+    });
+    // M11/T1-R1 (4.2): REJECTED is terminal — the durable record owns the
+    // decision, so the pending-cache entry goes with it.
+    forgetPendingSkillProposal(proposalId, stored.proposal_id);
+    return { proposal_id: proposalId, approval_status: "REJECTED" };
+  });
+}
+
+/**
+ * Builds the #office learning-confirmation card for a skill candidate:
+ * human-readable proposal text plus native approve/reject buttons whose
+ * custom_ids bind the exact proposal (and corroborate the content digest
+ * within Discord's 100-char custom_id ceiling). The buttons round-trip
+ * through `handleSkillDiscordAction`; posting the card to #office is the
+ * poster's job and is not performed here.
+ */
+export function buildSkillProposalCard(proposal) {
+  if (!proposal || typeof proposal !== "object") {
+    throw new Error("SKILL_CARD_PROPOSAL_REQUIRED");
+  }
+  const text = formatApprovalNotification({ proposal });
+  const approveCustomId = buildSkillComponentCustomId(
+    DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_APPROVE,
+    proposal.proposal_id,
+    proposal.content_sha256,
+  );
+  const rejectCustomId = buildSkillComponentCustomId(
+    DISCORD_COMPONENT_ACTION_NAMESPACE.SKILL_REJECT,
+    proposal.proposal_id,
+    proposal.content_sha256,
+  );
+  return {
+    text,
+    proposal_id: proposal.proposal_id,
+    content_sha256: proposal.content_sha256,
+    buttons: [
+      {
+        customId: approveCustomId,
+        label: "Approve skill",
+        style: 3,
+        emoji: { name: "✅" },
+      },
+      {
+        customId: rejectCustomId,
+        label: "Reject",
+        style: 4,
+        emoji: { name: "❌" },
+      },
+    ],
+  };
+}
+
+/**
+ * M12/T9 F-124: the Discord body ceiling and the mention syntax.
+ *
+ * Discord refuses a message body over 2000 characters, and `PLAN_TRUNCATION_MARK`
+ * is the marker `renderGovernedApprovalBody` uses when it cuts one. The marker
+ * is repeated here so the seam that publishes a body it did not render still
+ * marks its cut instead of losing the tail silently. The drift between the two
+ * copies is checked by a gate, not by a reader.
+ */
+const DISCORD_BODY_LIMIT = 2000;
+const PLAN_TRUNCATION_MARK = "…(xem toàn bộ kế hoạch trong phiên)";
+
+/**
+ * M12/T9 F-124: Discord mention syntax never reaches an approval surface.
+ *
+ * `sanitizeDiscordIdentifier` strips mentions but also every newline, so it
+ * cannot be used on a body: the body keeps its structure and loses only the
+ * mention tokens. M12/T9 F-463 moved the token list into the formatter so the
+ * result body and the forum seam strip the same tokens.
+ */
+export function sanitizeApprovalBody(body) {
+  // M12/T9 F-463: one mention stripper for every published body. The whitespace is
+  // left alone here because the body keeps its rendered structure.
+  return stripDiscordMentions(body, { collapseWhitespace: false });
+}
+
+/**
+ * M12/T9 F-124: the short, ledger-derived line the buttons message carries.
+ *
+ * The body itself is published once, in the thread. This message carries the
+ * buttons and a pointer, so the owner never reads the same body twice.
+ */
+export function buildApprovalActionLine(taskId) {
+  const token = sanitizeApprovalBody(
+    String(displayTaskToken(taskId) ?? ""),
+  ).trim();
+  return `⏳ **Chờ anh phê duyệt** — Task \`${token}\``;
+}
+
+/**
+ * M12/T9 F-124: a body that does not fit is cut with an EXPLICIT marker.
+ */
+export function boundApprovalBody(bodyContent) {
+  const body = typeof bodyContent === "string" ? bodyContent : "";
+  if (body.length <= DISCORD_BODY_LIMIT) return body;
+  // The marker and the newline it sits on are part of the ceiling.
+  const budget = DISCORD_BODY_LIMIT - PLAN_TRUNCATION_MARK.length - 1;
+  return `${body.slice(0, budget).trimEnd()}\n${PLAN_TRUNCATION_MARK}`;
+}
+
+/**
+ * M10/T2-R12: first-approval card content builder for a fresh Main
+ * `sessions_spawn`. Pure: no I/O, no network. The transporter posts what this
+ * returns; tests assert the contract here.
+ *
+ * M12/T1-R1 re-froze the presentation on the owner's instruction: the card shows
+ * the Task ID and nothing else that identifies plumbing (no run code, no
+ * requester line, no action line, no `child:` line), `Lý do` carries the durable
+ * plan step by step with the software named for each step, and `Kết quả` carries the
+ * expected result plus the preview image that travels with it.
+ *
+ * Contract that must still hold for the verdict paths to work:
+ * - the FULL task id appears in the body (the text-approval path matches an owner's
+ *   APPROVE message to a task by substring);
+ * - the `[PHÊ DUYỆT]` marker keeps the card recognizable to card parsers;
+ * - REQUESTED state is explicit: the card asks, it never authorizes;
+ * - button custom_ids use the same builder+namespace as child-announce cards so the
+ *   button verdict path resolves the same taskId.
+ */
+export function buildFirstSpawnApprovalCard({
+  taskId,
+  taskCode,
+  briefRevision,
+  targetAgentId,
+  spawnInputs,
+  spawnNodeId,
+  planNodes = [],
+  previewImage = null,
+}) {
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    throw new Error("FIRST_APPROVAL_CARD_TASK_REQUIRED");
+  }
+  const title = "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi";
+  const steps = renderGovernedPlanSteps(planNodes, {
+    activeNodeId: spawnNodeId,
+  });
+  if (steps.length === 0) {
+    // A task admitted without a recorded node graph still has to say what will be
+    // done, so this spawn itself becomes the single rendered step rather than an
+    // empty plan.
+    steps.push(
+      [
+        `1. **${specialistSoftwareLabel(targetAgentId)}**`,
+        `   - Thao tác: ${sanitizeDiscordText(String(spawnInputs ?? "")) || "(không mô tả)"}`,
+        "   - **Đang chờ anh duyệt ở bước này**",
+      ].join("\n"),
+    );
+  }
+  const commandToken = taskCode ?? taskId;
+  // M12/T9 F-124: the body is ledger-derived, but the plan text it renders can
+  // still carry a Discord mention from the spawn payload, so the seam makes it
+  // mention-safe before it is published.
+  const bodyContent = sanitizeApprovalBody(
+    renderGovernedApprovalBody({
+      title,
+      taskId,
+      planSteps: steps,
+      expectedResult: renderGovernedExpectedResult({
+        nodes: planNodes,
+        outcome: spawnInputs,
+        previewImage,
+      }),
+      commandToken,
+    }),
+  );
+  return {
+    title,
+    bodyContent,
+    buttons: [
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_APPROVE,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Approve",
+        style: 3,
+        emoji: { name: "✅" },
+      },
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REJECT,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Reject",
+        style: 4,
+        emoji: { name: "❌" },
+      },
+      {
+        customId: buildComponentCustomId(
+          DISCORD_COMPONENT_ACTION_NAMESPACE.APPROVAL_REVISION,
+          taskId,
+          String(briefRevision),
+        ),
+        label: "Request Revision",
+        style: 2,
+        emoji: undefined,
+      },
+    ],
+  };
+}
+
+/**
+ * M10/T2-R12: is this outbound text a governance MACHINE payload rather than a
+ * reply written for the owner?
+ *
+ * Proven live 2026-10-08 15:41: `Main` emitted its execution-brief envelope as
+ * its turn text, and the host delivered that raw JSON straight to #office. The
+ * owner saw a wall of JSON instead of an answer. The envelope is not waste: it is
+ * required, because `admitInitialBrief` ingests the brief from the assistant text
+ * AT THE `sessions_spawn` CALL (guard.mjs beforeToolCall). So the payload must be
+ * produced but must never be the user-visible reply.
+ *
+ * The predicate is deliberately narrow and requires BOTH contract markers
+ * (`schema_version` and `governance_version`) plus one payload-shape marker, so
+ * ordinary prose, ordinary JSON, and JSON the owner actually asked about are all
+ * untouched. Pure: no I/O, no network, no logging.
+ */
+export function isGovernanceMachinePayload(text) {
+  if (typeof text !== "string") return false;
+  let trimmed = text.trim();
+  if (trimmed.startsWith("```json")) trimmed = trimmed.slice(7);
+  else if (trimmed.startsWith("```")) trimmed = trimmed.slice(3);
+  if (trimmed.endsWith("```")) trimmed = trimmed.slice(0, -3);
+  trimmed = trimmed.trim();
+  // A reply that merely CONTAINS a payload (prose around it) is not the
+  // payload: only the bare envelope is suppressed, so context is never lost.
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  if (typeof parsed.schema_version !== "string") return false;
+  if (typeof parsed.governance_version !== "string") return false;
+  const hasPayloadShape =
+    typeof parsed.outcome_claim === "string" ||
+    typeof parsed.brief_state === "string" ||
+    typeof parsed.brief_revision === "number";
+  return hasPayloadShape;
+}
+
+/**
+ * M10/T2-R12: raw-REST message body carrying the approval buttons.
+ * Pure: maps the adapter-shaped button specs (`customId`) to the Discord
+ * wire shape (`custom_id`). Tested directly.
+ *
+ * R4-EXCEPTION (owner decision 2026-10-07): this raw-REST /messages post is
+ * the SOLE permitted exception to the no-component-REST rule. The native
+ * adapter cannot deliver from the tool-call hook context (proven live:
+ * "Discord send requires a resolved runtime config"), while the thread
+ * creation the buttons belong to already travels by permitted raw REST.
+ * The m8-t2-native-outbound test enforces that any /messages REST site
+ * carries this marker; without it the suite fails.
+ */
+export function buildApprovalButtonsMessage(bodyContent, buttons) {
+  return {
+    // M12/T9 F-124: a body over Discord's ceiling is cut with an explicit
+    // marker, never silently.
+    content: boundApprovalBody(bodyContent),
+    components: [
+      {
+        type: 1,
+        components: (buttons ?? []).map((b) => ({
+          type: 2,
+          style: b.style,
+          label: b.label,
+          custom_id: b.customId,
+          ...(b.emoji ? { emoji: b.emoji } : {}),
+        })),
+      },
+    ],
+  };
+}
+
+/**
+ * Dedicated Discord learning-confirmation handler for skill proposals.
+ *
+ * This is the ONLY Discord path that may approve or reject a skill
+ * candidate. It operates on the skill proposal identity (proposal_id plus
+ * exact content digest), posts to the #office learning surface, and never
+ * touches the workflow ledger, the execution queue, or
+ * `executeApprovedTask`. The generic execution-plan APPROVE path must
+ * never reach here and this path must never reach it.
+ */
+export async function handleSkillDiscordAction({
+  action,
+  proposalId,
+  contentSha256,
+  senderId,
+  config,
+  skillsRoot,
+  proposalStorageDir,
+  // M11/T1-R1 (2.4): the plan decision reference the approval binds. There
+  // is no default: an approve action without a ref fails closed with
+  // APPROVAL_DECISION_REF_REQUIRED inside `handleOwnerSkillApproval`.
+  decisionRef,
+  // F-OC-012 (owner decision 2026-11-04, option A+B): an owner-attested
+  // provenance override. Absent means "use the proposal's declaration".
+  sourceType,
+  notify,
+  options = {},
+}) {
+  const ownerId = resolveOwnerDiscordId(config);
+  if (!ownerId || senderId !== ownerId) {
+    return { ok: false, reason: "APPROVAL_OWNER_MISMATCH" };
+  }
+  if (action === "reject") {
+    try {
+      const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+      const stored = readDurableSkillProposal(storeDir, proposalId);
+      if (!skillProposalBindingMatches(stored, contentSha256)) {
+        return { ok: false, reason: "APPROVAL_PROPOSAL_MISMATCH" };
+      }
+      const result = await handleOwnerSkillRejection({
+        ownerDiscordId: senderId,
+        expectedOwnerId: ownerId,
+        proposalId,
+        skillsRoot,
+        proposalStorageDir: storeDir,
+        options,
+      });
+      await notify?.({
+        channel: "office",
+        text: `📝 Skill proposal \`${proposalId}\` rejected. It can never become ACTIVE.`,
+      });
+      return { ok: true, status: "REJECTED", ...result };
+    } catch (error) {
+      return { ok: false, reason: error?.message ?? String(error) };
+    }
+  }
+  if (action !== "approve") {
+    return { ok: false, reason: "UNKNOWN_SKILL_ACTION" };
+  }
+  try {
+    const storeDir = proposalStorageDir ?? options.proposalStorageDir;
+    const stored = readDurableSkillProposal(storeDir, proposalId);
+    if (!stored) {
+      return { ok: false, reason: "APPROVAL_UNKNOWN_PROPOSAL" };
+    }
+    // The button corroborates identity only; the approval below binds the
+    // exact bytes read back from the durable store.
+    if (!skillProposalBindingMatches(stored, contentSha256)) {
+      return { ok: false, reason: "APPROVAL_PROPOSAL_MISMATCH" };
+    }
+    const approval = await handleOwnerSkillApproval({
+      ownerDiscordId: senderId,
+      expectedOwnerId: ownerId,
+      proposalId,
+      // Exact server-side binding: the approval always names the full
+      // stored digest, never the button corroborator.
+      contentSha256: stored.content_sha256,
+      namespace: stored.namespace,
+      capability: stored.capability,
+      version: stored.version,
+      skillsRoot,
+      decisionRef,
+      sourceType,
+      proposalStorageDir: storeDir,
+      options,
+    });
+    await notify?.({
+      channel: "office",
+      text: `✅ Skill \`${stored.capability}\` v${stored.version} approved and materialized as ACTIVE.`,
+    });
+    return { ok: true, status: "APPROVED", approval };
+  } catch (error) {
+    return { ok: false, reason: error?.message ?? String(error) };
+  }
+}
+
+/**
+ * M12/T9 F-043 (legacy R1-A07-04): the thread a decision came from, normalized
+ * the way the interaction path normalizes it (`channel:` is a transport
+ * prefix, not a different thread). An absent thread is `null` - never a value
+ * that can satisfy a comparison against a recorded approval thread.
+ */
+function normalizeDecisionThreadId(threadId) {
+  if (typeof threadId !== "string") return null;
+  const value = threadId
+    .trim()
+    .replace(/^channel:/u, "")
+    .trim();
+  return value.length > 0 ? value : null;
 }
 
 /**
@@ -584,6 +2345,11 @@ export function handleDiscordAction({
   data = {},
   paths = null,
   readOnly = false,
+  // M12/T9 F-123: the clock the approval card's 24-hour window is measured
+  // against. It is injected for the same reason the guard injects
+  // `currentTime`: a caller that owns a clock (a test, a replay) must be able
+  // to move it without the governance path reading the wall clock itself.
+  currentTime = null,
 }) {
   // 1. Check attempt token fencing (BUG-M8T2-07 / G03)
   // G03: if requireAttemptFencing=true, BOTH tokens must be present; missing pair fails closed.
@@ -617,6 +2383,20 @@ export function handleDiscordAction({
         status: "STALE",
       };
     }
+  }
+
+  // Discriminated approval subjects: a skill-candidate approval is a
+  // governance transaction on the dedicated #office learning path. It must
+  // never queue workflow execution through this generic handler.
+  if (
+    data?.approvalSubject === APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "SKILL_APPROVAL_SEPARATE_PATH: skill approvals use the dedicated skill approval path, never the execution approval handler",
+      status: "DENIED",
+    };
   }
 
   // 2. Authoritative State & Primary Coordinator resolution (G01, G02)
@@ -662,21 +2442,24 @@ export function handleDiscordAction({
         status: "FAILED",
       };
     }
+    if (!authoritativeTask) {
+      // M12/T9 F-080: the ledger was readable and holds no such task, so the
+      // caller named a task that does not exist. There is nothing to approve.
+      return {
+        allowed: false,
+        reason:
+          "NO_AUTHORITATIVE_TASK: an approval verdict requires an authoritative ledger task",
+        status: "DENIED",
+      };
+    }
   }
 
   // 3. Normalize action and validate 5-tuple authority
-  const normAction = action
-    ? typeof action === "string" && action.toUpperCase().trim() === "REJECT"
-      ? normalizeChannel(channel) === CHANNELS.RESULTS
-        ? ACTIONS.REJECT_RESULT
-        : ACTIONS.REJECT_APPROVAL
-      : typeof action === "string" &&
-          action.toUpperCase().trim() === "REQUEST_REVISION"
-        ? normalizeChannel(channel) === CHANNELS.RESULTS
-          ? ACTIONS.REQUEST_REVISION_RESULT
-          : ACTIONS.REQUEST_REVISION_APPROVAL
-        : action
-    : action;
+  // F-085: the ONE reviewed mapping between the authority vocabulary and the
+  // ledger decision vocabulary. The plugin does not carry its own ternary:
+  // "is this REJECT an approval or a result verdict?" is answered in one
+  // place, so the plugin and the authority gate cannot disagree.
+  const normAction = normalizeAuthorityAction(action, channel);
 
   const auth = validateActionAuthority({
     actor,
@@ -696,9 +2479,30 @@ export function handleDiscordAction({
   }
 
   // 4. Sanitize inputs and enforce bounds on feedback/reason (G10)
-  const safeReason = data.reason
-    ? String(data.reason).slice(0, 2000)
-    : "USER_REJECTED";
+  // M10/T2-R14: byte-budgeted like its three siblings below. This field was
+  // still on a character slice, so ~1400 multi-byte characters (~4200 UTF-8
+  // bytes) passed `.slice(0, 2000)` untouched and were then rejected by
+  // `ledger-event.schema.json`'s `maxLength: 4096`, which schema.mjs measures in
+  // bytes — the write failed and the task could not be rejected at all.
+  //
+  // M12/T1-R1: the fallback described the action actually taken. It used to be the
+  // literal "USER_REJECTED" for every approval-channel decision, so the live ledger
+  // recorded `decision: "APPROVE"` with `reason: "USER_REJECTED"` — a durable audit
+  // trail that said the opposite of what the owner did.
+  const DEFAULT_APPROVAL_REASON = Object.freeze({
+    [ACTIONS.APPROVE]: "USER_APPROVED",
+    [ACTIONS.REQUEST_REVISION_APPROVAL]: "USER_REQUESTED_REVISION",
+    [ACTIONS.REJECT_APPROVAL]: "USER_REJECTED",
+    [ACTIONS.ACCEPT_RESULT]: "USER_ACCEPTED",
+    [ACTIONS.REQUEST_REVISION_RESULT]: "USER_REQUESTED_REVISION",
+    [ACTIONS.REJECT_RESULT]: "USER_REJECTED",
+  });
+  const safeReason = truncateUtf8(
+    String(
+      data.reason || DEFAULT_APPROVAL_REASON[normAction] || "USER_DECISION",
+    ),
+    2000,
+  );
   // Bounds are enforced in UTF-8 BYTES by the canonical contract validator
   // (schema.mjs uses Buffer.byteLength for maxLength), so a character-count
   // slice can produce a value the contract rejects — which failed the write and
@@ -719,24 +2523,160 @@ export function handleDiscordAction({
   // 5. Record in ledger if ledger paths are provided
   if (paths && auth.nextState) {
     try {
-      if (
+      if (normAction === ACTIONS.CANCEL) {
+        // F-531 (R10-T01-4): the owner's revocation path. The action is
+        // resolved through the ONE reviewed ledger-decision mapping, so a
+        // CANCEL that mapping does not recognise can never emit the event.
+        if (
+          resolveLedgerDecision(normAction) !== LEDGER_CANCELLATION_DECISION
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "UNKNOWN_ACTION: CANCEL is not in the reviewed ledger-decision mapping",
+            status: "DENIED",
+          };
+        }
+        recordWorkflowEvent(paths, "WORKFLOW_CANCELLED", {
+          task_id: taskId,
+          reason_code: "OWNER_CANCELLED",
+          actor: normalizeActor(actor),
+          channel: normalizeChannel(channel),
+          ...(data.messageId ? { message_id: String(data.messageId) } : {}),
+        });
+      } else if (
         normAction === ACTIONS.APPROVE ||
         normAction === ACTIONS.REJECT_APPROVAL ||
         normAction === ACTIONS.REQUEST_REVISION_APPROVAL
       ) {
+        // M12/T9 F-123: the card's own 24-hour clock.
+        //
+        // The owner's ruling is that a card expires 24 hours after the bot
+        // posts it, and that an expired card is not approved. The clock is
+        // read from the DURABLE record of the surfaced card, so it survives a
+        // restart and cannot be re-derived from a moment that is not the
+        // card's own. The refusal carries the same code the guard's own
+        // approval seam already uses for an expired approval.
+        const surfacedPostedAt = readSurfacedApprovalPostedAt(paths, taskId);
+        // M12/T9 F-529: the surfaced record is LOAD-BEARING, not optional.
+        // Every guard below (the 24h clock, the thread match) used to skip
+        // when the record was absent or unreadable, so a delivered card whose
+        // SURFACED write failed — or a journal that cannot be read — left an
+        // approvable card with no clock and no thread binding. An APPROVE
+        // against a recorded request therefore REQUIRES the readable durable
+        // record of the surfaced card; refusing is the inversion of the skip.
+        // A refusal (REJECT/REQUEST_REVISION) is still recordable without it:
+        // the owner must never be locked out of refusing (F-392 family).
+        if (
+          normAction === ACTIONS.APPROVE &&
+          authoritativeTask?.approval_requested_at &&
+          surfacedPostedAt === null
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "APPROVAL_SURFACE_RECORD_REQUIRED: an approval verdict requires the durable record of the surfaced card",
+            status: "DENIED",
+          };
+        }
+        const approvalExpiresAt = approvalCardExpiresAt(surfacedPostedAt);
+        // M12/T9 F-392: the card's clock refuses an APPROVAL, not a REFUSAL.
+        //
+        // The 24-hour window exists so an untouched card is not approved. A
+        // refusal is the opposite decision: past the window the owner must
+        // still be able to record REJECT_APPROVAL or REQUEST_REVISION_APPROVAL,
+        // and those actions fall through to the durable
+        // WORKFLOW_USER_APPROVAL_DECIDED event below. Gating all three (the
+        // shipped shape) locked the owner out of closing an expired task.
+        if (
+          normAction === ACTIONS.APPROVE &&
+          approvalExpiresAt !== null &&
+          isApprovalCardExpired({
+            expiresAt: approvalExpiresAt,
+            now: currentTime,
+          })
+        ) {
+          return {
+            allowed: false,
+            reason: "AUTH_APPROVAL_EXPIRED",
+            status: "DENIED",
+          };
+        }
+        // M12/T9 F-043 (legacy R1-A07-04): the verdict must come from the
+        // thread the card was surfaced in. The recorded `thread_id` was never
+        // compared with the task's own `approval_thread_id`, so a reposted,
+        // forwarded or stale card - or an owner reply in an unrelated thread -
+        // yielded a durable APPROVE. An ABSENT thread id satisfied the
+        // comparison by being absent, so the refusal has to be explicit: the
+        // decision must NAME the recorded thread, and nothing is recorded when
+        // it does not.
+        const recordedApprovalThreadId =
+          authoritativeTask?.approval_thread_id ?? null;
+        // M12/T9 F-529: the same inversion on the projection — an APPROVE
+        // against a recorded request requires the projected surfaced thread;
+        // a missing projection is a missing record, never a passing guard.
+        if (
+          normAction === ACTIONS.APPROVE &&
+          authoritativeTask?.approval_requested_at &&
+          !recordedApprovalThreadId
+        ) {
+          return {
+            allowed: false,
+            reason:
+              "APPROVAL_SURFACE_RECORD_REQUIRED: an approval verdict requires the recorded approval thread of the surfaced card",
+            status: "DENIED",
+          };
+        }
+        if (recordedApprovalThreadId) {
+          const decisionThreadId = normalizeDecisionThreadId(data.threadId);
+          if (decisionThreadId !== recordedApprovalThreadId) {
+            return {
+              allowed: false,
+              reason:
+                "APPROVAL_THREAD_MISMATCH: the decision must come from the approval thread the card was surfaced in",
+              status: "DENIED",
+            };
+          }
+        }
+        // M12/T9 F-025 (legacy R1-A03-02): the consent is bound to the PLAN
+        // that will execute. The digest is derived from the task's OWN recorded
+        // brief (its revision and its whole node graph) - never from a
+        // caller-supplied summary - so a model-authored card body can never
+        // decide what the owner approved. The reducer compares the recorded
+        // digest with the plan it holds and refuses a consent that does not
+        // match, and the brief revision the button carries is recorded with it
+        // so a STALE card (issued for an earlier revision) is refused too.
+        const authoritativePlanDigest = deriveApprovalPlanDigest({
+          brief_revision: authoritativeTask?.brief_revision,
+          nodes: Array.isArray(authoritativeTask?.nodes)
+            ? authoritativeTask.nodes
+            : [],
+        });
+        const decidedBriefRevision = (() => {
+          const supplied = data.briefRevision;
+          if (Number.isSafeInteger(supplied) && supplied >= 1) return supplied;
+          if (typeof supplied === "string") {
+            const trimmed = supplied.trim();
+            if (/^[0-9]{1,3}$/u.test(trimmed)) return Number(trimmed);
+          }
+          return undefined;
+        })();
         recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
           task_id: taskId,
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           decision:
-            normAction === ACTIONS.APPROVE
-              ? "APPROVE"
-              : normAction === ACTIONS.REJECT_APPROVAL
-                ? "REJECT"
-                : "REQUEST_REVISION",
+            // F-085: the ONE reviewed mapping from the authority action to the
+            // ledger decision vocabulary. The plugin does not carry its own
+            // ternary: the ledger's `decision` value and the authority gate's
+            // verdict come from one mapping, so they cannot disagree.
+            resolveLedgerDecision(normAction) ?? normAction,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
-          scope_digest: data.scopeDigest ?? null,
+          scope_digest: authoritativePlanDigest,
+          ...(decidedBriefRevision !== undefined
+            ? { brief_revision: decidedBriefRevision }
+            : {}),
           reason: safeReason,
         });
       } else if (normAction === ACTIONS.ACCEPT_RESULT) {
@@ -755,7 +2695,9 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           decision: "ACCEPT",
-          result_id: resultId,
+          // M12/T9 F-249: the verdict binds by DIGEST. The result id is not
+          // sent any more: the reducer compared it against a root-result field
+          // the published contract does not declare, so it could never bind.
           // The verdict binds to the digest the LEDGER recorded. A component
           // carrying its own digest is bound to that instead, so a card issued
           // for an earlier result is refused rather than applied to whatever is
@@ -781,7 +2723,8 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: normalizeChannel(channel),
           reason: safeReason,
-          result_id: resultId,
+          // M12/T9 F-249: the verdict binds by DIGEST; the result id is not
+          // sent any more (the reducer could never bind it).
           result_digest: data.resultDigest ?? authoritativeResultDigest,
           message_id: data.messageId ?? data.origin_message_id ?? null,
           thread_id: data.threadId ?? null,
@@ -792,7 +2735,8 @@ export function handleDiscordAction({
           actor: normalizeActor(actor),
           channel: "results",
           feedback: safeFeedback,
-          result_id: data.resultId ?? taskId,
+          // M12/T9 F-249: the verdict binds by DIGEST; the result id is not
+          // sent any more (the reducer could never bind it).
           result_digest: data.resultDigest ?? authoritativeResultDigest,
         });
       } else if (normAction === ACTIONS.ASK_USER) {
@@ -876,10 +2820,18 @@ export function handleDiscordAction({
         // M7-042: the answer is recorded as a USER act with an explicit
         // principal and message id. The reducer requires both, so a caller
         // cannot attribute an answer to an agent or an unidentifiable author.
-        const answerPrincipal = derivePrincipalRef(
-          "identity-key",
-          String(userPrincipal),
-        );
+        // M12/T9 F-031: the principal is minted with the identity secret, never
+        // with a literal that is in the public source. Without the key the
+        // answer cannot be attributed, so it is refused.
+        const answerPrincipal = mintUserPrincipalRef(paths, userPrincipal);
+        if (!answerPrincipal) {
+          return {
+            allowed: false,
+            reason:
+              "MISSING_IDENTITY_SECRET: ANSWER_USER requires the identity key to mint a user principal",
+            status: "DENIED",
+          };
+        }
         const answerMessageId =
           data.messageId ?? data.origin_message_id ?? null;
         if (
@@ -912,11 +2864,55 @@ export function handleDiscordAction({
     }
   }
 
+  // M12/T9 F-080: a verdict is bound to the AUTHORITATIVE ledger task. When the
+  // ledger is readable and holds no such task, the verdict is refused above.
+  //
+  // The paths-less case is NOT changed here: the repository's own end-to-end
+  // contract (tests/m8-t2-e2e-workflow.test.mjs) pins an unpersisted verdict as
+  // allowed, and changing it needs a pinned-assertion decision that this
+  // remediation does not carry. It is reported as a residual, not silently
+  // narrowed.
   return {
     allowed: true,
     nextState: auth.nextState,
     status: paths ? "SUCCESS" : readOnly ? "READ_ONLY" : "UNPERSISTED",
   };
+}
+
+/**
+ * M12/T9 F-066: the artifacts a runtime "the execution finished" event
+ * delivered.
+ *
+ * The runtime's event shape is not the governance contract, so every field is
+ * read defensively and NOTHING is invented: an event that names no artifact
+ * yields an empty set, and the caller then records no result rather than a
+ * result with no evidence.
+ */
+export function readExecutionArtifacts(event) {
+  const candidates = [
+    event?.artifacts,
+    event?.artifactPaths,
+    event?.artifact_paths,
+    event?.result?.artifacts,
+    event?.output?.artifacts,
+  ];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    return candidate
+      .map((entry) =>
+        typeof entry === "string"
+          ? entry
+          : (entry?.logical_path ?? entry?.path ?? entry?.file_path ?? null),
+      )
+      .filter((entry) => typeof entry === "string" && entry.length > 0);
+  }
+  const single =
+    event?.artifactPath ??
+    event?.artifact_path ??
+    event?.result?.artifactPath ??
+    event?.result?.artifact_path ??
+    null;
+  return typeof single === "string" && single.length > 0 ? [single] : [];
 }
 
 /**
@@ -927,6 +2923,127 @@ export function handleDiscordAction({
  */
 export const MAX_ARTIFACTS_PER_RESULT = 10;
 
+/**
+ * M12/T9 F-040: the boundary an artifact has to be inside.
+ *
+ * The declared sandbox is the boundary when the caller names one. When it
+ * names none, the seam still has ONE root it can prove from the durable state
+ * it was handed: the governed store root that owns the task queue (the queue
+ * file lives at `<store>/operator/m7-t2/queue.json`, so the store root is
+ * three levels above it). An artifact outside that root is out of the
+ * sandbox by definition, and the seam refuses it BEFORE its bytes are read.
+ */
+export function resolveArtifactBoundary({
+  sandboxDir = null,
+  queueManager = null,
+} = {}) {
+  if (typeof sandboxDir === "string" && sandboxDir.trim().length > 0) {
+    return { root: path.resolve(sandboxDir), source: "DECLARED_SANDBOX" };
+  }
+  const storagePath = queueStoragePath(queueManager);
+  if (!storagePath) return null;
+  return {
+    root: governedStoreRootFromQueuePath(storagePath),
+    source: "GOVERNED_STORE_ROOT",
+  };
+}
+
+function queueStoragePath(queueManager) {
+  try {
+    const storagePath = queueManager?.storagePath;
+    return typeof storagePath === "string" && storagePath.trim().length > 0
+      ? storagePath
+      : null;
+  } catch {
+    // An unconfigured store has no path to prove, and the seam refuses
+    // rather than guessing one.
+    return null;
+  }
+}
+
+function governedStoreRootFromQueuePath(storagePath) {
+  const resolved = path.resolve(storagePath);
+  const segments = resolved.split(path.sep).filter(Boolean);
+  const governed =
+    segments.length >= 4 &&
+    segments[segments.length - 3] === "operator" &&
+    segments[segments.length - 2] === "m7-t2";
+  if (governed) return path.dirname(path.dirname(path.dirname(resolved)));
+  return path.dirname(resolved);
+}
+
+/**
+ * M12/T9 F-040: refuse an artifact the seam cannot prove is inside the
+ * boundary.
+ *
+ * The refusal carries a named code and is returned as the error of a FAILED
+ * result, so no hash of an uncontained file is ever produced or recorded.
+ */
+export function artifactContainmentFailure(artifactPath, boundary) {
+  if (!boundary) {
+    return "ARTIFACT_SANDBOX_UNSPECIFIED: no containment boundary could be established for the artifact";
+  }
+  if (typeof artifactPath !== "string" || !path.isAbsolute(artifactPath)) {
+    // The artifact layer owns a non-absolute path; it names it itself.
+    return null;
+  }
+  let artifact;
+  let root;
+  try {
+    artifact = realpathSync(artifactPath);
+    root = realpathSync(boundary.root);
+  } catch {
+    artifact = path.resolve(artifactPath);
+    root = path.resolve(boundary.root);
+  }
+  const relative = path.relative(root, artifact);
+  if (
+    relative.length === 0 ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return `ARTIFACT_OUTSIDE_SANDBOX: the artifact is outside the governed ${boundary.source}`;
+  }
+  return null;
+}
+
+/**
+ * F-472 / R9-T12-1: consult the format size ceiling BEFORE the artifact is
+ * read and hashed.
+ *
+ * Containment proves the artifact is in scope, not that it is small enough.
+ * Both completion-seam read sites used to hand the whole file to
+ * `createHash("sha256")`, so the ceiling — including the validator's own,
+ * which is compared later and itself reads whole — could refuse the verdict
+ * but never the cost. The bound is taken from `statSync`, so an over-limit
+ * artifact is refused without a full buffer, and the digest is minted only
+ * once the bound passes.
+ *
+ * The ceiling row is resolved from the artifact's own extension, exactly as
+ * `validateTechnicalArtifact` does for a path-only call, so the seam never
+ * refuses a legitimate set member on a ceiling that the delivered bytes were
+ * not measured against.
+ */
+export function artifactSizeCeilingFailure(artifactPath) {
+  let sizeBytes;
+  try {
+    sizeBytes = statSync(artifactPath).size;
+  } catch {
+    // Fail closed: an artifact whose size cannot be proven is not digested.
+    return `ARTIFACT_UNREADABLE: ${path.basename(String(artifactPath ?? ""))}`;
+  }
+  const inferredType = deriveType(
+    undefined,
+    path.extname(String(artifactPath ?? "")).toLowerCase(),
+  );
+  const maxSize =
+    FORMAT_MAX_SIZE_LIMITS[inferredType] || MAX_ARTIFACT_SIZE_BYTES;
+  if (sizeBytes > maxSize) {
+    return `ARTIFACT_TOO_LARGE: ${path.basename(String(artifactPath ?? ""))} is ${sizeBytes}B over the ${maxSize}B ceiling for ${inferredType} (ARTIFACT_SIZE_EXCEEDED)`;
+  }
+  return null;
+}
+
 export function handleExecutionFinished({
   taskId,
   agentId,
@@ -934,6 +3051,7 @@ export function handleExecutionFinished({
   attempt = null,
   artifactPath,
   artifacts = null,
+  resultPayload = null,
   sandboxDir = null,
   technicalConfig = {},
   businessData = {},
@@ -953,6 +3071,25 @@ export function handleExecutionFinished({
       status: "FAILED",
       error: `MAX_ARTIFACTS_EXCEEDED: Result exceeds maximum allowed artifacts (${MAX_ARTIFACTS_PER_RESULT})`,
     };
+  }
+
+  // M12/T9 F-535: the ingested result envelope is validated against the
+  // PUBLISHED agent-result-payload contract BEFORE any queue or ledger state
+  // moves. The brief-activation seam stamps `validation_digest` with this
+  // schema's name; this is where the validation that digest names actually
+  // executes. An envelope that fails the contract refuses the whole result —
+  // nothing is finished, nothing is recorded. A caller that presents no
+  // envelope is not refused: the validation gates what is ingested, it never
+  // invents an envelope.
+  if (resultPayload !== null && resultPayload !== undefined) {
+    try {
+      validateContract("agent-result-payload", resultPayload);
+    } catch (schemaErr) {
+      return {
+        status: "FAILED",
+        error: `RESULT_PAYLOAD_SCHEMA_INVALID: ${schemaErr?.message}`,
+      };
+    }
   }
 
   // G20: Idempotency check for repeated artifact completion
@@ -988,35 +3125,28 @@ export function handleExecutionFinished({
     }
   }
 
-  // G14: Execution-agent lease/attempt validation against active claims
-  if (queueManager?.activeClaims?.has(taskId)) {
-    const claim = queueManager.activeClaims.get(taskId);
-    if (agentId && claim.agentId !== agentId) {
-      return {
-        status: "FAILED",
-        error: `AGENT_MISMATCH: Task claimed by ${claim.agentId}, not ${agentId}`,
-      };
-    }
-    if (leaseId && claim.leaseId !== leaseId) {
-      return {
-        status: "FAILED",
-        error:
-          "LEASE_MISMATCH: Execution-agent lease does not match active claim",
-      };
-    }
-    if (attempt !== null && claim.attempt !== attempt) {
-      return {
-        status: "FAILED",
-        error: "ATTEMPT_MISMATCH: Attempt does not match active claim",
-      };
-    }
-  }
+  // M12/T9 F-532: the former G14 "active claims" guard was deleted: no queue
+  // manager declares such a property anywhere, so its refusals were
+  // unreachable dead code. The real lease/attempt fence is the M7-029 check
+  // inside `finishExecution`, fed with the run's ledger-binding identity by
+  // the execution_finished seam.
 
   // M8-051: the canonical artifact set is ordered and bounded, and every
   // member is validated BEFORE any validation verdict is produced. A
   // singular artifactPath may not stand in for a delivered multi-artifact
   // result, and an unreadable member is a hard delivery failure rather than
   // a technical-validation verdict.
+  //
+  // M12/T9 F-040: the containment boundary is established BEFORE the first
+  // byte is read. `artifact-validator.mjs` puts both its symlink-escape check
+  // and its sandbox-containment check behind `if (sandboxDir)`, so a caller
+  // that names no sandbox had its artifact bytes read, hashed and recorded
+  // with no containment proven at all.
+  const effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null;
+  const artifactBoundary = resolveArtifactBoundary({
+    sandboxDir: effectiveSandbox,
+    queueManager,
+  });
   const artifactSet = [];
   for (const candidate of allArtifacts) {
     const logicalPath =
@@ -1034,6 +3164,21 @@ export function handleExecutionFinished({
         status: "FAILED",
         error: `ARTIFACT_MISSING: ${path.basename(logicalPath)}`,
       };
+    }
+    // The refusal happens BEFORE the read and the hash, so an out-of-sandbox
+    // artifact never has its bytes touched.
+    const containment = artifactContainmentFailure(
+      logicalPath,
+      artifactBoundary,
+    );
+    if (containment) {
+      return { status: "FAILED", error: containment };
+    }
+    // F-472: the size ceiling is enforced here, before any byte is read, so an
+    // over-limit in-sandbox artifact is refused without paying the read+hash.
+    const sizeFailure = artifactSizeCeilingFailure(logicalPath);
+    if (sizeFailure) {
+      return { status: "FAILED", error: sizeFailure };
     }
     let sha256;
     try {
@@ -1055,11 +3200,18 @@ export function handleExecutionFinished({
     artifactSet.length > 0
       ? canonicalHash("zink-artifact-set-v1", { artifacts: artifactSet })
       : null;
-  const payloadDigest =
-    artifactSetDigest ??
-    (artifactPath && existsSync(artifactPath)
-      ? createHash("sha256").update(readFileSync(artifactPath)).digest("hex")
-      : null);
+  let payloadDigest = artifactSetDigest ?? null;
+  if (!payloadDigest && artifactPath && existsSync(artifactPath)) {
+    // F-472: the second unbounded read site. The singular artifactPath feeds
+    // the replay-fence digest, so its size is proven before it is read too.
+    const soloSizeFailure = artifactSizeCeilingFailure(artifactPath);
+    if (soloSizeFailure) {
+      return { status: "FAILED", error: soloSizeFailure };
+    }
+    payloadDigest = createHash("sha256")
+      .update(readFileSync(artifactPath))
+      .digest("hex");
+  }
 
   // M8-053: durable replay fence. The queue projection is restart-durable, so
   // an exact replay of the same task + attempt + result digest is an
@@ -1082,7 +3234,6 @@ export function handleExecutionFinished({
     }
   }
 
-  const effectiveSandbox = sandboxDir || technicalConfig.sandboxDir || null;
   const gateResult = evaluateResultGate({
     artifactPath: artifactPath ?? artifactSet[0]?.logical_path,
     artifactSet: artifactSet.map((artifact) => artifact.logical_path),
@@ -1202,6 +3353,14 @@ export function handleExecutionFinished({
 
   if (idempotencyKey) {
     globalThis[COMPLETED_EXECUTIONS_KEY]?.add(idempotencyKey);
+    // M11/T1-R1 (4.2): the replay guard is bounded, so memory cannot grow with
+    // the number of completed executions. A key older than the ceiling simply
+    // stops being recognized here; the ledger's own terminal-state checks in
+    // this function remain the authoritative duplicate guard.
+    boundCache(
+      globalThis[COMPLETED_EXECUTIONS_KEY],
+      COMPLETED_EXECUTIONS_LIMIT,
+    );
   }
 
   return {
@@ -1216,6 +3375,18 @@ export function handleExecutionFinished({
 }
 
 let excelWriterModule = null;
+/**
+ * M12/T9 F-162: the excel writer that EXECUTES is the one whose digest was
+ * admitted.
+ *
+ * The first two candidates are the plugin's own tree: in the deployed layout
+ * they are the PACKAGED asset (`./lib/excel-writer.mjs`, after the packaging
+ * rewrite), and in the repository layout they are the file that is packaged
+ * from. The third candidate used to be an arbitrary WORKING-TREE path
+ * (`findRepoRoot() || process.cwd()`), so a tree edit could change the
+ * artifact writer with no digest change at all. That override is gone: the
+ * writer is either the plugin's own asset or it is unavailable.
+ */
 async function getExcelWriter() {
   if (!excelWriterModule) {
     try {
@@ -1224,20 +3395,438 @@ async function getExcelWriter() {
       try {
         excelWriterModule = await import("../../lib/excel-writer.mjs");
       } catch {
-        try {
-          const repoRoot = findRepoRoot() || process.cwd();
-          excelWriterModule = await import(
-            pathToFileURL(
-              path.join(repoRoot, "integrations/openclaw/lib/excel-writer.mjs"),
-            ).href
-          );
-        } catch (e) {
-          console.error("[zink-governance] Failed to import excel writer:", e);
-        }
+        console.error(
+          "[zink-governance] Failed to import excel writer: the governed asset is unavailable",
+        );
       }
     }
   }
   return excelWriterModule;
+}
+
+/**
+ * M12/T9 F-533: the governed execution target is DERIVED by the ONE canonical
+ * owner, `lib/policy.mjs`.
+ *
+ * This module used to carry its own copy, and the copy missed the F-112 rule:
+ * a node that names the coordinator itself is the assignment, not an
+ * unreachable specialist. Two definitions meant the queue, the live spawn gate
+ * and the post-approval dispatch could answer "what does this task require?"
+ * differently — and the copy that production bound answered it wrong, so every
+ * approved brief whose nodes name its coordinator was refused before the
+ * durable queue write. The function is imported from the library and
+ * re-exported here (same function object), never redefined.
+ */
+
+/**
+ * Decide what a post-approval invocation must do, given the authoritative queue
+ * state and whether the coordinator notification was delivered.
+ *
+ * This is the whole queue/release consistency policy, expressed as a pure
+ * function so it can be proven directly rather than inferred. The invariants:
+ *
+ *  - A duplicate approval NEVER creates a second execution and never
+ *    re-notifies a handoff that already succeeded.
+ *  - A duplicate approval MAY retry a notification that never landed, because
+ *    the durable record says it did not.
+ *  - `RELEASED_TO_COORDINATOR` is not representable. A delivered Discord POST
+ *    is not an accepted handoff, so the most that can be reported is that the
+ *    task is durably queued and awaiting a coordinator pickup that nothing in
+ *    this repository currently performs.
+ */
+export function resolveCoordinatorHandoffOutcome({ preExisting, delivered }) {
+  if (preExisting) {
+    if (preExisting.coordinatorNotification?.delivered === true) {
+      return {
+        status: "QUEUED",
+        queue_status: preExisting.status,
+        handoff: "ALREADY_NOTIFIED",
+      };
+    }
+    return {
+      status: "QUEUED",
+      queue_status: preExisting.status,
+      handoff: delivered ? "NOTIFIED" : "NOTIFICATION_FAILED",
+    };
+  }
+  if (!delivered) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_FAILED",
+    };
+  }
+  return {
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "AWAITING_COORDINATOR_PICKUP",
+  };
+}
+
+/**
+ * Reservation window for an in-flight coordinator notification.
+ *
+ * A Discord POST is an external, potentially slow side effect, so the shared
+ * cross-process file lock is deliberately NOT held across it: that lock has no
+ * stale reclaim, so a crash mid-send would wedge the queue permanently. Instead
+ * the attempt is claimed in-process for a bounded window, which is where the
+ * real concurrency lives: the plugin is a single OpenClaw gateway process, and
+ * two Discord APPROVE actions arrive as two overlapping handler invocations in
+ * that one process.
+ */
+export const NOTIFICATION_ATTEMPT_TTL_MS = 60_000;
+
+const notificationAttempts = new Map();
+
+/**
+ * Claim the single in-flight notification attempt for a task.
+ *
+ * Returns a release function on success, or `null` when another attempt already
+ * holds the reservation. The reservation is released in a `finally` by the
+ * caller, so a thrown transport never leaks it. The TTL bounds the damage if a
+ * process dies mid-send: the window closes and the task becomes retryable again.
+ *
+ * LIMITATION, stated rather than hidden: this is an in-process guard, so it does
+ * NOT provide cross-process exactly-once delivery. Two separate plugin processes
+ * sharing one queue could still both notify. The repository has no cross-process
+ * idempotency key that the Discord transport would honour, and inventing one
+ * would be a new mechanism, so the honest claim is: at most one notification
+ * attempt per task per process per TTL window.
+ */
+export function reserveCoordinatorNotificationAttempt(
+  taskId,
+  {
+    now = Date.now(),
+    ttlMs = NOTIFICATION_ATTEMPT_TTL_MS,
+    registry = notificationAttempts,
+  } = {},
+) {
+  if (typeof taskId !== "string" || taskId.length === 0) {
+    return null;
+  }
+  for (const [key, entry] of registry) {
+    if (now - entry.startedAt > ttlMs) registry.delete(key);
+  }
+  if (registry.has(taskId)) {
+    return null;
+  }
+  const entry = { startedAt: now };
+  registry.set(taskId, entry);
+  return () => {
+    if (registry.get(taskId) === entry) {
+      registry.delete(taskId);
+    }
+  };
+}
+
+export function isCoordinatorNotificationAttemptInFlight(
+  taskId,
+  {
+    now = Date.now(),
+    ttlMs = NOTIFICATION_ATTEMPT_TTL_MS,
+    registry = notificationAttempts,
+  } = {},
+) {
+  const entry = registry.get(taskId);
+  return Boolean(entry) && now - entry.startedAt <= ttlMs;
+}
+
+/**
+ * Classify the outcome of one notification attempt.
+ *
+ * The three cases are materially different and are never collapsed:
+ *  - not delivered: the record stays retryable.
+ *  - delivered and persisted: future duplicates short-circuit, because durable
+ *    state now knows the message exists.
+ *  - delivered but NOT persisted: the Discord message exists, but durable local
+ *    knowledge of that does not. Reporting NOTIFIED here would claim an
+ *    idempotency the repository does not have and would let a later duplicate
+ *    send a second message while claiming the first was known. The honest answer
+ *    is that the state is uncertain, and the delivery evidence is carried through
+ *    so an operator can reconcile it.
+ */
+function classifyNotificationAttempt({
+  delivered,
+  persisted,
+  error,
+  evidence,
+}) {
+  if (!delivered) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_FAILED",
+      ...(error ? { error } : {}),
+    };
+  }
+  if (!persisted) {
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_STATE_UNCERTAIN",
+      error:
+        error ??
+        "COORDINATOR_NOTIFICATION_PERSIST_FAILED: the notification was accepted by the transport but the durable record was not written",
+      ...(evidence ? { delivery_evidence: evidence } : {}),
+    };
+  }
+  return {
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "NOTIFIED",
+    ...(evidence ? { delivery_evidence: evidence } : {}),
+  };
+}
+
+/**
+ * Perform at most one coordinator notification attempt for a task.
+ *
+ * This is the SINGLE owner of the notification side effect. Both the first
+ * approval and a duplicate approval route through it, so they share one guard
+ * and the reservation is acquired exactly once, by whichever caller owns the
+ * actual send. Nesting the reservation inside a second helper would make the
+ * first path reserve and then immediately lose to itself, which is exactly the
+ * double-reserve bug this shape avoids.
+ *
+ * The reservation is claimed BEFORE the await, so a concurrent caller that
+ * arrives while the transport is in flight sees the held reservation and does
+ * not send. The `finally` surrounds the actual send plus the persistence
+ * outcome, so a throwing transport, a failed send and a failed durable write all
+ * release it, and a later approval can still retry.
+ */
+export async function runNotificationAttempt({
+  taskId,
+  notify,
+  persist,
+  reserve,
+}) {
+  const release = reserve ? reserve(taskId) : null;
+  if (reserve && !release) {
+    // Another attempt owns the send right now. Say so plainly: no transport, no
+    // persist, and no claim that a notification exists or that work started.
+    return {
+      status: "QUEUED",
+      queue_status: "QUEUED",
+      handoff: "NOTIFICATION_IN_PROGRESS",
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  try {
+    const retry = await notify();
+    const delivered = Boolean(retry?.delivered);
+    // `{ ok: false }` is a truthy object, so the persistence result must be read
+    // by its own field. Coercing the object previously reported a failed write
+    // as a successful one, which is exactly the claim that must not be made.
+    const record = persist?.({
+      delivered,
+      error: retry?.error,
+      evidence: retry?.evidence ?? null,
+    });
+    const persisted = record?.ok === true;
+    return {
+      ...classifyNotificationAttempt({
+        delivered,
+        persisted,
+        // The persistence error is the diagnostic that matters here, so it is
+        // preferred over the transport error when the write itself failed. It
+        // must stay inspectable instead of being replaced by a generic message.
+        error: !delivered ? retry?.error : (record?.error ?? retry?.error),
+        evidence: retry?.evidence ?? null,
+      }),
+      notified: true,
+      // `persisted` means a delivered notification is now durably recorded, which
+      // is what lets a future duplicate short-circuit. A failed send may well
+      // have written a failure record, but that records the absence of a
+      // delivery, so it must not be reported as a persisted delivery.
+      persisted: delivered && persisted,
+    };
+  } finally {
+    // Released on every path, including a throwing transport, so a failed send
+    // cannot leave the task permanently un-notifiable.
+    release?.();
+  }
+}
+
+/**
+ * The FIRST-approval notification segment, after the durable queue write.
+ *
+ * Extracted so the shipped first-approval send is directly testable, for the
+ * same reason the duplicate branch is. The defect this closes was invisible to
+ * tests that exercised the shared helper directly: an inline first-path send
+ * would still reserve inside the helper, so only a test that drives THIS
+ * function — the one `executeApprovedTask` actually calls — can detect the
+ * missing reservation, and only a test that overlaps the await can detect the
+ * resulting duplicate.
+ *
+ * Status mapping for a first approval:
+ *  - delivered and durably recorded: QUEUED + AWAITING_COORDINATOR_PICKUP.
+ *  - delivered but the record failed: NOTIFICATION_STATE_UNCERTAIN, with the
+ *    transport evidence, because the message exists.
+ *  - delivery failed: NOTIFICATION_FAILED, retryable.
+ *  - another attempt already owns the send: NOTIFICATION_IN_PROGRESS, and no
+ *    claim that a notification exists.
+ */
+export async function runFirstApprovalNotification({
+  taskId,
+  coordinator,
+  requiredCapabilities,
+  notify,
+  persist,
+  reserve,
+}) {
+  const attempt = await runNotificationAttempt({
+    taskId,
+    notify,
+    persist,
+    reserve,
+  });
+
+  if (
+    attempt.handoff === "NOTIFICATION_IN_PROGRESS" ||
+    attempt.handoff === "NOTIFICATION_FAILED" ||
+    attempt.handoff === "NOTIFICATION_STATE_UNCERTAIN"
+  ) {
+    // Reported verbatim. The queue write above is truthful in every case, so the
+    // caller learns exactly what did and did not happen.
+    return { ...attempt, taskId };
+  }
+
+  return {
+    // A delivered, durably recorded notification on the first approval means the
+    // task is queued and awaiting a coordinator pickup, which is the strongest
+    // claim this path can make. It is NOT a released handoff and NOT a start of
+    // execution.
+    status: "QUEUED",
+    queue_status: "QUEUED",
+    handoff: "AWAITING_COORDINATOR_PICKUP",
+    taskId,
+    notified: attempt.notified,
+    persisted: attempt.persisted,
+    ...(attempt.delivery_evidence
+      ? { delivery_evidence: attempt.delivery_evidence }
+      : {}),
+    coordinator,
+    requiredCapabilities,
+  };
+}
+
+/**
+ * The duplicate-approval branch of the post-approval path.
+ *
+ * This is extracted so the branch that actually runs is directly testable with
+ * an injected transport, rather than only through the pure outcome policy. The
+ * previous version reported ALREADY_NOTIFIED correctly but still invoked the
+ * transport first, so a duplicate approval after a successful notification sent
+ * a second Discord message. Reporting the right thing while performing the wrong
+ * side effect is still wrong, because the message is the user-visible artefact.
+ *
+ * Invariants:
+ *  - A record whose notification already landed is never re-notified, and its
+ *    record is left untouched.
+ *  - A record that is no longer an `QUEUED` handoff (EXECUTING, or any terminal
+ *    queue state) is left completely alone: no transport, no queue rewrite, no
+ *    workflow event. Its authoritative state is preserved verbatim.
+ *  - Everything else delegates to the single shared attempt, so this path and
+ *    the first-approval path cannot both send for the same task.
+ *
+ * `RELEASED_TO_COORDINATOR` is not representable here either: the highest claim
+ * is a delivered notification still awaiting a coordinator pickup.
+ */
+export async function runDuplicateApprovalHandoff({
+  taskId,
+  preExisting,
+  notify,
+  persist,
+  reserve,
+}) {
+  // Status guard first. An item that has moved past the queued-handoff stage is
+  // not an approval replay, so it must not be notified, rewritten, or re-stated
+  // as a fresh QUEUED outcome.
+  if (!preExisting || preExisting.status !== "QUEUED") {
+    return {
+      ...resolveCoordinatorHandoffOutcome({
+        preExisting: null,
+        delivered: true,
+      }),
+      status: preExisting?.status ?? "QUEUED",
+      queue_status: preExisting?.status ?? "QUEUED",
+      handoff: "ALREADY_PROCESSED",
+      // Explicitly no transport call and no record mutation for this branch.
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  // A notification that already landed must not be repeated.
+  if (preExisting.coordinatorNotification?.delivered === true) {
+    return {
+      ...resolveCoordinatorHandoffOutcome({
+        preExisting,
+        delivered: true,
+      }),
+      notified: false,
+      persisted: false,
+    };
+  }
+
+  // One shared attempt owner: the reservation is acquired exactly once here.
+  return runNotificationAttempt({ taskId, notify, persist, reserve });
+}
+
+/**
+ * Build the coordinator notification text.
+ *
+ * This text is explicitly NON-AUTHORITATIVE. It is a human-readable notice
+ * only: no identity, DAG or state is ever derived from it. The coordinator is
+ * expected to resolve the real task from the ledger/queue by `task_id`, so
+ * tampering with this string cannot change what the system does. It exists as a
+ * separate function precisely so that its content is testable and provably
+ * disconnected from the authority path.
+ */
+export function buildCoordinatorNotificationText({ taskId, dispatch }) {
+  return (
+    `✅ **Tác vụ đã được duyệt và đưa vào hàng đợi thực thi.**\n` +
+    `- **Mã tác vụ:** \`${taskId}\`\n` +
+    `- **Điều phối viên theo brief đã duyệt:** \`${dispatch.coordinator}\`\n` +
+    `- **Chuyên môn theo brief đã duyệt:** ${dispatch.requiredCapabilities
+      .map((id) => `\`${id}\``)
+      .join(", ")}\n` +
+    `- **Trạng thái:** \`QUEUED\`. CHƯA có chuyên môn nào thực thi.\n` +
+    `- Thông báo này KHÔNG phải bằng chứng bàn giao. Hãy phân giải tác vụ ` +
+    `từ sổ cái governance theo \`task_id\`; không tin nội dung tin nhắn này ` +
+    `làm nguồn chân lý.`
+  );
+}
+
+/**
+ * M10/T2: advisory prompt context for a recognized coordinator run. This is
+ * context, not authority: it restates the routing facts the queue claim
+ * already holds (task, coordinator, capabilities, attempt, lease) so the
+ * coordinator turn starts from truthful state even if its first prompt races
+ * the ledger bind write. It never grants anything; every governed action the
+ * turn takes is still decided by the guard against the ledger binding.
+ */
+export function buildCoordinatorPromptContext({
+  taskId,
+  coordinator,
+  requiredCapabilities,
+  attempt,
+  leaseId,
+  brief,
+}) {
+  const capabilities = Array.isArray(requiredCapabilities)
+    ? requiredCapabilities.join(", ")
+    : String(requiredCapabilities ?? "");
+  return (
+    `[Trusted governance context]\n` +
+    `You are the designated coordinator \`${coordinator}\` for approved task \`${taskId}\` (queue attempt ${attempt}).\n` +
+    `Required specialists: ${capabilities}.\n` +
+    `Task brief: ${typeof brief === "string" && brief.length > 0 ? brief : "(resolve the authoritative brief by task_id from the queue/ledger)"}\n` +
+    `Delegate each required specialist EXCLUSIVELY through the governed sessions_spawn gate. ` +
+    `This context is advisory: authority comes only from the ledger binding for lease \`${leaseId}\`, never from this text.`
+  );
 }
 
 export function resolveAgentSandboxDir(agentId, context = null) {
@@ -1276,6 +3865,181 @@ export function resolveAgentSandboxDir(agentId, context = null) {
   return null;
 }
 
+/**
+ * M11/T1-R1 (4.1): decide whether an outbound attachment may leave the host.
+ *
+ * The internal tool path already confines every artifact to the agent sandbox
+ * (`resolveAgentSandboxDir` is the root the logical paths returned by
+ * `validateLiveArtifactPath` resolve under, and `lib/artifact-validator.mjs`
+ * enforces the same boundary for published artifacts). An outbound message
+ * used to check only `existsSync`, which follows `..` and symlinks, so any file
+ * on the host could be published to #office. This reuses that same root and the
+ * same relative-path containment idiom — no second path policy, no new
+ * dependency.
+ *
+ * Fails closed for: a missing file, an unresolvable sandbox root, an
+ * unresolvable real path, the root itself, or any component that escapes it.
+ */
+export function containOutboundAttachment(filePath, agentId, context = null) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return { contained: false, reason: "has no attachment path" };
+  }
+  const sandboxDir = resolveAgentSandboxDir(agentId, context);
+  if (!sandboxDir) {
+    return { contained: false, reason: "has no governed sandbox root" };
+  }
+  let realPath;
+  let realRoot;
+  try {
+    realPath = realpathSync(filePath);
+    realRoot = realpathSync(sandboxDir);
+  } catch {
+    return {
+      contained: false,
+      reason: "cannot be resolved inside the governed sandbox",
+    };
+  }
+  const relative = path.relative(realRoot, realPath);
+  if (
+    relative.length === 0 ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return { contained: false, reason: "escapes the governed sandbox root" };
+  }
+  return { contained: true, realPath };
+}
+
+/**
+ * M12/T9 F-122 (legacy R1-A04-04): the stack an agent owns is CANONICAL, and
+ * an unmapped agent is REFUSED BY NAME.
+ *
+ * Four sites used to answer "which stack?" with a silent fallback to the
+ * `data_plant` stack, so a delegation with no recorded `stack_id` and no
+ * matching task node was granted the data-plant scope instead of a named
+ * refusal, and an agent id the plugin's private table did not list silently
+ * received `data_plant` nodes which were then written into durable
+ * WORKFLOW_BRIEF_ACTIVATED state.
+ *
+ * The mapping below is validated against the canonical `AGENT_STACK_POLICY`:
+ * a "primary" stack the agent is not permitted to own is not a mapping at all,
+ * and an agent the canonical roster does not know has NO stack - which is a
+ * refusal (AUTH_UNAUTHORIZED_TARGET), never a default.
+ */
+const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
+  main: "decision",
+  o1: "data_plant",
+  o2: "intelligence",
+  excel: "data_plant",
+  "power-bi": "intelligence",
+  sql: "data_plant",
+  python: "data_plant",
+});
+
+export function canonicalAgentPrimaryStack(agentId) {
+  if (typeof agentId !== "string" || agentId.length === 0) return null;
+  const primary = CANONICAL_AGENT_PRIMARY_STACK[agentId];
+  if (!primary) return null;
+  const permitted = AGENT_STACK_POLICY[agentId];
+  if (!Array.isArray(permitted) || !permitted.includes(primary)) return null;
+  return primary;
+}
+
+/**
+ * M12/T9 F-302 (legacy R7-C6-02): the expected-result preview's table inputs
+ * had no producer, so every generated image was the placeholder layout even
+ * though the plan that would fill it was in scope.
+ *
+ * The table is built from the ADMITTED plan (the task's own recorded nodes) and
+ * never from invented data: one column per declared attribute, one row per
+ * planned step. A task whose snapshot declares no node keeps the placeholder,
+ * because then nothing is declared.
+ */
+export function buildExpectedResultPreviewInputs(
+  governedTask,
+  spawnInputs = "",
+) {
+  const nodes = Array.isArray(governedTask?.nodes) ? governedTask.nodes : [];
+  const notes = String(spawnInputs ?? "")
+    .trim()
+    .slice(0, 120);
+  if (nodes.length === 0) {
+    return { columns: [], rows: [], notes };
+  }
+  const columns = ["Bước", "Phần mềm", "Thao tác", "Nghiệm thu"];
+  const rows = nodes.slice(0, 8).map((node, index) => [
+    String(node?.node_id ?? `node-${index + 1}`),
+    specialistSoftwareLabel(node?.agent_id),
+    String(node?.inputs ?? "")
+      .trim()
+      .slice(0, 60) || "—",
+    String(node?.validation_criteria ?? "")
+      .trim()
+      .slice(0, 60) || "—",
+  ]);
+  return { columns, rows, notes };
+}
+
+/**
+ * M12/T9 F-305 (legacy R7-C6-06): the preview rasteriser performs no redaction
+ * of its own, unlike every other Discord-visible surface. The seam therefore
+ * guarantees the invariant the rasteriser relies on: a string that is not
+ * already sanitised is refused at the seam and never reaches the image.
+ *
+ * Only the BANNED-PATTERN removal is compared - whitespace normalisation is
+ * not a redaction, so ordinary spacing never refuses a render.
+ */
+export function previewInputIsSanitised(value) {
+  if (typeof value !== "string") return true;
+  const normalise = (text) => text.replace(/\s+/gu, " ").trim();
+  return normalise(sanitizeDiscordText(value)) === normalise(value);
+}
+
+/**
+ * M12/T9 F-113 (legacy R1-A16-03): the durable proof that a result was shown
+ * to the owner. Both result surfaces (the pending announcement and the
+ * accepted publication) record the SAME event shape, so the two can never
+ * drift apart.
+ */
+export function buildResultSurfaceEvent({ taskId, threadId, resultDigest }) {
+  const surfaceEvent = {
+    task_id: taskId,
+    channel: "results",
+    thread_id: threadId,
+  };
+  if (/^[a-f0-9]{64}$/u.test(String(resultDigest ?? "")))
+    surfaceEvent.result_digest = resultDigest;
+  return surfaceEvent;
+}
+
+/**
+ * M12/T9 F-027 (legacy R1-A04-02) — the Knowledgebase access matrix carries a
+ * DISCOVER tier (`L1`) and the canonical policy enforces it on the `read`
+ * action. The knowledge TOOL never used that vocabulary: its own contract
+ * declares `search | retrieve | citation | metadata`, so the L1 branch was
+ * unreachable dead code and the L1 column carried no security meaning at all
+ * (measured: `evaluateToolAccess("main", "zink_knowledge_search", {namespace:
+ * "finance"})` returned `allowed: true`).
+ *
+ * This seam now TRANSLATES the tool's action into the canonical policy action
+ * instead of inventing a policy of its own: every content-bearing knowledge
+ * action IS a read, and the mutating actions are passed through unchanged so
+ * the canonical denial list keeps its full force. The policy table stays the
+ * single source of truth for what L1 means.
+ */
+const KB_CONTENT_ACTIONS = Object.freeze([
+  "search",
+  "retrieve",
+  "citation",
+  "metadata",
+]);
+
+export function canonicalKnowledgeAction(action) {
+  const value = typeof action === "string" ? action.trim().toLowerCase() : "";
+  if (value.length === 0) return "read";
+  return KB_CONTENT_ACTIONS.includes(value) ? "read" : value;
+}
+
 export function evaluateToolAccess(agentId, toolName, params = {}) {
   if (!ids.has(agentId)) {
     return { allowed: false, reason: "UNKNOWN_AGENT" };
@@ -1288,7 +4052,7 @@ export function evaluateToolAccess(agentId, toolName, params = {}) {
       agentId,
       "zink_knowledge",
       params.namespace,
-      params.action || "search",
+      canonicalKnowledgeAction(params.action),
     );
     return access.allowed
       ? { allowed: true, level: access.level }
@@ -1357,6 +4121,130 @@ export function evaluateToolAccess(agentId, toolName, params = {}) {
     };
   }
   return { allowed: true, level: access.level };
+}
+
+/**
+ * M12/T9 F-242: the canonical operation of a governed tool call.
+ *
+ * The operation comes from the POLICY table and the tool's own contract, never
+ * from a field the model chose: `zink_python` executes, `zink_sql` queries,
+ * `zink_n8n` triggers, and the two workbook tools name their operation inside
+ * the input the published contract validates. An operation the policy does not
+ * know is a capability mismatch, not a free-form pass.
+ */
+export function governedOperationFor(toolName, input) {
+  if (toolName === "zink_python") return "execute";
+  if (toolName === "zink_sql") return "query";
+  if (toolName === "zink_n8n") return "trigger";
+  if (toolName === "zink_excel" || toolName === "zink_power_bi") {
+    const operation = input?.operation;
+    return typeof operation === "string" &&
+      OPERATION_POLICY[toolName]?.[operation]
+      ? operation
+      : null;
+  }
+  return null;
+}
+
+/**
+ * M12/T9 F-243: the durable minter for a tool-invocation approval record.
+ *
+ * `bindInvocationApproval` resolves its record from four stores - a
+ * process-global map, `approvals.json`, `approvals/<id>.json` and the task's
+ * own approvals map - and NOTHING in the shipped code wrote any of them: the
+ * only writers were test fixtures. The control therefore had no
+ * production-reachable pass path, and the only real behaviour was the refusal.
+ *
+ * This is the production writer. The record it writes is the PUBLISHED
+ * `GovernedInvocationApproval` shape of `approval-request.schema.json` - the
+ * same shape the guard's resolver validates - so the record the owner
+ * approves is exactly the record the guard reads back.
+ *
+ * The record is written UNDER THE LEDGER'S WRITER LOCK, because the guard
+ * reads the same store under that lock: an unlocked read could observe a
+ * half-written record and then consume a record the consumer never saw.
+ */
+export const INVOCATION_APPROVAL_TTL_MS = 60 * 60 * 1000;
+
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function invocationApprovalRecordPath(paths, approvalId) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  if (typeof approvalId !== "string" || !UUID_V4_PATTERN.test(approvalId))
+    return null;
+  return path.join(paths.root, "approvals", `${approvalId}.json`);
+}
+
+export function mintInvocationApprovalRecord({
+  paths,
+  taskId,
+  briefRevision,
+  toolId,
+  operation,
+  exactTarget,
+  input,
+  ownerPrincipalRef,
+  expiresAt = null,
+  ttlMs = INVOCATION_APPROVAL_TTL_MS,
+}) {
+  if (!paths?.root || typeof paths.root !== "string") {
+    throw new Error("APPROVAL_STORE_UNAVAILABLE: the ledger root is required");
+  }
+  if (typeof ownerPrincipalRef !== "string" || ownerPrincipalRef.length === 0) {
+    throw new Error(
+      "APPROVAL_PRINCIPAL_REQUIRED: an approval record must name its owner",
+    );
+  }
+  if (!OPERATION_POLICY[toolId]?.[operation]) {
+    throw new Error(
+      "APPROVAL_OPERATION_UNKNOWN: the policy declares no such operation",
+    );
+  }
+  const expiresIso =
+    typeof expiresAt === "string" && expiresAt
+      ? expiresAt
+      : new Date(Date.now() + ttlMs).toISOString();
+  const materialParameters = deriveApprovalMaterialParameters(
+    toolId,
+    operation,
+    input ?? {},
+  );
+  const approvalScopeDigest = deriveApprovalScopeDigest({
+    task_id: taskId,
+    brief_revision: Number(briefRevision),
+    tool_id: toolId,
+    operation,
+    exact_target: exactTarget,
+    material_parameters: materialParameters,
+    expires_at: expiresIso,
+  });
+  const approvalId = randomUUID();
+  const record = {
+    owner_principal_ref: ownerPrincipalRef,
+    task_id: taskId,
+    brief_revision: Number(briefRevision),
+    tool_id: toolId,
+    operation,
+    exact_target: exactTarget,
+    approval_scope_digest: approvalScopeDigest,
+    expires_at: expiresIso,
+  };
+  // The contract is authority, not decoration: a record that does not conform
+  // is never written, so the resolver can never find an unusable record.
+  validateContract("approval-request", record);
+  const recordPath = invocationApprovalRecordPath(paths, approvalId);
+  if (!recordPath) {
+    throw new Error("APPROVAL_STORE_UNAVAILABLE: no durable approval path");
+  }
+  // The guard reads this store under the ledger's writer lock, so the write
+  // takes the SAME lock: an unlocked write could be observed half-written by
+  // a reader that then consumes a record it never fully saw.
+  withFileLockSync(lockDirFor(paths.root, "writer.lock"), () => {
+    mkdirSync(path.dirname(recordPath), { recursive: true });
+    writeJsonAtomicSync(recordPath, record);
+  });
+  return { approvalId, record, path: recordPath };
 }
 
 // C10 & C11: Auto-load tool schemas from checked-in contracts in zink-tools/contracts/
@@ -1502,20 +4390,15 @@ function normalizeSemanticContractStatus(value) {
  * runtime bound must be byte-budgeted: a character-count slice can emit a value
  * the contract then rejects, turning a legitimate user message into an
  * unwritable event.
+ *
+ * M10/T2-R15: the implementation now lives in `topology/lib/runtime.mjs` and is
+ * imported. A second, identical private copy here is exactly how the rule
+ * drifted in the first place — the guard kept character-counting `output`,
+ * `agent_self_validation`, `assumptions` and `limitations` while this file was
+ * byte-budgeting its own fields.
  */
 function truncateUtf8(value, maxBytes) {
-  const text = String(value);
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  // Walk code points so a surrogate pair is never cut in half.
-  let bytes = 0;
-  let result = "";
-  for (const character of text) {
-    const size = Buffer.byteLength(character, "utf8");
-    if (bytes + size > maxBytes) break;
-    bytes += size;
-    result += character;
-  }
-  return result;
+  return sharedTruncateUtf8(value, maxBytes);
 }
 
 // O20: Schema-only capabilities taxonomy
@@ -1531,11 +4414,20 @@ export function isExecutableTool(toolId) {
 }
 
 // O19: Validate built-in vs callable tool allowlist invariants
-export function validateToolAllowlistInvariants() {
+//
+// F-499 (R10-L01-2): the validator existed but nothing called it, so a future
+// policy-table edit could cross the invariant silently. `registerTools` now
+// refuses registration on a violation. The two optional parameters are the
+// test seam that plants an overlap without mutating the frozen live tables;
+// production always passes neither.
+export function validateToolAllowlistInvariants(
+  toolPolicy = TOOL_POLICY,
+  builtInToolPolicy = BUILT_IN_TOOL_POLICY,
+) {
   const violations = [];
   for (const agentId of ids) {
-    const callable = TOOL_POLICY[agentId] || [];
-    const builtin = BUILT_IN_TOOL_POLICY[agentId] || [];
+    const callable = toolPolicy[agentId] || [];
+    const builtin = builtInToolPolicy[agentId] || [];
     const intersection = callable.filter((t) => builtin.includes(t));
     if (intersection.length > 0) {
       violations.push(
@@ -1557,13 +4449,28 @@ export function registerTools(api, options = {}) {
         ? api.tools.register.bind(api.tools)
         : null;
   if (!registerFn) return { registered: [], skipped: [] };
+  // F-499 (R10-L01-2): the built-in/callable allowlist overlap is a
+  // registration-time invariant, not a test-only assertion. A planted overlap
+  // must refuse the whole registration; the live tables are disjoint today, so
+  // startup is unchanged.
+  const allowlist = validateToolAllowlistInvariants(
+    options.toolPolicy ?? TOOL_POLICY,
+    options.builtInToolPolicy ?? BUILT_IN_TOOL_POLICY,
+  );
+  if (!allowlist.valid) {
+    api?.logger?.error?.(
+      `[zink-governance] registerTools: refusing registration: ${allowlist.violations.join("; ")}`,
+    );
+    return { registered: [], skipped: ["*"] };
+  }
   const proposalStorageDir =
     options.proposalStorageDir ??
     (path.isAbsolute(api.pluginConfig?.ledgerRoot ?? "")
       ? path.join(api.pluginConfig.ledgerRoot, "skill-proposals")
       : undefined);
-  // Test seam: options.toolContracts / options.registryChecksum override the
-  // loaders so contract/checksum failure paths are provable. Production
+  // Test seam: options.toolContracts / options.registryChecksum /
+  // options.toolRegistry override the loaders and the static registry so
+  // contract, checksum and execution-failure paths are provable. Production
   // always omits them and uses the loaders below.
   const toolContracts = options.toolContracts ?? loadToolContractSchemas();
   let registryChecksum = null;
@@ -1596,7 +4503,7 @@ export function registerTools(api, options = {}) {
     }
   }
 
-  const registry = {
+  const registry = options.toolRegistry ?? {
     zink_skill_search: {
       description:
         "Search governed skills in Zink Skill Store using semantic vector similarity.",
@@ -1616,15 +4523,9 @@ export function registerTools(api, options = {}) {
                 ?.capability || { type: "string" },
               namespace: toolContracts.zink_skill_search.parameters.properties
                 ?.namespace || { type: "string" },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: ["query", "namespace"],
           }
@@ -1652,10 +4553,8 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Governed Skill Store namespace",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: ["query", "namespace"],
           },
@@ -1664,18 +4563,22 @@ export function registerTools(api, options = {}) {
         // context only. Tool payload never impersonates another agent.
         const mod = await getSkillAdapter();
         // O09: Pass context with task/agent/session identity
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
             {
               action: "search",
-              ...params,
+              ...input,
             },
             ctx,
             { ollamaUrl: resolveDefaultOllamaUrl() },
@@ -1724,15 +4627,9 @@ export function registerTools(api, options = {}) {
                 type: "boolean",
                 description: "Optional deep cross-encoder reranking",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: ["query", "namespace"],
           }
@@ -1764,29 +4661,31 @@ export function registerTools(api, options = {}) {
                 type: "boolean",
                 description: "Optional deep cross-encoder reranking",
               },
-              task_id: {
-                type: "string",
-                description: "Governed task correlation ID",
-              },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: ["query", "namespace"],
           },
       async execute(_id, params) {
         const mod = await getKnowledgeAdapter();
         // O10: Pass context with task/agent/session identity (M8-061:
-        // trusted context only — payload never impersonates)
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // trusted context only - payload never impersonates)
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedKnowledgeQuery) {
           const res = await mod.executeGovernedKnowledgeQuery(
             {
               action: "search",
-              ...params,
+              ...input,
             },
             ctx,
             {
@@ -1842,15 +4741,21 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
-              task_id: {
+              source_type: {
                 type: "string",
-                description: "Governed task correlation ID",
+                enum: [
+                  "owner-authored",
+                  "demonstration",
+                  "execution",
+                  "correction",
+                  "research",
+                ],
+                description:
+                  "Provenance of this skill: how it was produced. Shown to the owner on the approval packet; never defaulted.",
               },
-              session_key: {
-                type: "string",
-                description: "Runtime session key",
-              },
-              run_id: { type: "string", description: "Runtime execution ID" },
+              // M12/T9 F-041: `task_id`, `session_key` and `run_id` are the
+              // trusted runtime context's correlation identity, never
+              // model-fillable fields.
             },
             required: [
               "namespace",
@@ -1858,6 +4763,7 @@ export function registerTools(api, options = {}) {
               "version",
               "content",
               "reason",
+              "source_type",
             ],
           }
         : {
@@ -1885,10 +4791,20 @@ export function registerTools(api, options = {}) {
                 type: "string",
                 description: "Justification for this new/updated skill",
               },
-              task_id: {
+              source_type: {
                 type: "string",
-                description: "Governed task correlation ID",
+                enum: [
+                  "owner-authored",
+                  "demonstration",
+                  "execution",
+                  "correction",
+                  "research",
+                ],
+                description:
+                  "Provenance of this skill: how it was produced. Shown to the owner on the approval packet; never defaulted.",
               },
+              // M12/T9 F-041: `task_id` is the trusted runtime context's
+              // correlation identity, never a model-fillable field.
             },
             required: [
               "namespace",
@@ -1896,24 +4812,29 @@ export function registerTools(api, options = {}) {
               "version",
               "content",
               "reason",
+              "source_type",
             ],
           },
       async execute(_id, params) {
         const mod = await getSkillAdapter();
         // O11: Pass context with requesting agent and correlation identity
-        // (M8-061: trusted context only — payload never impersonates)
-        const ctx = {
-          sessionKey:
-            params?.session_key || _id?.sessionKey || "unbound-session",
-          runId: params?.run_id || _id?.runId || "unbound-run",
-          taskId: params?.task_id || _id?.taskId || "unbound-task",
-          requestingAgent: deriveTrustedRequester(_id),
-        };
+        // (M8-061: trusted context only - payload never impersonates)
+        // M12/T9 F-041: a payload correlation key is refused, never honoured.
+        const { input, refused, context } = deriveTrustedToolIdentity(
+          _id,
+          params,
+        );
+        for (const field of refused) {
+          api.logger?.warn?.(
+            `[zink-governance] memory tool payload correlation refused: field=${field}`,
+          );
+        }
+        const ctx = context;
         if (mod?.executeGovernedSkillQuery) {
           const res = await mod.executeGovernedSkillQuery(
             {
               action: "propose",
-              ...params,
+              ...input,
             },
             ctx,
             {
@@ -1928,30 +4849,40 @@ export function registerTools(api, options = {}) {
               ? proposal.namespace.join("/")
               : proposal.namespace || "specialist";
             const targetStr = `skills/${nsStr}/${proposal.capability}@${proposal.version}`;
-            // The content digest and the approval id are derived by the
-            // governance layer from the content it received, never copied from
-            // a caller-supplied field. The adapter does not always populate
-            // `proposal_id`, so deriving it here also means the approval is
-            // always bound to specific bytes rather than to an absent id.
-            const contentDigest = canonicalHash(
-              "zink-skill-content-v1",
-              String(params?.content ?? ""),
-            );
+            // content_sha256 is the RAW SHA-256 of the exact bytes that will
+            // become canonical SKILL.md — the same digest the adapter
+            // computed over the trimmed proposal content. It is reproduced
+            // here from the received content (never copied from a
+            // caller-supplied field) and must equal the adapter's digest;
+            // otherwise the two layers disagree about what the owner approves.
+            const rawContent = String(params?.content ?? "").trim();
+            const contentDigest = rawContentSha256(rawContent);
+            if (contentDigest !== proposal.content_sha256) {
+              throw new Error(
+                "SKILL_CONTENT_DIGEST_DIVERGED: governance digest does not match the proposal digest",
+              );
+            }
+            // F-OC-012: the owner must see the provenance before approving.
+            // A proposal that carries none (created before the field existed)
+            // never reaches the owner as an unnamed skill; the approval path
+            // can still accept an explicit owner attestation.
+            if (
+              typeof proposal.source_type !== "string" ||
+              proposal.source_type.trim() === ""
+            ) {
+              throw new Error(
+                "APPROVAL_SOURCE_TYPE_MISSING: the proposal does not declare its provenance source_type",
+              );
+            }
             const approvalRecord = {
               schema_version: "1.0.0",
               governance_version: GOVERNANCE_VERSION,
+              subject_type: APPROVAL_SUBJECT_TYPES.SKILL_CANDIDATE_APPROVAL,
               approval_id: String(
                 proposal.proposal_id ??
-                  canonicalHash("zink-skill-approval-id-v1", contentDigest),
+                  `appr_${createHash("sha256").update(contentDigest).digest("hex").slice(0, 24)}`,
               ),
-              // The contract requires a 64-hex task correlation id. The old
-              // `task-skill-<id>` string violated that pattern, so the record
-              // could never have validated; the digest is deterministic, so it
-              // remains a stable correlation key.
-              task_id: canonicalHash(
-                "zink-skill-approval-v1",
-                String(proposal.proposal_id ?? contentDigest),
-              ),
+              proposal_id: String(proposal.proposal_id),
               brief_revision: 1,
               exact_target: targetStr,
               exact_operation: "SKILL_CANDIDATE_APPROVAL",
@@ -1959,14 +4890,15 @@ export function registerTools(api, options = {}) {
                 namespace: proposal.namespace,
                 capability: proposal.capability,
                 version: proposal.version,
-                // The content digest is computed by the governance layer from
-                // the content it actually received, never copied from a
-                // caller-supplied field. That makes the approval scope digest
-                // bind to the bytes the owner is approving.
+                // The raw content digest: the owner approves these exact bytes.
                 content_sha256: contentDigest,
                 reason: proposal.reason,
                 requesting_agent:
                   proposal.requesting_agent || ctx.requestingAgent,
+                // F-OC-012: the provenance the author declared. The owner
+                // reviews it here and may attest a different value at
+                // approval; the approved value is bound into the scope digest.
+                source_type: proposal.source_type,
               },
               impact: `Duyệt đưa skill ${proposal.capability} v${proposal.version} vào Zink Skill Store (trạng thái ACTIVE) và lập chỉ mục vào cơ sở dữ liệu vector dài hạn (pgvector).`,
               recovery_proposal:
@@ -1975,11 +4907,13 @@ export function registerTools(api, options = {}) {
               expires_at: new Date(
                 Date.now() + 7 * 24 * 60 * 60 * 1000,
               ).toISOString(),
-              // The scope digest is what an owner's decision is bound to, so it
-              // is computed over exactly the parameters shown for approval.
+              // The scope digest binds target, operation, proposal identity,
+              // exact content and the declared provenance. It is a separate
+              // field and never overloads content_sha256. An owner-attested
+              // override re-derives this digest with the approved value.
               approval_scope_digest: canonicalHash(
                 "zink-approval-scope-v1",
-                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${contentDigest}`,
+                `${targetStr}|SKILL_CANDIDATE_APPROVAL|${proposal.proposal_id}:${contentDigest}|${proposal.source_type}`,
               ),
               publication_status: "pending_owner_post",
               proposal,
@@ -2133,15 +5067,27 @@ export function registerTools(api, options = {}) {
         required: ["workflow_id", "payload"],
       },
       async execute(_id, params) {
+        // The real n8n path is NOT this function. `beforeToolCall` performs the
+        // governance checks and then dispatches through the one canonical guard
+        // seam, which issues the immutable AuthorizationDecisionContext and calls
+        // the real `invokeN8n` adapter, returning its validated tool-result
+        // envelope. Reaching this body therefore means the governed dispatch did
+        // not produce a result, so the only truthful answer is a fail-closed
+        // BLOCKED. Returning a fabricated ENGINE_NOT_IMPLEMENTED here would
+        // claim the real adapter is absent when it is present, and would let a
+        // model read a governed capability as unimplemented.
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "N8N_GOVERNED_DISPATCH_REQUIRED",
                 tool: "zink_n8n",
                 workflow_id: params?.workflow_id,
-                message: `n8n engine not available. Deploy zink-tools/n8n-adapter to trigger workflow ${params?.workflow_id}.`,
+                message:
+                  "n8n executes only through the governed dispatch seam. No governed result was produced, so no workflow was triggered.",
               }),
             },
           ],
@@ -2189,22 +5135,25 @@ export function registerTools(api, options = {}) {
         required: ["operation", "model"],
       },
       async execute(_id, params) {
-        const targetModel =
-          params?.model ||
-          params?.model_name ||
-          params?.dataset_name ||
-          "DefaultModel";
+        // No Power BI executor exists anywhere in the repository. A local
+        // stand-in, a URL string, or a fabricated receipt would be a fake
+        // success, so this stays explicitly not-implemented and reports BLOCKED
+        // so the governance layer can never record a result for work that did
+        // not happen.
         const op = params?.operation || "validate";
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "ENGINE_NOT_IMPLEMENTED",
                 tool: "zink_power_bi",
                 operation: op,
-                model: targetModel,
-                message: `Power BI engine not available. Deploy zink-tools/power-bi-engine to execute operation '${op}' on model '${targetModel}'.`,
+                implemented: false,
+                message:
+                  "No Power BI executor is implemented in this repository. No model was created, refreshed, or validated. This capability is NOT IMPLEMENTED.",
               }),
             },
           ],
@@ -2244,17 +5193,24 @@ export function registerTools(api, options = {}) {
         additionalProperties: false,
       },
       async execute(_id, params) {
+        // No Python sandbox is implemented. Host `python`, `child_process`,
+        // PowerShell, WSL, and Docker-from-host are all deliberately NOT used
+        // here: each would execute model-influenced input outside the governed
+        // boundary. Stays explicitly not-implemented and reports BLOCKED.
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                status: "ENGINE_NOT_IMPLEMENTED",
+                status: "BLOCKED",
+                execution_state: "BLOCKED",
+                error: "ENGINE_NOT_IMPLEMENTED",
                 tool: "zink_python",
                 entrypoint: params?.entrypoint,
                 stack: params?.stack,
+                implemented: false,
                 message:
-                  "Python sandbox not available. Deploy zink-tools/python-sandbox to enable real script execution.",
+                  "No governed Python sandbox is implemented. No script was executed. This capability is NOT IMPLEMENTED.",
               }),
             },
           ],
@@ -2464,6 +5420,10 @@ export function registerTools(api, options = {}) {
               toolContracts[toolId]?.schemaName,
             );
           } catch (paramErr) {
+            // F-470: the thrown schema detail stays on the host log.
+            api?.logger?.error?.(
+              `[zink-governance] ${toolId} parameter schema rejected: ${paramErr?.code || "INVALID_PARAMETERS"}`,
+            );
             return {
               content: [
                 {
@@ -2471,7 +5431,11 @@ export function registerTools(api, options = {}) {
                   text: JSON.stringify({
                     status: "INVALID_PARAMETERS",
                     tool: toolId,
-                    errors: [paramErr?.message || String(paramErr)],
+                    // F-470: fixed canonical text, never `paramErr.message`,
+                    // which is model-facing and can carry internal detail.
+                    errors: [
+                      "INVALID_PARAMETERS: governed tool parameter validation failed closed",
+                    ],
                     code: "INVALID_PARAMETERS",
                   }),
                 },
@@ -2504,15 +5468,28 @@ export function registerTools(api, options = {}) {
             };
           }
         } catch (err) {
+          // F-470: the raw failure text stays on the host log for diagnosis and
+          // never enters the model-facing envelope, which carries a fixed
+          // canonical message plus a symbolic code — the convention the governed
+          // SQL sibling already follows.
+          api?.logger?.error?.(
+            `[zink-governance] ${toolId} execution failed closed: ${err?.code || "TOOL_EXECUTION_FAILED"}`,
+          );
+          // F-OC-010: emit an error envelope that satisfies the published schema.
+          // The generic {status:"ERROR", tool, error, message, code} violated the
+          // Excel output contract (which requires operation/success and forbids
+          // additional properties). We now emit only schema-compliant shapes:
+          // either operation-driven success/failure with the required fields, or
+          // a terminal-error carrier defined by the caller's contract.
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify({
-                  status: "ERROR",
-                  tool: toolId,
-                  error: err?.message || String(err),
-                  code: err?.code || "TOOL_EXECUTION_FAILED",
+                  operation: err?.operation || "unknown_operation",
+                  success: false,
+                  error_code: err?.code || "TOOL_EXECUTION_FAILED",
+                  error_message: "Governed tool execution failed.",
                 }),
               },
             ],
@@ -2555,7 +5532,10 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
   if (!outputSchema || typeof outputText !== "string") {
     return { ok: true };
   }
-  const blocked = (errors, rawOutput) => ({
+  // F-470: the refusal carries a symbolic code only. The offending output is
+  // never echoed back into the model-facing envelope, because it can itself be
+  // the disclosure (absolute paths, session keys, digests).
+  const blocked = (errors) => ({
     ok: false,
     response: {
       content: [
@@ -2566,7 +5546,6 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
             tool: toolId,
             errors,
             code: "INVALID_OUTPUT_SCHEMA",
-            ...(rawOutput === undefined ? {} : { rawOutput }),
           }),
         },
       ],
@@ -2590,8 +5569,10 @@ export function validateToolOutputEnvelope(toolId, executionResult, contract) {
   ) {
     try {
       checkSchema(outputSchema, parsedOutput, contract?.schemaName);
-    } catch (outErr) {
-      return blocked([outErr?.message || String(outErr)], parsedOutput);
+    } catch {
+      return blocked([
+        "INVALID_OUTPUT_SCHEMA: governed tool output did not satisfy its contract",
+      ]);
     }
   }
   return { ok: true };
@@ -2737,6 +5718,20 @@ function forgetAdmissionLiveness(runId) {
 }
 
 /**
+ * M10/T2-R5: shape structured inbound id lists into mention entries the
+ * existing mention resolver already understands (user objects by id, role
+ * ids as raw strings). Invalid entries never reach here — the boundary
+ * snowflake-validates every id — so this mapping is total and infallible.
+ * Replaces the R4 outbound-attribution cache: host-resolved ownership made
+ * the memory fragile and unnecessary, and a single ownership source keeps
+ * diagnostics unambiguous.
+ */
+function toStructuredMentionEntries(ids) {
+  if (!Array.isArray(ids)) return [];
+  return ids.map((id) => ({ id }));
+}
+
+/**
  * The ONE heartbeat decision, applied identically at every seam.
  *
  * `context` is always the host's own run context for the seam in question. When
@@ -2867,13 +5862,358 @@ async function resolveRunModelFor(config, context) {
   }
 }
 
+/**
+ * M12/T9 F-031: the identity secret that mints a principal ref.
+ *
+ * A durably recorded "verified user principal" must not be recomputable from
+ * public source, and the two trust levels must share ONE vocabulary. The
+ * ANSWER_USER path used to mint with the literal string "identity-key", which is
+ * in the public source: anyone who knew the snowflake could recompute the
+ * recorded ref, and any later comparison between the two trust levels was
+ * meaningless. The identity key is the SAME 64-hex secret the ingress path
+ * already uses.
+ *
+ * Returns null when the key is absent or unusable, so the caller can fail
+ * closed instead of minting a ref with a weaker key.
+ */
+export function mintUserPrincipalRef(paths, userPrincipal) {
+  if (!paths || userPrincipal === null || userPrincipal === undefined)
+    return null;
+  const identityPath =
+    paths.identityKey || path.resolve(paths.root, "../identity.key");
+  try {
+    noLinks(identityPath);
+    if (!existsSync(identityPath)) return null;
+    const key = readFileSync(identityPath, "utf8").trim();
+    if (!/^[a-f0-9]{64}$/u.test(key)) return null;
+    return derivePrincipalRef(key, String(userPrincipal));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * M12/T9 F-049: the ledger's identity secret — READ, and created on first use.
+ *
+ * This is the ONLY writer of the identity key, so two paths can never mint
+ * two different keys for one ledger: the key file is created EXCLUSIVELY and
+ * then re-read, so a concurrent creation cannot overwrite a key another writer
+ * has already published. A key that cannot be read is not a weaker key: it is
+ * no key at all, and every caller fails closed on it.
+ *
+ * The key never enters a prompt or a log.
+ */
+export function resolveIdentityKey(paths) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  const identityPath =
+    paths.identityKey || path.resolve(paths.root, "../identity.key");
+  noLinks(identityPath);
+  try {
+    if (!existsSync(identityPath)) {
+      mkdirSync(path.dirname(identityPath), { recursive: true });
+      try {
+        writeFileSync(identityPath, `${randomBytes(32).toString("hex")}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
+      } catch (err) {
+        // Another writer won the race: ITS key is the ledger's key.
+        if (err?.code !== "EEXIST") return null;
+      }
+    }
+    const key = readFileSync(identityPath, "utf8").trim();
+    return isIdentityKey(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * M12/T9 F-049: the ONE ledger write seam of this plugin.
+ *
+ * Every durable event this plugin writes passes through here, so the
+ * referential scheme is applied at ONE place: the PROSE of a payload can never
+ * carry a third party's Discord account id in the clear. The same third party
+ * always resolves to the same hashed reference, so the system still
+ * recognises the identity when it sees it again.
+ *
+ * Only prose is rewritten. `message_id`, `thread_id`, `origin_message_id` and
+ * `session_key` are STRUCTURAL: they identify a Discord surface, the
+ * published contract pins them to their raw form, and rewriting them would
+ * break a binding rather than protect a person.
+ *
+ * The identity secret is needed only when there is an identity to hide: a
+ * payload whose prose carries none is written exactly as it was.
+ */
+export function recordWorkflowEvent(paths, type, payload) {
+  const identityKey = resolveIdentityKey(paths);
+  const written = writeWorkflowEvent(
+    paths,
+    type,
+    tokenizePayloadPrincipalReferences(payload, {
+      identityKey,
+    }),
+  );
+  // M12/T9 F-049/H7: the event is RECORDED first and marked afterwards. The
+  // owner's answer is "record it and flag it", never "refuse it": a marking
+  // that fails must not undo the record that is already durable.
+  markUnknownPrincipals(paths, type, payload, { identityKey });
+  return written;
+}
+
+/**
+ * M12/T9 F-049/H7 — the durable MARKING of an unknown Discord identity.
+ *
+ * F-049 decided that a third party's identity is stored as a hash. This decides
+ * what the system does when the identity it hashed is one it cannot account
+ * for: neither the owner nor a member of the roster. The owner's answer
+ * (2026-10-21, `H7`) is "record it and flag it" — so the fact is recorded in a
+ * durable record of its own, and the owner is told.
+ *
+ * The record lives beside the ledger's other plugin-owned durable state
+ * (`<ledgerRoot>/…`), one file per unknown identity, and it names the identity
+ * ONLY by the hashed reference F-049 already writes. The raw id is never
+ * written, never logged and never committed.
+ *
+ * The record is deliberately NOT a ledger event: the ledger's event vocabulary
+ * is closed (the published contract forbids extra payload members and the
+ * reducer refuses any payload key it does not declare), so a marking field
+ * could only be added by changing the reducer's key lists — a change this
+ * band does not own. A separate durable record is therefore the smallest
+ * sound place for the fact, and it leaves the event itself untouched.
+ */
+export const UNKNOWN_PRINCIPAL_STORE_DIRECTORY = "unknown-principals";
+
+/** The durable record's path for one unknown identity. */
+export function unknownPrincipalRecordPath(paths, principalRef) {
+  if (!paths?.root || typeof paths.root !== "string") return null;
+  if (
+    typeof principalRef !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(principalRef)
+  ) {
+    return null;
+  }
+  return path.join(
+    paths.root,
+    UNKNOWN_PRINCIPAL_STORE_DIRECTORY,
+    `${principalRef}.json`,
+  );
+}
+
+/** The durable record of one unknown identity, or null when there is none. */
+export function readUnknownPrincipalRecord(paths, principalRef) {
+  const file = unknownPrincipalRecordPath(paths, principalRef);
+  if (!file) return null;
+  try {
+    const record = readJsonStrictSync(file);
+    if (!record || record.principal_ref !== principalRef) return null;
+    return record;
+  } catch {
+    // A partially written or corrupt record is never a valid record.
+    return null;
+  }
+}
+
+/**
+ * Record one occurrence of an unknown identity, durably.
+ *
+ * The record accumulates the occurrences so the owner can see that the SAME
+ * unknown identity appears again — which is exactly what the hashed reference
+ * makes recognisable (F-049's third property).
+ */
+export function recordUnknownPrincipalOccurrence(
+  paths,
+  principalRef,
+  { taskId = null, eventType = null, at = null } = {},
+) {
+  const file = unknownPrincipalRecordPath(paths, principalRef);
+  if (!file) return null;
+  const observedAt = typeof at === "string" && at.length > 0 ? at : null;
+  const previous = readUnknownPrincipalRecord(paths, principalRef);
+  const occurrences = Array.isArray(previous?.occurrences)
+    ? previous.occurrences.filter(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          typeof entry.task_id === "string",
+      )
+    : [];
+  const sameOccurrence = occurrences.some(
+    (entry) =>
+      entry.task_id === taskId &&
+      entry.event_type === eventType &&
+      entry.observed_at === observedAt,
+  );
+  if (!sameOccurrence) {
+    occurrences.push({
+      task_id: taskId,
+      event_type: eventType,
+      observed_at: observedAt,
+    });
+  }
+  const record = {
+    schema: "zink-unknown-principal-v1",
+    category: UNKNOWN_PRINCIPAL_CATEGORY,
+    // The hashed reference — never the raw account id.
+    principal_ref: principalRef,
+    principal_token: `${PRINCIPAL_TOKEN_PREFIX}${principalRef}${PRINCIPAL_TOKEN_SUFFIX}`,
+    known_to_the_roster: false,
+    owner_action_required: true,
+    first_seen_at: previous?.first_seen_at ?? observedAt,
+    last_seen_at: observedAt ?? previous?.last_seen_at ?? null,
+    occurrences,
+  };
+  writeJsonAtomicSync(file, record);
+  return record;
+}
+
+/**
+ * The identities in one durable event that the system does not know.
+ *
+ * The KNOWN set is the task's own recorded origin principal — the ledger's
+ * durable record of who opened the task, which is the owner — plus the
+ * roster's own identities. The owner's own identity handling is therefore
+ * unchanged: the owner is never marked unknown.
+ */
+export function unknownPrincipalsForEvent(
+  paths,
+  payload,
+  { identityKey = null } = {},
+) {
+  if (!isIdentityKey(identityKey)) return [];
+  // The write path is hot: an event whose payload carries no prose cannot
+  // carry an identity, so it must not pay for a snapshot read.
+  const carriesProse = PROSE_PAYLOAD_FIELDS.some(
+    (field) =>
+      typeof payload?.[field] === "string" && payload[field].length > 0,
+  );
+  if (!carriesProse) return [];
+  const taskId =
+    typeof payload?.task_id === "string" && payload.task_id.length > 0
+      ? payload.task_id
+      : null;
+  let originPrincipalRef = null;
+  if (taskId) {
+    try {
+      originPrincipalRef =
+        readSnapshot(paths)?.tasks?.[taskId]?.origin_principal_ref ?? null;
+    } catch {
+      originPrincipalRef = null;
+    }
+  }
+  const knownPrincipalRefs = [
+    ...rosterPrincipalReferences(identityKey),
+    ...(typeof originPrincipalRef === "string" ? [originPrincipalRef] : []),
+  ];
+  return unknownPrincipalReferencesInPayload(payload, {
+    identityKey,
+    knownPrincipalRefs,
+  });
+}
+
+/**
+ * The observer the plugin's own setup registers to SURFACE a marked identity.
+ *
+ * The marking is durable on its own; the surfacing is the governed #incidents
+ * path, which lives inside the plugin's setup (it needs the Discord
+ * destination, the bot token and the forum tag resolver). The seam therefore
+ * hands the record to whoever registered, and nothing else.
+ */
+let UNKNOWN_PRINCIPAL_OBSERVER = null;
+
+export function setUnknownPrincipalObserver(observer) {
+  UNKNOWN_PRINCIPAL_OBSERVER = typeof observer === "function" ? observer : null;
+}
+
+/**
+ * Mark every unknown identity an event carries, and surface it.
+ *
+ * A marking failure is REPORTED and never turned into a refusal: the event is
+ * already durable, and the owner's decision is "record", not "refuse".
+ */
+function markUnknownPrincipals(paths, type, payload, { identityKey = null }) {
+  try {
+    const references = unknownPrincipalsForEvent(paths, payload, {
+      identityKey,
+    });
+    if (references.length === 0) return [];
+    const marked = [];
+    for (const principalRef of references) {
+      const record = recordUnknownPrincipalOccurrence(paths, principalRef, {
+        taskId: payload?.task_id ?? null,
+        eventType: type,
+        at: new Date().toISOString(),
+      });
+      if (!record) continue;
+      marked.push(record);
+      const observer = UNKNOWN_PRINCIPAL_OBSERVER;
+      if (!observer) continue;
+      try {
+        const surfaced = observer(record);
+        if (surfaced && typeof surfaced.catch === "function") {
+          surfaced.catch((error) => {
+            console.error(
+              `[zink-governance] unknown principal surface failed: ${error?.message ?? error}`,
+            );
+          });
+        }
+      } catch (error) {
+        console.error(
+          `[zink-governance] unknown principal surface failed: ${error?.message ?? error}`,
+        );
+      }
+    }
+    return marked;
+  } catch (error) {
+    console.error(
+      `[zink-governance] unknown principal marking failed: ${error?.message ?? error}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * M12/T9 F-083: can the host's Discord component SDK be reached from the running
+ * entrypoint? The answer decides whether a button this plugin posts can ever be
+ * answered, so it is computed once at load and named in the capability line.
+ */
+function componentSdkResolvable() {
+  try {
+    const entrypoint = process.argv?.[1] ?? "";
+    if (!entrypoint) return false;
+    return hostComponentSdkCandidates(entrypoint).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * M12/T9 F-158: the governance manifest is a POLICY ARTIFACT. A missing or
+ * unparseable one used to raise ENOENT or SyntaxError, which escapes to the host
+ * and is re-attributed as a model failure by the run-end seam - and a module-level
+ * load failure takes the whole plugin down. Every policy-artifact read now fails
+ * with a declared canonical code instead.
+ */
+export function readGovernanceManifests(manifestUrl) {
+  try {
+    const parsed = JSON.parse(readFileSync(manifestUrl, "utf8"));
+    if (!parsed || typeof parsed !== "object") throw new Error("not an object");
+    return parsed;
+  } catch {
+    throw new Error("GOVERNANCE_DEPENDENCY_MISSING");
+  }
+}
+
 function leaseKey(context, event = {}) {
   const sessionKey = context.sessionKey ?? event.sessionKey;
   const runId = context.runId ?? event.runId;
   const toolCallId = context.toolCallId ?? event.toolCallId;
   if (!sessionKey || !runId || !toolCallId)
+    // M12/T9 F-087: the diagnostic names the MISSING lineage, never its value. The
+    // module's own log policy is "no params, no hash", and a session key / run id /
+    // tool call id is exactly the identity this line used to print.
     throw new Error(
-      `LINEAGE_MISMATCH: sessionKey=${sessionKey}, runId=${runId}, toolCallId=${toolCallId}`,
+      "LINEAGE_MISMATCH: session_key, run_id and tool_call_id are all required",
     );
   return canonicalHash("zink-native-call-v1", {
     sessionKey,
@@ -2943,16 +6283,29 @@ export default {
     // M8-058: a disabled governance plugin exposes no tools or hooks.
     // The enabled check runs before any registration side effect.
     if (config.enabled === false) return;
-    registerTools(api, {
-      proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
-        ? path.join(config.ledgerRoot, "skill-proposals")
-        : undefined,
-    });
+    // M12/T9 F-500: the config validation runs BEFORE the registerTools side
+    // effect. The throw used to fire AFTER the governed tool surface was
+    // attached, so an invalid deployment left a half-registered plugin whose
+    // inertness rested on a DIFFERENT module's unconfigured-store-root
+    // refusal. Ordering it first restores the M8-058 posture for the
+    // invalid-config case: neither tools nor hooks are registered.
     if (
       !path.isAbsolute(config.ledgerRoot ?? "") ||
       !/^[1-9][0-9]{16,19}$/u.test(config.ownerDiscordId ?? "")
     )
       throw new Error("GOVERNANCE_CONFIGURATION_INVALID");
+    registerTools(api, {
+      proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
+        ? path.join(config.ledgerRoot, "skill-proposals")
+        : undefined,
+    });
+    // F-002: the ONE configured governance store root. The queue projection
+    // and the decision ledger live under it, and an unconfigured store
+    // refuses by name (GOVERNANCE_STORE_ROOT_UNCONFIGURED) instead of
+    // guessing a home-directory path. This must run before the first
+    // queue or decision read, so the plugin's own stores resolve to the
+    // configured root rather than refusing.
+    configureGovernedStoreRoot(config.ledgerRoot);
     const paths = {
       root: config.ledgerRoot,
       events: path.join(config.ledgerRoot, "events.jsonl"),
@@ -2960,29 +6313,56 @@ export default {
     };
     const stateDir = path.resolve(config.ledgerRoot, "../../..");
     // Invocation leases prove the native gate ran. They are not workflow state.
+    //
+    // M12/T9 F-042: this registry is ONE process-global map, so a lease minted under
+    // one ledger root used to satisfy a call governed by another, and stopping one
+    // registration revoked the other's pending authorizations. Every entry is now
+    // partitioned by the governance root that minted it, and a stop revokes only the
+    // scope it owns.
     const leasesKey = Symbol.for("zink.governance.native.leases");
     if (!globalThis[leasesKey]) {
       Object.defineProperty(globalThis, leasesKey, { value: new Map() });
     }
     const leases = globalThis[leasesKey];
-    // E10: Lease TTL — entries expire after 10 minutes to prevent unbounded growth
     const LEASE_TTL_MS = 10 * 60 * 1000;
+    const leaseScope = path.resolve(String(config.ledgerRoot ?? ""));
+    const scopedLeaseKey = (key) => `${leaseScope}\u0000${key}`;
     function setLease(key, hash) {
-      // Prune expired entries first
       const now = Date.now();
       for (const [k, entry] of leases) {
         if (entry.expiresAt < now) leases.delete(k);
       }
-      leases.set(key, { hash, expiresAt: now + LEASE_TTL_MS });
+      leases.set(scopedLeaseKey(key), {
+        hash,
+        expiresAt: now + LEASE_TTL_MS,
+        scope: leaseScope,
+      });
     }
     function getLease(key) {
-      const entry = leases.get(key);
+      const scoped = scopedLeaseKey(key);
+      const entry = leases.get(scoped);
       if (!entry) return undefined;
       if (entry.expiresAt < Date.now()) {
-        leases.delete(key);
+        leases.delete(scoped);
         return undefined;
       }
       return entry.hash;
+    }
+    /**
+     * M12/T9 F-087: consume the lease ONLY when it authorizes THIS call. A wrong or
+     * duplicated call must not destroy the one-shot proof, or the correct call that
+     * follows is denied with nothing left to check.
+     */
+    function consumeLease(key, hash) {
+      const expected = getLease(key);
+      if (expected === undefined || expected !== hash) return false;
+      leases.delete(scopedLeaseKey(key));
+      return true;
+    }
+    /** M12/T9 F-042: revoke only the leases this registration owns. */
+    function clearScopeLeases() {
+      for (const [k, entry] of leases)
+        if (entry.scope === leaseScope) leases.delete(k);
     }
     // Notification waiters are transient, not authority. After notification the
     // guard still requires the exact receipt persisted in the trusted ledger.
@@ -3050,11 +6430,8 @@ export default {
     }
     const manifestFor = (agentId) => {
       if (!ids.has(agentId)) throw new Error("UNAUTHORIZED_TARGET");
-      const mapping = JSON.parse(
-        readFileSync(
-          new URL("./governance-manifests.json", import.meta.url),
-          "utf8",
-        ),
+      const mapping = readGovernanceManifests(
+        new URL("./governance-manifests.json", import.meta.url),
       );
       const expected = mapping[agentId];
       if (!expected || expected.governance_version !== GOVERNANCE_VERSION)
@@ -3082,9 +6459,569 @@ export default {
         allowed_tools: expected.allowed_tools,
       };
     };
-    const guard = createGovernanceGuard({ paths, manifestFor });
+    const guard = createGovernanceGuard({
+      paths,
+      manifestFor,
+      // M10/T2-R2: the queue projection is the lease authority, so a
+      // coordinator's governed mutation is committed inside the queue's own
+      // critical section. This is the same lock claim/recovery already use, so a
+      // stale recovery cannot interleave between the authority check and the
+      // ledger commit. Deliberately bound to the singleton the pickup loop uses,
+      // so both observe exactly the same queue state.
+      queueExecutionFence: (fence, operation) =>
+        defaultQueueManager.withExecutionFence(fence, operation),
+    });
 
     const cachedDiscordTokens = new Map();
+    // M12/T2-R1: one tag resolver and one publish path for all three governed forums. Tag
+    // ids are read from the forum a thread is about to open in, so a rename in Discord
+    // stays an operator action and no snowflake is duplicated in this repository
+    // (owner decision Q2 = A).
+    const forumTags = createForumTagResolver({ logger: api.logger });
+
+    /**
+     * Opens a governed forum thread carrying exactly one tag per required category of that
+     * forum, or posts nothing. An unresolved category is logged with the channel, the
+     * category and the tag being sought (requirement 4); a failure returns a result instead
+     * of throwing, so a broken #approvals surface cannot consume a #results or #incidents
+     * event (requirement 5).
+     */
+    async function postGovernedThread({
+      surface,
+      channelId,
+      token,
+      title,
+      bodyContent,
+      selections,
+    }) {
+      if (selections.absent.length > 0) {
+        for (const category of selections.absent)
+          api.logger?.warn?.(
+            `[zink-governance] DISCORD_TAG_UNRESOLVED channel=${surface} category=${category} wanted="(no evidence in the governed record)" reason=CLASSIFIER_EMPTY channelId=${channelId ?? "unconfigured"}`,
+          );
+        return { posted: false, code: "DISCORD_TAG_UNRESOLVED" };
+      }
+      return openGovernedForumThread({
+        surface,
+        channelId,
+        token,
+        title,
+        bodyContent,
+        selections: selections.selections,
+        resolver: forumTags,
+        fetchImpl: globalThis.fetch,
+        deadlineMs: DISCORD_REST_DEADLINE_MS,
+      });
+    }
+
+    /**
+     * M12/T2-R2: the owner's verdict must be visible where he looks — the forum's STATUS tag,
+     * which is what he filters on. The decision is already durable in `WORKFLOW_USER_APPROVAL_
+     * DECIDED` before this runs, so the tag is a projection of it and never the record itself:
+     * no outcome of this call can undo, delay or rewrite what he decided (requirement 5), which
+     * is why it is fire-and-forget at the call site and every refusal here is only a log line.
+     * The thread id comes from the durable surface state R1 introduced; a task whose card was
+     * never surfaced has nothing to re-tag, and that is reported rather than guessed at.
+     */
+    async function transitionApprovalTag({ taskId, decision }) {
+      const approvalsForumId = resolveDiscordDestination(
+        config,
+        "discordApprovalsForumId",
+        "approvalsChannelId",
+      );
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=STATE_UNREADABLE`,
+        );
+        return { applied: false, code: "STATE_UNREADABLE" };
+      }
+      if (!task) return { applied: false, code: "TASK_NOT_FOUND" };
+      const threadId = task.approval_thread_id ?? null;
+      if (!threadId) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=NO_SURFACE_STATE`,
+        );
+        return { applied: false, code: "NO_SURFACE_STATE" };
+      }
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=CREDENTIAL_UNAVAILABLE`,
+        );
+        return { applied: false, code: "CREDENTIAL_UNAVAILABLE" };
+      }
+      // M12/T9 F-123: the card's own 24-hour clock. An untouched card whose
+      // 24 hours are up is EXPIRED, not WAITING — the owner's ruling is that
+      // an unanswered card is not approved. The expiry comes from the durable
+      // record of the surfaced card.
+      const status = approvalStatusTag(decision, {
+        expiresAt: approvalCardExpiresAt(
+          readSurfacedApprovalPostedAt(paths, taskId),
+        ),
+      });
+      if (!status) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_TRANSITION_SKIPPED channel=approvals task=${taskId} reason=DECISION_UNKNOWN`,
+        );
+        return { applied: false, code: "DECISION_UNKNOWN" };
+      }
+      return transitionGovernedForumStatus({
+        surface: "approvals",
+        channelId: approvalsForumId,
+        threadId,
+        token,
+        status,
+        resolver: forumTags,
+        fetchImpl: globalThis.fetch,
+        deadlineMs: DISCORD_REST_DEADLINE_MS,
+        logger: api.logger,
+      });
+    }
+
+    /**
+     * M12/T9 F-123: project the expiry onto the card.
+     *
+     * The owner's ruling is that an expired card is not approved, and the card
+     * must say so: its STATUS tag becomes EXPIRED. The transition is
+     * fire-and-forget, exactly like the verdict transition — a decision path
+     * never blocks on a Discord round-trip, and a surface failure is a log
+     * line, never a verdict.
+     *
+     * This is the ONLY place besides the post-verdict effect that moves the
+     * approvals tag, so the two owner paths (button and text) cannot drift.
+     */
+    function projectExpiredApprovalTag(taskId) {
+      transitionApprovalTag({ taskId, decision: null }).catch((tagErr) => {
+        api.logger?.warn?.(
+          `[zink-governance] expired approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
+        );
+      });
+    }
+
+    /**
+     * M12/T2-R1: publish an accepted result as one tagged #results thread and return its id,
+     * or the id already recorded for this task. #results had no publish path at all before
+     * this task, so the delivered work existed only as a sentence in #office. Returns null
+     * when no thread could be opened and never throws: an owner verdict already durable in
+     * the queue and the ledger cannot be revoked by a surface failure (requirement 5), and
+     * the caller still posts its notice.
+     */
+    async function surfaceAcceptedResult({ taskId, resultsForumId }) {
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] result surface state unreadable for task ${taskId}; no #results thread opened`,
+        );
+        return null;
+      }
+      if (!task) return null;
+      if (task.results_thread_id) return task.results_thread_id;
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] result thread not posted for task ${taskId}: CREDENTIAL_UNAVAILABLE`,
+        );
+        return null;
+      }
+      const queueItem = defaultQueueManager.getTask(taskId) ?? {};
+      const artifactPaths = [
+        ...(Array.isArray(queueItem.artifacts) ? queueItem.artifacts : []),
+        ...(Array.isArray(queueItem.resultArtifacts)
+          ? queueItem.resultArtifacts
+          : []),
+      ]
+        .map((artifact) =>
+          typeof artifact === "string"
+            ? artifact
+            : (artifact?.logical_path ?? ""),
+        )
+        .filter(Boolean);
+      const surfaced = await postGovernedThread({
+        surface: "results",
+        channelId: resultsForumId,
+        token,
+        title: `✅ [KẾT QUẢ] ${displayTaskToken(taskId)}`,
+        bodyContent: renderGovernedResultBody({
+          taskId,
+          software: resultSoftwareLabelFor(task),
+          outcomeStatus: task?.root_result?.outcome_status,
+          resultDigest: queueItem.resultDigest ?? null,
+          planSteps: renderGovernedPlanSteps(
+            Array.isArray(task?.nodes) ? task.nodes : [],
+          ),
+        }),
+        selections: resultTagSelectionsFor(task, artifactPaths),
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] result thread not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      const surfaceEvent = buildResultSurfaceEvent({
+        taskId,
+        threadId: surfaced.threadId,
+        resultDigest: queueItem.resultDigest,
+      });
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_RESULT_SURFACED", surfaceEvent);
+      } catch (recordError) {
+        api.logger?.error?.(
+          `[zink-governance] RESULT_SURFACE_UNRECORDED task=${taskId} thread=${surfaced.threadId} cause=${recordError?.message}`,
+        );
+      }
+      return surfaced.threadId;
+    }
+
+    /**
+     * M12/T9 F-113 (legacy R1-A16-03): a result that waits for the owner's
+     * verdict must be VISIBLE to him, with the control that accepts it.
+     *
+     * Before this producer existed, the ONLY producer able to make a pending
+     * result visible was the ACCEPT path itself - so the accept path had
+     * nothing to accept, and the owner saw the task approved and then silence.
+     * This producer announces the pending result as soon as the ledger records
+     * it, carries the accept control, and records WORKFLOW_RESULT_SURFACED so
+     * the announcement is provable rather than assumed.
+     *
+     * It is idempotent on the recorded `results_thread_id`: one task has one
+     * #results thread, and a second run-end never opens a second one.
+     */
+    async function surfacePendingResult({ taskId, resultsForumId }) {
+      let task;
+      try {
+        task = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] pending result state unreadable for task ${taskId}; no #results thread opened`,
+        );
+        return null;
+      }
+      if (!task) return null;
+      // Only a result that is genuinely waiting for the owner is announced
+      // here; an accepted result is published by `surfaceAcceptedResult`.
+      if (task.workflow_status !== "RESULT_PENDING_REVIEW") return null;
+      if (task.results_thread_id) return task.results_thread_id;
+      let token;
+      try {
+        token = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] pending result thread not posted for task ${taskId}: CREDENTIAL_UNAVAILABLE`,
+        );
+        return null;
+      }
+      const queueItem = defaultQueueManager.getTask(taskId) ?? {};
+      const artifactPaths = [
+        ...(Array.isArray(queueItem.artifacts) ? queueItem.artifacts : []),
+        ...(Array.isArray(queueItem.resultArtifacts)
+          ? queueItem.resultArtifacts
+          : []),
+      ]
+        .map((artifact) =>
+          typeof artifact === "string"
+            ? artifact
+            : (artifact?.logical_path ?? ""),
+        )
+        .filter(Boolean);
+      const surfaced = await postGovernedThread({
+        surface: "results",
+        channelId: resultsForumId,
+        token,
+        title: `⏳ [KẾT QUẢ CHỜ DUYỆT] ${displayTaskToken(taskId)}`,
+        bodyContent: renderGovernedResultBody({
+          taskId,
+          software: resultSoftwareLabelFor(task),
+          outcomeStatus: task?.root_result?.outcome_status,
+          resultDigest: queueItem.resultDigest ?? null,
+          planSteps: renderGovernedPlanSteps(
+            Array.isArray(task?.nodes) ? task.nodes : [],
+          ),
+        }),
+        selections: resultTagSelectionsFor(task, artifactPaths),
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] pending result thread not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      const surfaceEvent = buildResultSurfaceEvent({
+        taskId,
+        threadId: surfaced.threadId,
+        resultDigest: queueItem.resultDigest,
+      });
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_RESULT_SURFACED", surfaceEvent);
+      } catch (recordError) {
+        api.logger?.error?.(
+          `[zink-governance] PENDING_RESULT_SURFACE_UNRECORDED task=${taskId} thread=${surfaced.threadId} cause=${recordError?.message}`,
+        );
+      }
+      // The accept control: the owner must be able to ACT on the announcement,
+      // not only read about it.
+      try {
+        const revision = String(task.brief_revision ?? 1);
+        const buttons = [
+          {
+            customId: buildComponentCustomId(
+              DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
+              taskId,
+              revision,
+            ),
+            label: "Accept",
+            style: 3,
+            emoji: { name: "✅" },
+          },
+          {
+            customId: buildComponentCustomId(
+              DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REJECT,
+              taskId,
+              revision,
+            ),
+            label: "Reject",
+            style: 4,
+            emoji: { name: "❌" },
+          },
+        ];
+        await sendNativePayload({
+          api,
+          to: surfaced.threadId,
+          threadId: surfaced.threadId,
+          accountId: "main",
+          buttons,
+          payload: buildNativeComponentPayload({
+            text: "**Accept** để nghiệm thu kết quả, **Reject** để từ chối kết quả này.",
+            buttons,
+          }),
+        });
+      } catch (controlError) {
+        api.logger?.warn?.(
+          `[zink-governance] pending result controls not delivered for task ${taskId}: ${controlError?.message}`,
+        );
+      }
+      return surfaced.threadId;
+    }
+
+    /**
+     * M12/T9 F-113 (legacy R1-A16-03): the announcement seam. Fire-and-forget
+     * with its own catch: the result is already durable in the ledger, so a
+     * surface failure is recorded and never rewrites what the run produced.
+     */
+    function announcePendingResult(taskId) {
+      if (!taskId) return;
+      const resultsForumId = resolveDiscordDestination(
+        config,
+        "discordResultsForumId",
+        "resultsChannelId",
+      );
+      if (!resultsForumId) {
+        api.logger?.warn?.(
+          "[zink-governance] pending result not announced: no configured results forum",
+        );
+        return;
+      }
+      surfacePendingResult({ taskId, resultsForumId }).catch((announceErr) => {
+        api.logger?.warn?.(
+          `[zink-governance] pending result not announced for task ${taskId}: ${announceErr?.message}`,
+        );
+      });
+    }
+
+    /**
+     * M12/T2-R1: surface a governance containment in #incidents as one tagged thread.
+     * Strictly additive: the containment and its ledger writes already happened when this
+     * runs, and a surface failure is logged rather than folded into the verdict — the block
+     * stands either way (requirement 5). If the forum's current threads cannot be read, no
+     * thread is opened, because a blind post is how a duplicate incident gets made.
+     *
+     * M12/T9 F-049/H7: the card's own text may be supplied by the caller, so the
+     * SAME governed path — the same forum, the same dedupe rule, the same card
+     * and the same tags — can carry a fact that is not a run containment. The
+     * containment text is the default and is unchanged.
+     */
+    async function surfaceGovernanceIncident({
+      reason,
+      runId,
+      childSessionKey,
+      scope,
+      taskIds,
+      ledgerError,
+      card = null,
+    }) {
+      const incidentsForumId = resolveDiscordDestination(
+        config,
+        "discordIncidentsForumId",
+        "incidentsChannelId",
+      );
+      if (!incidentsForumId) {
+        api.logger?.warn?.(
+          `[zink-governance] DISCORD_TAG_UNRESOLVED channel=incidents category=(none) wanted="(configured incidents forum)" reason=DESTINATION_UNCONFIGURED channelId=unconfigured`,
+        );
+        return null;
+      }
+      let botToken;
+      try {
+        botToken = resolveDiscordBotToken("main");
+      } catch {
+        api.logger?.warn?.(
+          `[zink-governance] incident not surfaced: CREDENTIAL_UNAVAILABLE (reason=${reason})`,
+        );
+        return null;
+      }
+      const { token, title } = incidentIdentityFor({
+        reason,
+        runId,
+        childSessionKey,
+        scope,
+        taskIds,
+      });
+      let alreadySurfaced;
+      try {
+        const listing = await readActiveForumThreads({
+          channelId: incidentsForumId,
+          token: botToken,
+          fetchImpl: globalThis.fetch,
+          deadlineMs: DISCORD_REST_DEADLINE_MS,
+        });
+        // M12/T9 F-016: a truncated listing cannot answer "is this incident already open?".
+        // The honest answer is "unable to conclude", so the surface is skipped rather than
+        // opened a second time for an incident that is already open.
+        const decision = incidentSurfaceDecision(listing, token);
+        if (decision.reason === "THREAD_LIST_TRUNCATED") {
+          api.logger?.warn?.(
+            `[zink-governance] INCIDENT_SURFACE_SKIPPED incident=${token} cause=THREAD_LIST_TRUNCATED`,
+          );
+          return null;
+        }
+        alreadySurfaced = decision.reason === "ALREADY_SURFACED";
+      } catch (listError) {
+        api.logger?.warn?.(
+          `[zink-governance] INCIDENT_SURFACE_SKIPPED incident=${token} cause=THREAD_LIST_UNREADABLE ${listError?.message}`,
+        );
+        return null;
+      }
+      if (alreadySurfaced) {
+        api.logger?.info?.(
+          `[zink-governance] incident ${token} already surfaced in #incidents; no duplicate thread`,
+        );
+        return null;
+      }
+      let affected;
+      try {
+        const snapshot = readSnapshot(paths);
+        affected = taskIds
+          .map((taskId) => snapshot?.tasks?.[taskId] ?? null)
+          .filter(Boolean);
+      } catch {
+        affected = [];
+      }
+      const selections = incidentTagSelectionsFor(affected, {
+        reason,
+        scope,
+        ledgerError,
+      });
+      const severity =
+        selections.selections.find((entry) => entry.category === "SEVERITY")
+          ?.value ?? "";
+      const surfaced = await postGovernedThread({
+        surface: "incidents",
+        channelId: incidentsForumId,
+        token: botToken,
+        title,
+        bodyContent: formatIncidentCard({
+          incidentId: token,
+          taskId: taskIds[0] ?? null,
+          state: "OPEN",
+          severity: severity || "MEDIUM",
+          observed:
+            card?.observed ??
+            `Một run không thể đối chiếu (${reason}, phạm vi ${scope}) đã bị tạm dừng: ${taskIds.join(", ") || "không xác định tác vụ"}.`,
+          expected:
+            card?.expected ??
+            "Mọi run kết thúc đều được ghi vào sổ cái governance trước khi hệ thống tiếp tục.",
+          action:
+            card?.action ??
+            (ledgerError
+              ? `Sổ cái KHÔNG ghi được (${ledgerError}) — cần operator đối chiếu trước khi chạy lại.`
+              : "Run đã bị chặn cho tới khi operator đối chiếu; chưa có kết quả nào được ghi nhận."),
+        }),
+        selections,
+      });
+      if (!surfaced.posted) {
+        api.logger?.warn?.(
+          `[zink-governance] incident thread not posted for ${token}: ${surfaced.code}`,
+        );
+        return null;
+      }
+      api.logger?.info?.(
+        `[zink-governance] incident ${token} surfaced in #incidents (threadId: ${surfaced.threadId})`,
+      );
+      return surfaced.threadId;
+    }
+
+    /**
+     * M12/T9 F-049/H7: surface a MARKED unknown identity to the owner.
+     *
+     * The owner's answer (2026-10-21, `H7`) is "record it and flag it": an
+     * identity that is neither the owner nor a member of the roster is
+     * recorded (hashed) and the owner is told. The telling uses the EXISTING
+     * governed incident path — the same #incidents forum, the same dedupe
+     * rule, the same card and the same tags — so no new outbound path is
+     * introduced.
+     *
+     * One thread per unknown identity: the incident's own reason carries the
+     * hashed reference, so the forum's listing can tell two identities apart
+     * and a retry is recognised instead of duplicated.
+     */
+    function surfaceUnknownPrincipal(record) {
+      const principalRef = record?.principal_ref;
+      if (typeof principalRef !== "string" || principalRef.length === 0) {
+        return null;
+      }
+      const occurrences = Array.isArray(record?.occurrences)
+        ? record.occurrences
+        : [];
+      const taskIds = [
+        ...new Set(
+          occurrences
+            .map((entry) => entry?.task_id)
+            .filter(
+              (taskId) => typeof taskId === "string" && taskId.length > 0,
+            ),
+        ),
+      ];
+      return surfaceGovernanceIncident({
+        reason: `${UNKNOWN_PRINCIPAL_CATEGORY}:${principalRef}`,
+        runId: null,
+        childSessionKey: null,
+        scope: "UNKNOWN_PRINCIPAL",
+        taskIds,
+        ledgerError: null,
+        card: {
+          observed: `Một định danh Discord KHÔNG thuộc roster và KHÔNG phải của owner đã xuất hiện trong sự kiện bền vững: ${record.principal_token ?? principalRef}.`,
+          expected:
+            "Mọi định danh Discord ghi vào sổ cái governance đều thuộc owner hoặc roster đã công nhận.",
+          action:
+            "Đã ghi lại dưới dạng băm (không có id gốc trong sổ cái). Owner xem lại nội dung sự kiện để quyết định có tiếp tục hay không.",
+        },
+      });
+    }
+
+    // The seam that marks an unknown identity is module level; the governed
+    // #incidents path needs this setup's destination, token and tag resolver.
+    // The observer is how the two meet — and nothing else crosses.
+    setUnknownPrincipalObserver((record) => surfaceUnknownPrincipal(record));
+
     function credentialUnavailable(agentId) {
       const error = new Error("CREDENTIAL_UNAVAILABLE");
       error.code = "CREDENTIAL_UNAVAILABLE";
@@ -3114,7 +7051,12 @@ export default {
           "password-store",
         );
         const gpgHomeDirectory = path.join(stateDir, "secrets", "gnupg");
-        const resRaw = execSync(resolverPath, {
+        // M11/T3 A1: argv, never a shell. execSync interprets its first argument
+        // with /bin/sh -c, and this path is joined from a config-derived stateDir
+        // that legitimately contains spaces — so a shell here both breaks the call
+        // and turns a metacharacter in that value into command execution on the
+        // bot-token path.
+        const resRaw = execFileSync(resolverPath, [], {
           input: JSON.stringify({
             protocolVersion: 1,
             provider: "pass_store",
@@ -3166,9 +7108,38 @@ export default {
 
     async function maybePublishDiscordCard(event) {
       const childSessionKey = event.childSessionKey || "";
-      const agentIdMatch = childSessionKey.match(/^agent:([^:]+)/);
-      const agentId = agentIdMatch ? agentIdMatch[1] : null;
-      if (!["o1", "o2"].includes(agentId)) return;
+      // M12/T9 F-104: the account that opens an #approvals thread is the one
+      // the LEDGER assigned to this task. The event's child session key only
+      // ever CLAIMS an account; a claim that disagrees with the ledger is
+      // refused instead of silently re-routing the card to another bot.
+      const eventAgentId = childSessionKey.match(/^agent:([^:]+)/)?.[1] ?? null;
+      let ledgerOwner;
+      try {
+        ledgerOwner = findSession(
+          readSnapshot(paths),
+          childSessionKey,
+          event.childRunId,
+          true,
+        );
+      } catch {
+        ledgerOwner = null;
+      }
+      const account = resolveGovernedAnnouncementAccount({
+        owner: ledgerOwner,
+        eventAgentId,
+      });
+      if (account.status === "BLOCKED") {
+        api.logger?.warn?.(
+          `[zink-governance] approval card blocked: reason=${account.error}`,
+        );
+        return { status: "BLOCKED", error: account.error };
+      }
+      if (account.status === "NOT_APPLICABLE") {
+        // Not a coordinator announce: this seam has no approval card to
+        // publish, so the host's delivery decision is untouched.
+        return { status: "NOT_APPLICABLE", agentId: account.agentId };
+      }
+      const agentId = account.agentId;
 
       let findingsText = (event.findings || "").trim();
       if (findingsText.startsWith("```json")) {
@@ -3186,12 +7157,27 @@ export default {
       try {
         payload = JSON.parse(findingsText);
       } catch {
-        return;
+        // M12/T9 F-109: a governed card was expected and the payload could not
+        // be read, so the publish attempt ends in a NAMED refusal, never in
+        // silence.
+        api.logger?.warn?.(
+          "[zink-governance] approval card not published: the announce payload is not readable JSON",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
-      if (!payload?.output) return;
+      if (!payload?.output) {
+        api.logger?.warn?.(
+          "[zink-governance] approval card not published: the announce carries no governed output",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
 
       const card = extractApprovalCard(payload.output);
-      if (!card) return;
+      if (!card) {
+        // The announce is not an approval card at all: the host's delivery
+        // decision stays the guard's.
+        return { status: "NOT_APPLICABLE", agentId };
+      }
 
       const approvalsForumId = resolveDiscordDestination(
         config,
@@ -3204,17 +7190,25 @@ export default {
         api.logger?.error?.(
           "[zink-governance] approval card not posted: no configured approvals forum",
         );
-        return;
+        return { status: "BLOCKED", error: "GOVERNANCE_DEPENDENCY_MISSING" };
       }
-      const token = resolveDiscordBotToken(agentId);
-
-      let bodyContent = card.content;
-      if (!bodyContent.includes("[APPROVE]")) {
-        bodyContent += `\n\n---\n**Thao tác dành cho User (Buttons & Actions):**\n- Phản hồi **APPROVE** hoặc bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.\n- Phản hồi **REJECT** hoặc bấm **[REJECT]** để từ chối kế hoạch.\n- Phản hồi **REQUEST REVISION** để yêu cầu sửa đổi kế hoạch.`;
+      let token;
+      try {
+        token = resolveDiscordBotToken(agentId);
+      } catch {
+        // M12/T9 F-109: the account's credential is unavailable, so no card can
+        // be published. The refusal is named; the announce is not reported as
+        // delivered.
+        api.logger?.error?.(
+          "[zink-governance] approval card not posted: the account credential is unavailable",
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
 
       let taskId;
       let briefRevision;
+      let admittedNodes = [];
+      let admittedTaskCode = null;
       try {
         const snapshot = readSnapshot(paths);
         const owner = findSession(
@@ -3226,6 +7220,17 @@ export default {
         if (owner?.task_id) {
           taskId = owner.task_id;
           briefRevision = owner.task?.brief_revision;
+          // M12/T9 F-025 (legacy R1-A03-02): the plan the owner reads must be
+          // the ADMITTED brief - the ledger's own recorded node graph - and not
+          // the model's card text. These are the nodes the approval is bound to.
+          admittedNodes = Array.isArray(owner.task?.nodes)
+            ? owner.task.nodes
+            : [];
+          admittedTaskCode =
+            typeof owner.task?.task_code === "string" &&
+            owner.task.task_code.length > 0
+              ? owner.task.task_code
+              : null;
         }
       } catch {
         api.logger?.warn?.(
@@ -3237,6 +7242,27 @@ export default {
           "[zink-governance] Discord approval card blocked: EXACT_TASK_CORRELATION_REQUIRED",
         );
         return { status: "BLOCKED", error: "EXACT_TASK_CORRELATION_REQUIRED" };
+      }
+
+      // M12/T9 F-025 (legacy R1-A03-02): the card the owner approves is
+      // rendered from the ADMITTED brief with the same canonical builder the
+      // first-spawn card uses. The announce's own text is model output: it was
+      // never admitted, so it must never be presented as the plan the owner is
+      // approving - the plan that executes is the ledger's recorded brief, and
+      // the verdict is bound to it (scope_digest + brief_revision below).
+      const governedCard = buildFirstSpawnApprovalCard({
+        taskId,
+        taskCode: admittedTaskCode,
+        briefRevision,
+        targetAgentId: agentId,
+        spawnInputs: "",
+        spawnNodeId: null,
+        planNodes: admittedNodes,
+        previewImage: null,
+      });
+      let bodyContent = governedCard.bodyContent;
+      if (!bodyContent.includes("[APPROVE]")) {
+        bodyContent += `\n\n---\n**Thao tác dành cho User (Buttons & Actions):**\n- Phản hồi **APPROVE** hoặc bấm **[APPROVE]** để phê duyệt đưa vào hàng đợi thực thi.\n- Phản hồi **REJECT** hoặc bấm **[REJECT]** để từ chối kế hoạch.\n- Phản hồi **REQUEST REVISION** để yêu cầu sửa đổi kế hoạch.`;
       }
 
       const approveCustomId = buildComponentCustomId(
@@ -3295,6 +7321,10 @@ export default {
       // The task is resolved from the ledger via the owning run, never parsed out
       // of the model's own card text, which is untrusted evidence. An
       // unresolvable or ambiguous run therefore fails closed.
+      // M12/T2-R1: the durable record of the request AND of any thread that already
+      // surfaced it. A task whose card was never posted must be re-driven; a task whose
+      // thread is already recorded must not get a second card (owner requirement 5).
+      let requestTask;
       try {
         const owner = findSession(
           readSnapshot(paths),
@@ -3303,6 +7333,20 @@ export default {
           false,
         );
         const requestTaskId = owner.task_id;
+        const before = readSnapshot(paths)?.tasks?.[requestTaskId] ?? null;
+        if (before?.approval_thread_id) {
+          api.logger?.info?.(
+            `[zink-governance] approval already surfaced for task ${requestTaskId} in thread ${before.approval_thread_id}; no duplicate card`,
+          );
+          // The card IS published (an earlier attempt delivered it), so the
+          // verdict says so; the re-drive gate is what stops a second card.
+          return {
+            status: "PUBLISHED",
+            agentId,
+            taskId: requestTaskId,
+            threadId: before.approval_thread_id,
+          };
+        }
         recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
           task_id: requestTaskId,
           agent_id: agentId,
@@ -3315,87 +7359,172 @@ export default {
         if (!confirmed?.tasks?.[requestTaskId]?.approval_requested_at) {
           throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
         }
+        requestTask = confirmed?.tasks?.[requestTaskId] ?? null;
       } catch (requestError) {
         api.logger?.warn?.(
           `[zink-governance] approval request NOT recorded; card suppressed: ${requestError?.message}`,
         );
-        return;
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
       }
 
+      let surfaced;
       try {
-        const res = await fetch(
-          `https://discord.com/api/v10/channels/${approvalsForumId}/threads`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              name: (card.title || "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi").slice(
-                0,
-                100,
-              ),
-              message: {
-                content: bodyContent.slice(0, 2000),
-              },
-              // The forum's STATUS:WAITING tag, a stable workflow-semantics constant of
-              // the approvals surface itself (not an identity and not authentication
-              // material). It is applied only to threads the plugin itself opens in the
-              // configured approvals forum, so it cannot redirect anything anywhere.
-              applied_tags: ["1545697161985921064"], // STATUS: WAITING tag
-            }),
-          },
-        );
-
-        if (res.ok) {
-          const thread = await res.json();
-          // Native outbound: components travel through the official
-          // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
-          // creation above remains raw REST (no verified native seam).
-          try {
-            const receipt = await sendNativePayload({
-              api,
-              to: thread.id,
-              threadId: thread.id,
-              accountId: agentId,
-              payload: buildNativeComponentPayload({
-                text: bodyContent.slice(0, 2000),
-                buttons: components[0].components.map((button) => ({
-                  customId: button.custom_id,
-                  label: button.label,
-                  style: button.style,
-                  emoji: button.emoji,
-                })),
-              }),
-            });
-            api.logger?.info?.(
-              `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id}, messageId: ${receipt.messageId})`,
-            );
-          } catch (deliveryErr) {
-            api.logger?.error?.(
-              `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
-            );
-          }
-        } else {
-          const errText = await res.text();
-          api.logger?.warn?.(
-            `[zink-governance] Discord approval post failed: status=${res.status} body=${errText}`,
-          );
-        }
-      } catch (e) {
+        surfaced = await postGovernedThread({
+          surface: "approvals",
+          channelId: approvalsForumId,
+          token,
+          title: card.title || "🔖 [PHÊ DUYỆT] Kế hoạch Thực thi",
+          bodyContent,
+          selections: approvalTagSelectionsFor(requestTask, agentId),
+        });
+      } catch (postError) {
         api.logger?.warn?.(
-          `[zink-governance] Discord approval post exception: ${e?.message}`,
+          `[zink-governance] Discord approval post exception: ${postError?.message}`,
         );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
+      if (!surfaced.posted) {
+        // Nothing was advertised and the recorded request stands untouched: the owner gets
+        // a loud line naming what could not be resolved instead of a thread whose tags do
+        // not describe it, and the next attempt can re-drive (requirements 4 and 5).
+        api.logger?.warn?.(
+          `[zink-governance] approval card not posted for task ${taskId}: ${surfaced.code}`,
+        );
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
+      const thread = { id: surfaced.threadId };
+      // Native outbound: components travel through the official
+      // OpenClaw 2026.6.34 Discord adapter. Only forum-thread
+      // creation above remains raw REST (no verified native seam).
+      //
+      // M12/T9 F-107 + F-180: the DURABLE "surfaced" record is written only for
+      // a card the owner can ACT on. The interactive component IS the actionable
+      // part; if its delivery fails, the thread carries text the owner cannot
+      // approve, and a recorded `approval_thread_id` would refuse every later
+      // re-drive forever. So the record comes AFTER the component is delivered:
+      // a task whose component never arrived keeps `approval_thread_id` unset
+      // and the next attempt surfaces an actionable card.
+      let receipt;
+      try {
+        const buttonSpecs = components[0].components.map((button) => ({
+          customId: button.custom_id,
+          label: button.label,
+          style: button.style,
+          emoji: button.emoji,
+        }));
+        receipt = await sendNativePayload({
+          api,
+          to: thread.id,
+          threadId: thread.id,
+          accountId: agentId,
+          // M12/T1-R1: `buttons` is what makes the send register the component
+          // ids with the host. Without it the adapter still delivers the card,
+          // but every click answers "This component has expired."
+          buttons: buttonSpecs,
+          payload: buildNativeComponentPayload({
+            text: bodyContent.slice(0, 2000),
+            buttons: buttonSpecs,
+          }),
+        });
+        api.logger?.info?.(
+          `[zink-governance] Discord approval card posted for ${agentId} into #approvals (threadId: ${thread.id}, messageId: ${receipt.messageId})`,
+        );
+      } catch (deliveryErr) {
+        api.logger?.error?.(
+          `[zink-governance] Discord approval component delivery failed: ${deliveryErr?.message}`,
+        );
+        // The thread exists but carries no actionable component, so the task
+        // stays re-drivable: nothing is recorded as SURFACED.
+        return { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
+      }
+      // M12/T2-R1: the thread exists and the owner can act on it, so the ledger
+      // must know. Without this record a retry cannot tell "already surfaced"
+      // from "never surfaced", and would either lose the card or open a second
+      // one for the same request.
+      try {
+        recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+          task_id: taskId,
+          channel: "approvals",
+          thread_id: thread.id,
+        });
+      } catch (surfaceError) {
+        // M12/T9 F-529: the SURFACED record is the card's ONLY durable anchor —
+        // the 24h clock, both thread guards and every re-drive decision read
+        // it. A delivered, actionable card whose record failed to persist must
+        // not be reported as PUBLISHED: the seam fails closed exactly like the
+        // result-record seam (LEDGER_RESULT_RECORD_FAILED). Nothing was
+        // recorded, so `approval_thread_id` stays unset and the task remains
+        // re-drivable; the next attempt surfaces a card that IS anchored.
+        api.logger?.error?.(
+          `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
+        );
+        return {
+          status: "BLOCKED",
+          error: `APPROVAL_SURFACE_UNRECORDED: ${surfaceError?.message}`,
+        };
+      }
+      return { status: "PUBLISHED", agentId, taskId, threadId: thread.id };
+    }
+
+    /**
+     * Resolve the post-approval coordinator destination.
+     *
+     * This is a PREFLIGHT step. It runs before the durable queue write so that a
+     * missing destination cannot leave a queue item that no coordinator can
+     * ever pick up.
+     */
+    function resolveCoordinatorDestination({ config, originThreadId }) {
+      const officeChannelId = resolveDiscordDestination(
+        config,
+        "discordOfficeChannelId",
+        "officeChannelId",
+      );
+      const target = originThreadId || officeChannelId;
+      if (!target) {
+        return { ok: false, error: "COORDINATOR_DESTINATION_UNRESOLVED" };
+      }
+      return { ok: true, target, isThread: Boolean(originThreadId) };
+    }
+
+    async function deliverCoordinatorNotification({
+      api,
+      destination,
+      taskId,
+      dispatch,
+    }) {
+      try {
+        // The native transport returns the accepted message identity. It is
+        // kept as delivery evidence so an operator can reconcile a notification
+        // whose durable record failed to persist. It is never used to infer
+        // delivery from the message text, and the text is never authority.
+        const receipt = await sendNativePayload({
+          api,
+          to: destination.target,
+          ...(destination.isThread ? { threadId: destination.target } : {}),
+          accountId: dispatch.coordinator,
+          payload: {
+            text: buildCoordinatorNotificationText({ taskId, dispatch }),
+          },
+        });
+        return {
+          delivered: true,
+          evidence: {
+            message_id: receipt?.messageId ?? null,
+            channel_id: receipt?.channelId ?? null,
+          },
+        };
+      } catch (deliveryErr) {
+        api.logger?.error?.(
+          `[zink-governance] coordinator notification failed: ${deliveryErr?.message}`,
+        );
+        return {
+          delivered: false,
+          error: `COORDINATOR_NOTIFICATION_FAILED: ${deliveryErr?.message ?? "unknown"}`,
+        };
       }
     }
 
-    async function resolveVerifiedExecutionBackend() {
-      // R4: the live projection has no registered specialist engine.
-      return null;
-    }
-
-    function enqueueApprovedTaskForExecution({ taskId, paths }) {
+    function enqueueApprovedTaskForExecution({ taskId, paths, dispatch }) {
       if (!paths) {
         return { status: "BLOCKED", error: "TASK_SCOPE_REQUIRED" };
       }
@@ -3406,16 +7535,293 @@ export default {
       }
       const existing = defaultQueueManager.getTask(taskId);
       if (existing) {
+        // A late or duplicate approval must never start a second execution.
         return { status: existing.status, taskId, queueItem: existing };
       }
       const queueItem = defaultQueueManager.enqueueTask({
         taskId,
         planVersion: String(task.brief_revision || "1.0"),
-        primaryCoordinator: task.primary_coordinator || "o1",
-        requiredCapabilities: task.nodes?.map((node) => node.agent_id) || [],
+        primaryCoordinator: dispatch.coordinator,
+        requiredCapabilities: dispatch.requiredCapabilities,
+        // M12/T9-R4 F-402: the queue verifies completion against the owner the
+        // LEDGER projected. Nothing passed it, so every queued task carried
+        // `ownerPrincipalRef: null` and completeTask refused every owner ACCEPT.
+        // The ledger's `origin_principal_ref` is that owner.
+        ownerPrincipalRef: task.origin_principal_ref ?? null,
         payload: task.payload || {},
       });
       return { status: "QUEUED", taskId, queueItem };
+    }
+
+    /**
+     * Record the outcome of the post-enqueue coordinator notification on the
+     * queue item.
+     *
+     * The queue is a projection of the ledger, so this records an operational
+     * fact about the projection (was the notification delivered?) and never
+     * claims an execution state. It deliberately does NOT touch
+     * `workflow_status`, because the authoritative task state is the ledger's
+     * `QUEUED` and nothing here may advance it. Persisting the flag is what
+     * makes an incomplete handoff observable and safely retryable instead of a
+     * silent stuck state.
+     *
+     * The write is transactional in the same shape `enqueueTask` uses: the
+     * in-memory projection is only advanced once the durable save succeeds, and
+     * is rolled back if it does not. Without that, a failed save would leave
+     * memory claiming the notification landed while the file did not, and the
+     * caller could not tell which was true.
+     *
+     * The accepted message identity is stored alongside the flag as delivery
+     * evidence. It is reconciliation material for an operator, not authority:
+     * nothing in the governed path reads it to make a decision.
+     */
+    function recordCoordinatorNotification({
+      taskId,
+      delivered,
+      error,
+      evidence,
+    }) {
+      // A-3 / R6-A03-01: `QueueManager.save()` does not acquire the queue lock —
+      // serialization is the caller's job, and `withLock` is the class's own
+      // critical section. Before this, the item was read and written outside any
+      // lock, so the save projected a stale whole-document map over one the other
+      // pickup loops had already advanced, erasing their committed rows. The read
+      // has to move inside as well: `withLock` reloads from disk first, and an
+      // item captured before it is a copy that reload has already replaced.
+      //
+      // Contention stays a returned failure, not a throw: `withLock` converts
+      // FILE_LOCK_BUSY into QUEUE_LOCK_TIMEOUT, and `persist` callers treat this
+      // evidence as reconciliation material, not authority.
+      try {
+        return defaultQueueManager.withLock(() => {
+          const item = defaultQueueManager.getTask(taskId);
+          if (!item) {
+            return { ok: false, error: "QUEUE_ITEM_NOT_FOUND" };
+          }
+          const next = {
+            ...item,
+            coordinatorNotification: {
+              delivered: Boolean(delivered),
+              ...(delivered
+                ? { evidence: evidence ?? null }
+                : { error: String(error ?? "UNKNOWN") }),
+            },
+          };
+          defaultQueueManager.queue.set(taskId, next);
+          try {
+            defaultQueueManager.save();
+            return { ok: true };
+          } catch (persistErr) {
+            defaultQueueManager.queue.set(taskId, item);
+            return { ok: false, error: persistErr?.message };
+          }
+        });
+      } catch (lockErr) {
+        return { ok: false, error: lockErr?.message };
+      }
+    }
+
+    /**
+     * Post-approval dispatch.
+     *
+     * The governance plugin is a governance layer, NOT an executor. It never
+     * runs a task, never fabricates an artifact, and never claims a result. It
+     * makes the approved task durably QUEUED, which is the canonical ledger
+     * state, and notifies the coordinator named by the authoritative brief.
+     *
+     * Ordering is chosen to eliminate the split-brain that the previous
+     * ordering permitted. Every precondition that can be checked without a
+     * durable write is checked first, so a task that could never be dispatched
+     * is never queued. The queue write is then idempotent, and a failed
+     * notification is recorded rather than left implicit, so a later duplicate
+     * approval can retry the notification without ever creating a second
+     * execution.
+     */
+    /**
+     * M10/T2-R17 — one owner-facing label per action.
+     *
+     * The button and text paths each carried their own copy and they had
+     * drifted: the button copy enumerated five actions with a real REJECT-RESULT
+     * fallback, while the text copy had four and let its DEFAULT mean ACCEPT.
+     * That default is currently safe — the text path can only ever produce
+     * APPROVE / REJECT_APPROVAL / REQUEST_REVISION_APPROVAL / ACCEPT_RESULT — but
+     * it is a trap: any future text verb would be silently reported to the owner
+     * as "nghiệm thu (ACCEPT)". One explicit mapping removes the ambiguity, and
+     * an unknown action is reported as unknown rather than as an approval.
+     */
+    function describeOwnerAction(normAction) {
+      switch (normAction) {
+        case ACTIONS.APPROVE:
+          return "phê duyệt (APPROVE)";
+        case ACTIONS.REJECT_APPROVAL:
+          return "từ chối (REJECT)";
+        case ACTIONS.REQUEST_REVISION_APPROVAL:
+          return "yêu cầu sửa đổi (REQUEST REVISION)";
+        case ACTIONS.ACCEPT_RESULT:
+          return "nghiệm thu (ACCEPT)";
+        case ACTIONS.REJECT_RESULT:
+          return "từ chối kết quả (REJECT)";
+        default:
+          return "hành động không xác định";
+      }
+    }
+
+    /**
+     * M10/T2-R16 — the ONE post-decision effect for an owner approval, shared by
+     * the button and text paths.
+     *
+     * It existed as two near-identical copies that had to stay in sync by hand,
+     * and they did not: the text copy awaited a cosmetic send before dispatching
+     * (R14) and the button copy awaited an unguarded ack (R15) — the same
+     * divergence, found twice. One copy removes the cause, so a future change
+     * cannot be applied to one path and forgotten in the other.
+     */
+    function applyOwnerDecisionEffect({
+      api,
+      config,
+      paths,
+      normAction,
+      taskId,
+      userPrincipalRef,
+      userConfirmationRef,
+      threadId,
+    }) {
+      // M12/T2-R2: the verdict has to appear on the surface the owner triages. It is already
+      // durable in WORKFLOW_USER_APPROVAL_DECIDED, so this is a projection and nothing else:
+      // fire-and-forget with its own catch, no decision path awaits a Discord round-trip, and no
+      // outcome here can undo, delay or rewrite what he decided (requirement 5).
+      if (
+        normAction === ACTIONS.APPROVE ||
+        normAction === ACTIONS.REJECT_APPROVAL ||
+        normAction === ACTIONS.REQUEST_REVISION_APPROVAL
+      ) {
+        transitionApprovalTag({
+          taskId,
+          decision:
+            // F-085: the ONE reviewed mapping from the authority action to the
+            // ledger decision vocabulary. The plugin does not carry its own
+            // ternary: the ledger's `decision` value and the authority gate's
+            // verdict come from one mapping, so they cannot disagree.
+            resolveLedgerDecision(normAction) ?? normAction,
+        }).catch((tagErr) => {
+          api.logger?.warn?.(
+            `[zink-governance] approval tag not transitioned for task ${taskId}: ${tagErr?.message}`,
+          );
+        });
+      }
+      if (normAction === ACTIONS.APPROVE) {
+        executeApprovedTask({
+          taskId,
+          paths,
+          config,
+          api,
+          originThreadId: threadId,
+        }).catch((err) => {
+          api.logger?.error?.(
+            `[zink-governance] executeApprovedTask async error: ${err?.message}`,
+          );
+        });
+        return;
+      }
+      if (normAction !== ACTIONS.ACCEPT_RESULT) return;
+
+      // M12/T9-R4 F-406: the accepted OUTCOME is the ledger's, read from the
+      // verdict the ledger just committed. The queue advance used to write
+      // COMPLETE unconditionally, so an accepted PARTIAL/FAILED result closed
+      // the queue item as a completed task.
+      const acceptedOutcome = paths
+        ? (readSnapshot(paths)?.tasks?.[taskId]?.workflow_status ?? null)
+        : null;
+      // M7-012: complete only from the verified owner principal, bound to the
+      // current authoritative result digest. The caller has already proven the
+      // sender is the owner.
+      let queueCompletionRecorded = false;
+      try {
+        defaultQueueManager.completeTask({
+          taskId,
+          userConfirmationRef,
+          // M12/T9-R4 F-402: both presenters hand this seam a RAW Discord
+          // snowflake, and the queue verifies completion against the principal
+          // the ledger minted. The mint therefore belongs here, at the ONE seam
+          // the button and text paths share, not at either caller.
+          userPrincipalRef: mintUserPrincipalRef(paths, userPrincipalRef),
+          resultDigest: defaultQueueManager.getTask(taskId)?.resultDigest,
+          outcome: acceptedOutcome,
+        });
+        queueCompletionRecorded = true;
+      } catch (qErr) {
+        // This queue write is the only thing that advances queue state, so its
+        // failure must not be followed by a public success notice. The flag is
+        // already false, so only the error is recorded here.
+        api.logger?.error?.(
+          `[zink-governance] completeTask FAILED (queue not advanced): ${qErr?.message}`,
+        );
+        // M12/T9-R4 F-405: a refused queue write must not leave the ledger's
+        // terminal verdict stranded behind a queue item stuck in review. The
+        // ledger is the authority, so the projection is reconciled from it on
+        // this same path — the recovery that used to exist only in the
+        // operator-triggered rebuild. Success is claimed only when the
+        // reconciled projection AGREES with the accepted outcome, so a
+        // half-reconciled item still suppresses the success notice.
+        try {
+          defaultQueueManager.rebuildFromLedger(
+            paths ? readSnapshot(paths) : null,
+          );
+          const reconciled = defaultQueueManager.getTask(taskId);
+          queueCompletionRecorded = reconciled?.status === acceptedOutcome;
+          api.logger?.warn?.(
+            `[zink-governance] queue projection reconciled from the ledger for task ${taskId}: status=${reconciled?.status ?? "MISSING"} (completeTask refused: ${qErr?.message})`,
+          );
+        } catch (reconcileErr) {
+          api.logger?.error?.(
+            `[zink-governance] ledger reconciliation FAILED (queue still lagged): ${reconcileErr?.message}`,
+          );
+        }
+      }
+
+      const officeChannelId = resolveDiscordDestination(
+        config,
+        "discordOfficeChannelId",
+        "officeChannelId",
+      );
+      const resultsForumId = resolveDiscordDestination(
+        config,
+        "discordResultsForumId",
+        "resultsChannelId",
+      );
+      // Both destinations must be configured: the notice names the results
+      // forum, so posting with an unresolved forum renders a dangling mention
+      // into an undesignated channel.
+      if (officeChannelId && resultsForumId && queueCompletionRecorded) {
+        // M12/T2-R1: the accepted result is published as one tagged #results thread first,
+        // and the #office notice then points at that thread rather than only naming the
+        // forum. The chain is deliberately fire-and-forget with both halves guarded: the
+        // verdict is already durable in the queue and the ledger, so a surface or delivery
+        // failure is recorded and never rewrites what the owner decided (requirement 5).
+        surfaceAcceptedResult({ taskId, resultsForumId })
+          .catch((surfaceErr) => {
+            api.logger?.warn?.(
+              `[zink-governance] result thread not posted for task ${taskId}: ${surfaceErr?.message}`,
+            );
+            return null;
+          })
+          .then((resultsThread) =>
+            sendNativePayload({
+              api,
+              to: officeChannelId,
+              accountId: "main",
+              payload: {
+                text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${displayTaskToken(taskId)}\` tại ${
+                  resultsThread ? `<#${resultsThread}>` : `<#${resultsForumId}>`
+                }. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
+              },
+            }).catch((deliveryErr) => {
+              api.logger?.warn?.(
+                `[zink-governance] discord delivery failed (office-completion-notice): ${deliveryErr?.message}`,
+              );
+            }),
+          );
+      }
     }
 
     async function executeApprovedTask({
@@ -3425,9 +7831,73 @@ export default {
       api,
       originThreadId = null,
     }) {
+      const snapshot = paths ? readSnapshot(paths) : null;
+      const task = snapshot?.tasks?.[taskId];
+      const dispatch = deriveGovernedDispatchTarget(task);
+      if (!dispatch.ok) {
+        // Fail closed BEFORE any durable queue write: a task that cannot be
+        // dispatched must not appear queued for execution.
+        api.logger?.error?.(
+          `[zink-governance] approved task not dispatched: ${dispatch.error} (task ${taskId})`,
+        );
+        return {
+          status: "BLOCKED",
+          error: dispatch.error,
+          taskId,
+          queue_status: "NOT_QUEUED",
+        };
+      }
+
+      // Preflight the destination BEFORE the durable write. A missing
+      // destination means no coordinator could ever be told, so queueing first
+      // would strand the task permanently.
+      const destination = resolveCoordinatorDestination({
+        config,
+        originThreadId,
+      });
+      if (!destination.ok) {
+        api.logger?.error?.(
+          `[zink-governance] approved task not queued: ${destination.error} (task ${taskId})`,
+        );
+        return {
+          status: "BLOCKED",
+          error: destination.error,
+          taskId,
+          queue_status: "NOT_QUEUED",
+        };
+      }
+
+      const preExisting = defaultQueueManager.getTask(taskId);
+      if (preExisting) {
+        const duplicate = await runDuplicateApprovalHandoff({
+          taskId,
+          preExisting,
+          notify: () =>
+            deliverCoordinatorNotification({
+              api,
+              destination,
+              taskId,
+              dispatch,
+            }),
+          persist: ({ delivered, error, evidence }) =>
+            recordCoordinatorNotification({
+              taskId,
+              delivered,
+              error,
+              evidence,
+            }),
+          reserve: reserveCoordinatorNotificationAttempt,
+        });
+        return { ...duplicate, taskId };
+      }
+
       let queueStatus;
       try {
-        queueStatus = enqueueApprovedTaskForExecution({ taskId, paths });
+        queueStatus = enqueueApprovedTaskForExecution({
+          taskId,
+          paths,
+          dispatch,
+        });
       } catch (err) {
         api.logger?.error?.(
           `[zink-governance] approved task queueing failed: ${err?.message}`,
@@ -3436,382 +7906,272 @@ export default {
           status: "BLOCKED",
           error: "QUEUE_STORAGE_WRITE_FAILED",
           taskId,
+          queue_status: "NOT_QUEUED",
         };
       }
       if (queueStatus.status !== "QUEUED") {
         return { ...queueStatus, taskId };
       }
-      const executionBackend = await resolveVerifiedExecutionBackend();
-      if (!executionBackend) {
-        return {
-          status: "BLOCKED",
-          error: "ENGINE_NOT_IMPLEMENTED",
-          taskId,
-          queue_status: queueStatus.status,
-        };
-      }
 
-      try {
-        api.logger?.info?.(
-          `[zink-governance] Starting autonomous execution for approved task: ${taskId}`,
-        );
-
-        if (originThreadId) {
-          sendNativePayload({
+      // The first approval owns the send through the SAME shared attempt as a
+      // duplicate. Previously it sent inline with no reservation, so a duplicate
+      // arriving while the transport was awaiting could claim the reservation
+      // and send a second message. One guard now covers both callers, and the
+      // reservation is acquired exactly once, here.
+      const attempt = await runFirstApprovalNotification({
+        taskId,
+        coordinator: dispatch.coordinator,
+        requiredCapabilities: dispatch.requiredCapabilities,
+        notify: () =>
+          deliverCoordinatorNotification({
             api,
-            to: originThreadId,
-            threadId: originThreadId,
-            accountId: "o1",
-            payload: {
-              text: `⏳ **Execution backend đang được kiểm tra...**\n- **Điều phối viên:** O1\n- **Tiến trình:** Chỉ tiếp tục khi backend chuyên môn có đăng ký và trả evidence tin cậy.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (execution-backend-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-
-        const snapshot = readSnapshot(paths);
-        const task = snapshot?.tasks?.[taskId];
-        if (!task) {
-          api.logger?.warn?.(
-            `[zink-governance] executeApprovedTask: task not found ${taskId}`,
-          );
-          return;
-        }
-
-        // 1. Enqueue and Claim in defaultQueueManager
-        let leaseId = null;
-        let attempt = 1;
-        // M7-010: the broker claims under the task's governed coordinator
-        // identity so the claim is bound to the authoritative assignment.
-        const brokerAgentId = task.primary_coordinator || "o1";
-        const existing = defaultQueueManager.queue.get(taskId);
-        if (!existing) {
-          defaultQueueManager.enqueueTask({
+            destination,
             taskId,
-            planVersion: String(task.brief_revision || "1.0"),
-            primaryCoordinator: task.primary_coordinator || "o1",
-            requiredCapabilities: task.nodes?.map((n) => n.agent_id) || [
-              "excel",
-              "sql",
-              "python",
-            ],
-          });
-          const claim = defaultQueueManager.claimTaskById({
-            taskId,
-            agentId: brokerAgentId,
-            leaseSeconds: 300,
-          });
-          leaseId = claim.leaseId;
-          attempt = claim.task.attempt;
-        } else if (existing.status === "EXECUTING") {
-          if (existing.claimedBy !== brokerAgentId) {
-            // LEGACY-MIGRATION: pre-M7-010 claims used the opaque broker
-            // principal. Revoke via stale recovery (ledger-reconciled so
-            // terminal work is never resurrected) and claim governed.
-            defaultQueueManager.detectAndRecoverStaleTasks({
-              staleThresholdSeconds: 0,
-              ledgerTasks: snapshot?.tasks ?? null,
-            });
-            const claim = defaultQueueManager.claimTaskById({
-              taskId,
-              agentId: brokerAgentId,
-              leaseSeconds: 300,
-            });
-            leaseId = claim.leaseId;
-            attempt = claim.task.attempt;
-          } else {
-            leaseId = existing.leaseId;
-            attempt = existing.attempt;
-          }
-        } else {
-          const claim = defaultQueueManager.claimTaskById({
-            taskId,
-            agentId: brokerAgentId,
-            leaseSeconds: 300,
-          });
-          leaseId = claim.leaseId;
-        }
-
-        if (paths && task.workflow_status === "QUEUED") {
-          try {
-            recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
-              task_id: taskId,
-              agent_id: "execution-agent",
-            });
-          } catch (err) {
-            api.logger?.warn?.(
-              `[zink-governance] executeApprovedTask: record WORKFLOW_TASK_CLAIMED error: ${err.message}`,
-            );
-          }
-        }
-
-        // 2. Execute Specialist Work (Generate real Excel workbook + SVG preview)
-        const artifactDir = path.join(
-          os.homedir(),
-          ".openclaw-zink",
-          "artifacts",
-          taskId,
-        );
-        mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
-        const excelPath = path.join(artifactDir, "bao_cao_doanh_thu_kpi.xlsx");
-
-        // 3. Multi-tier Validation via handleExecutionFinished
-        const finishRes = handleExecutionFinished({
-          taskId,
-          agentId: task.primary_coordinator || "o1",
-          leaseId,
-          attempt,
-          artifactPath: excelPath,
-          technicalConfig: {
-            expectedType: "excel",
-            expectedFields: [
-              "Ngày",
-              "Doanh Thu (VND)",
-              "Chi Phí (VND)",
-              "Lợi Nhuận (VND)",
-            ],
-            sandboxDir: artifactDir,
-          },
-          businessData: task.payload?.businessData || {},
-          businessConfig: task.payload?.businessConfig || {},
-          paths,
-          queueManager: defaultQueueManager,
-        });
-
-        if (finishRes.status !== "READY_FOR_REVIEW") {
-          api.logger?.error?.(
-            `[zink-governance] Execution validation failed: ${finishRes.error || finishRes.status}`,
-          );
-          if (originThreadId) {
-            sendNativePayload({
-              api,
-              to: originThreadId,
-              threadId: originThreadId,
-              accountId: "o1",
-              payload: {
-                text: `⚠️ **Kiểm định thất bại:** ${finishRes.error || "Không đạt chuẩn kiểm định 2 tầng"}`,
-              },
-            }).catch((deliveryErr) => {
-              api.logger?.warn?.(
-                `[zink-governance] discord delivery failed (validation-failure-notice): ${deliveryErr?.message}`,
-              );
-            });
-          }
-          return;
-        }
-
-        // 4. Publish Result Card to Discord #results forum
-        const resultsForumId = resolveDiscordDestination(
-          config,
-          "discordResultsForumId",
-          "resultsChannelId",
-        );
-        if (!resultsForumId) {
-          // Fail closed: with no configured destination the card is published
-          // nowhere, not into a hardcoded production forum.
-          api.logger?.error?.(
-            "[zink-governance] result card not published: no configured results forum",
-          );
-          return;
-        }
-        const resultId = finishRes.payloadDigest?.slice(0, 8) || "v1";
-
-        const components = [
-          {
-            type: 1, // ActionRow
-            components: [
-              {
-                type: 2, // Button
-                style: 3, // SUCCESS (Green)
-                label: "Accept",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_ACCEPT,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "✅" },
-              },
-              {
-                type: 2, // Button
-                style: 4, // DANGER (Red)
-                label: "Reject",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REJECT,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "❌" },
-              },
-              {
-                type: 2, // Button
-                style: 2, // SECONDARY (Grey)
-                label: "Request Revision",
-                custom_id: buildComponentCustomId(
-                  DISCORD_COMPONENT_ACTION_NAMESPACE.RESULT_REVISION,
-                  taskId,
-                  resultId,
-                ),
-                emoji: { name: "📝" },
-              },
-            ],
-          },
-        ];
-
-        const previewPngPath = excelPath.replace(/\.xlsx$/i, "_preview.png");
-        const previewSvgPath = excelPath.replace(/\.xlsx$/i, "_preview.svg");
-        const hasPng = existsSync(previewPngPath);
-        const hasSvg = existsSync(previewSvgPath);
-
-        const embeds = hasPng
-          ? [
-              {
-                title: `📊 Xem trước Bảng tính: ${path.basename(excelPath)}`,
-                color: 0x107c41,
-                image: {
-                  url: `attachment://${path.basename(previewPngPath)}`,
-                },
-              },
-            ]
-          : [];
-
-        const formData = new globalThis.FormData();
-        formData.append(
-          "payload_json",
-          JSON.stringify({
-            name: `📋 [KẾT QUẢ] Nghiệm thu Báo cáo Doanh thu & KPI (${taskId.slice(0, 8)})`,
-            message: {
-              content: finishRes.resultCard.slice(0, 2000),
-              embeds,
-            },
+            dispatch,
           }),
-        );
+        persist: ({ delivered, error, evidence }) =>
+          recordCoordinatorNotification({
+            taskId,
+            delivered,
+            error,
+            evidence,
+          }),
+        reserve: reserveCoordinatorNotificationAttempt,
+      });
 
-        if (existsSync(excelPath)) {
-          formData.append(
-            "files[0]",
-            new globalThis.Blob([readFileSync(excelPath)]),
-            path.basename(excelPath),
-          );
-        }
-        if (hasPng) {
-          formData.append(
-            "files[1]",
-            new globalThis.Blob([readFileSync(previewPngPath)]),
-            path.basename(previewPngPath),
-          );
-        } else if (hasSvg) {
-          formData.append(
-            "files[1]",
-            new globalThis.Blob([readFileSync(previewSvgPath)]),
-            path.basename(previewSvgPath),
-          );
-        }
-
-        // Forum-thread creation (with file attachments) remains raw REST:
-        // exact 2026.6.34 exposes no native plugin-facing thread-create/file
-        // seam. o1Token is still required here as the transport credential.
-        const o1Token = resolveDiscordBotToken("o1");
-        const postRes = await fetch(
-          `https://discord.com/api/v10/channels/${resultsForumId}/threads`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${o1Token}`,
-            },
-            body: formData,
-          },
-        );
-
-        let resultThreadId = null;
-        if (postRes.ok) {
-          const postData = await postRes.json();
-          resultThreadId = postData.id;
-          // Native outbound for the component message; the multipart
-          // thread creation above (with file attachments) remains raw
-          // REST (no verified native forum/file seam in exact 2026.6.34).
-          try {
-            const receipt = await sendNativePayload({
-              api,
-              to: resultThreadId,
-              threadId: resultThreadId,
-              accountId: "o1",
-              payload: buildNativeComponentPayload({
-                text: finishRes.resultCard.slice(0, 2000),
-                buttons: components[0].components.map((button) => ({
-                  customId: button.custom_id,
-                  label: button.label,
-                  style: button.style,
-                  emoji: button.emoji,
-                })),
-              }),
-            });
-            api.logger?.info?.(
-              `[zink-governance] Result card and actions published successfully: thread ${resultThreadId}, messageId: ${receipt.messageId}`,
-            );
-          } catch (deliveryErr) {
-            api.logger?.error?.(
-              `[zink-governance] Discord result component delivery failed: ${deliveryErr?.message}`,
-            );
-          }
-        } else {
-          api.logger?.error?.(
-            `[zink-governance] Failed to publish result card: ${postRes.status} ${await postRes.text()}`,
-          );
-        }
-
-        // 5. Update Approval Thread
-        if (originThreadId) {
-          sendNativePayload({
-            api,
-            to: originThreadId,
-            threadId: originThreadId,
-            accountId: "o1",
-            payload: {
-              text: `📋 **Evidence đã được chuẩn bị cho nghiệm thu.**\n- **Kiểm định:** Theo kết quả validator thực tế\n- **Kênh nghiệm thu:** <#${resultsForumId}> ${resultThreadId ? `(Thread: <#${resultThreadId}>)` : ""}. Kính mời anh Zink kiểm tra và nghiệm thu nếu đủ evidence.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (evidence-ready-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-
-        // 6. Main notifies #office
-        const officeChannelId = resolveDiscordDestination(
-          config,
-          "discordOfficeChannelId",
-          "officeChannelId",
-        );
-        if (officeChannelId) {
-          sendNativePayload({
-            api,
-            to: officeChannelId,
-            accountId: "main",
-            payload: {
-              text: `📋 **Thông báo từ Quản Lý:** Evidence của tác vụ \`${taskId.slice(0, 8)}\` đã được chuyển tới <#${resultsForumId}> để kiểm tra và nghiệm thu.`,
-            },
-          }).catch((deliveryErr) => {
-            api.logger?.warn?.(
-              `[zink-governance] discord delivery failed (office-evidence-notice): ${deliveryErr?.message}`,
-            );
-          });
-        }
-      } catch (execErr) {
-        api.logger?.error?.(
-          `[zink-governance] executeApprovedTask error: ${execErr?.message}`,
+      if (attempt.handoff === "AWAITING_COORDINATOR_PICKUP") {
+        api.logger?.info?.(
+          `[zink-governance] approved task queued and coordinator ${dispatch.coordinator} notified: ${taskId}`,
         );
       }
+      return attempt;
     }
 
+    /**
+     * M10/T2-R2: classify a gateway-started coordinator run from its session
+     * identity. Classification is what keeps a coordinator lifecycle event out of
+     * the generic native-delegation containment path, so it is decided on
+     * IDENTITY and never on queue liveness:
+     *  1. the session key must parse as the approved coordinator shape AND name
+     *     the observed agent — a key alone never attributes a run;
+     *  2. the ledger must hold the exact binding for that (session_key, run_id)
+     *     and that attempt, OR the queue must hold a LIVE claim (EXECUTING) by
+     *     that coordinator. Either fact alone is sufficient to know this identity
+     *     is a governed coordinator run of that task.
+     *
+     * Why queue status left classification. Requiring EXECUTING meant a
+     * coordinator run ending in the window between stale recovery and the next
+     * pickup — when the queue item is QUEUED — was classified as unrecognizable,
+     * fell through to the delegation path, matched no delegation, and reached the
+     * generic containment sweep that suspends every live run in the ledger. A
+     * superseded coordinator run is still a coordinator run.
+     *
+     * `requireBinding` keeps the stricter rule for authority-adjacent decisions
+     * (the run-end completion bypass), which is never satisfied by a queue claim
+     * alone. `requireLiveClaim` keeps the advisory rule for prompt build, which
+     * must describe the CURRENT execution and therefore may not serve a
+     * superseded run from its historical binding.
+     *
+     * An EXECUTING item claimed by a DIFFERENT agent is not ours — UNLESS the
+     * ledger holds the exact binding for this identity, in which case identity is
+     * proven by the authoritative record and the claim holder is irrelevant to
+     * classification (a specialist is itself an assigned claimant for its queue
+     * item under M7-010, so `claimedBy` differing from the coordinator is a
+     * legitimate state, not evidence of a foreign run). Anything less returns null
+     * and the caller keeps its existing fail-closed behavior.
+     * Nothing here writes state and nothing here grants execution authority.
+     */
+    function resolveCoordinatorRun(
+      sessionKey,
+      runId,
+      agentId,
+      { requireBinding = false, requireLiveClaim = false } = {},
+    ) {
+      const parsed = parseCoordinatorSessionKey(sessionKey);
+      if (!parsed) return null;
+      // Lifecycle events do not always carry the agent identity (notably
+      // subagent_ended). When present it must agree with the key; when absent
+      // the coordinator is taken from the key and then confirmed by the ledger
+      // binding and the queue claim below — the key alone never attributes.
+      const coordinator =
+        typeof agentId === "string" && agentId.length > 0
+          ? agentId
+          : parsed.coordinator;
+      if (parsed.coordinator !== coordinator) return null;
+      // A snapshot read failure means the binding cannot be established, which
+      // is indistinguishable from absent for recognition purposes; the caller
+      // keeps its fail-closed behavior either way.
+      const found = (() => {
+        try {
+          return findBoundCoordinatorRun(
+            readSnapshot(paths),
+            sessionKey,
+            runId,
+            coordinator,
+          );
+        } catch {
+          return null;
+        }
+      })();
+      const binding =
+        found && found.coordinatorRun.attempt === parsed.attempt
+          ? found.coordinatorRun
+          : null;
+      if (requireBinding && !binding) return null;
+      const queueItem = defaultQueueManager.getTask(parsed.taskId) ?? null;
+      let claimedLive = false;
+      if (queueItem?.status === "EXECUTING") {
+        if (queueItem.claimedBy === parsed.coordinator) {
+          claimedLive = true;
+        } else if (!binding) {
+          // A live claim held by a different agent is somebody else's
+          // execution, and with no authoritative binding this identity is only a
+          // coincidence. Fail closed exactly as before.
+          return null;
+        }
+        // A binding DOES match, so the identity is proven regardless of who
+        // holds the live claim. A specialist is an assigned claimant for its own
+        // queue item (M7-010), so `claimedBy` can legitimately differ from the
+        // coordinator; refusing recognition here would push a reconciled
+        // coordinator run into the generic containment sweep that design
+        // contract 2.6 forbids.
+      }
+      if (requireLiveClaim && !claimedLive) return null;
+      if (!binding && !claimedLive) return null;
+      return {
+        taskId: parsed.taskId,
+        coordinator: parsed.coordinator,
+        attempt: parsed.attempt,
+        queueItem,
+        binding,
+        bound: Boolean(binding),
+        claimedLive,
+      };
+    }
+
+    /**
+     * M10/T2-R2: record a coordinator-originated task mutation only while that
+     * coordinator still holds current execution authority, using the same queue
+     * critical section the stale-recovery path holds. Delegates and Main keep the
+     * existing unfenced path, whose own rules are unchanged.
+     */
+    function recordCoordinatorFenced(owner, type, payload) {
+      if (!owner?.coordinatorRun) {
+        return recordWorkflowEvent(paths, type, payload);
+      }
+      return defaultQueueManager.withExecutionFence(
+        {
+          taskId: owner.task_id,
+          claimedBy: owner.coordinatorRun.coordinator,
+          leaseId: owner.coordinatorRun.lease_id,
+          attempt: owner.coordinatorRun.attempt,
+        },
+        () => recordWorkflowEvent(paths, type, payload),
+      );
+    }
+
+    /**
+     * M10/T2: production coordinator pickup loop. It scans authoritative
+     * ledger/queue state every PICKUP_SCAN_INTERVAL_MS, claims as the
+     * designated coordinator, records the ledger claim, starts the real
+     * coordinator turn through api.runtime.subagent.run, and then records the
+     * ledger binding. Stopped on gateway_stop.
+     *
+     * M12/T9 F-021 + F-075: TWO defects, one hub.
+     *
+     * F-075: the loop was created per `register()` with no process-level latch,
+     * so four loops were observed in ONE live process, all of them claiming
+     * against the same `defaultQueueManager` singleton. The loop is now latched
+     * per ledger scope in one process-global map: a second registration ATTACHES
+     * to the running loop instead of starting another, and the loop stops only
+     * when the LAST registration for that scope stops.
+     *
+     * F-021: the eligibility was a ONE-SHOT `existsSync(snapshot)` evaluated at
+     * `register()` time, so a snapshot created after the plugin loaded (a
+     * first install, or a guarded lock/snapshot recovery - exactly the state
+     * the owner's recovery procedures leave behind) left the coordinator lane
+     * permanently dark until a restart. The eligibility is now decided when
+     * work could be claimed: the reader answers "no tasks" while the snapshot
+     * is absent, so an absent snapshot still refuses to claim anything, and a
+     * snapshot that appears later starts the lane without a restart.
+     */
+    const coordinatorRuntime = createCoordinatorRuntimeStart({ api });
+    const pickupLoopsKey = Symbol.for(
+      "zink.governance.coordinator.pickup.loops",
+    );
+    if (!globalThis[pickupLoopsKey]) {
+      Object.defineProperty(globalThis, pickupLoopsKey, { value: new Map() });
+    }
+    const pickupLoops = globalThis[pickupLoopsKey];
+    const pickupScope = path.resolve(String(config.ledgerRoot ?? ""));
+    let pickupEntry = pickupLoops.get(pickupScope);
+    if (!pickupEntry) {
+      pickupEntry = {
+        registrations: 0,
+        loop: startCoordinatorPickupLoop({
+          queueManager: defaultQueueManager,
+          getLedgerTasks: () => readPickupLedgerTasks({ paths }),
+          deriveTarget: deriveGovernedDispatchTarget,
+          recordClaimed: async ({ taskId: claimedTaskId, agentId }) => {
+            recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+              task_id: claimedTaskId,
+              agent_id: agentId,
+            });
+          },
+          recordBound: async (event) => {
+            recordWorkflowEvent(paths, "WORKFLOW_COORDINATOR_RUN_BOUND", event);
+          },
+          startCoordinatorRun: coordinatorRuntime.startCoordinatorRun,
+          isRuntimeStartAvailable: coordinatorRuntime.isRuntimeStartAvailable,
+          intervalMs: PICKUP_SCAN_INTERVAL_MS,
+          logger: api.logger,
+        }),
+      };
+      pickupLoops.set(pickupScope, pickupEntry);
+    }
+    pickupEntry.registrations += 1;
+    const coordinatorPickupLoop = pickupEntry.loop;
+    coordinatorPickupLoop.start();
+    api.logger?.info?.(
+      pickupEntry.registrations === 1
+        ? "[zink-governance] coordinator pickup loop started"
+        : "[zink-governance] coordinator pickup loop already running for this ledger scope; attached",
+    );
+
     const unregister = registerNativeGuard(paths.root, {
+      // M10/T2-R8: the PURE direct-intake predicate, evaluated at the Discord
+      // preflight seam so a direct specialist mention never creates a host run.
+      //
+      // It is the SAME rule `authenticateIngress` applies at the native gate —
+      // Discord intake is Main only (Decision 3 & RC-01) — with no ledger write,
+      // no task derivation and no identity key, so it is safe to run before the
+      // host has built a run. The native gate is unchanged and still governs
+      // every run; this only removes the run that would have been denied anyway.
+      //
+      // It is reached through the boundary's published global because the
+      // channel bundle cannot import this plugin.
+      beforePreflightIngress(event) {
+        const agentId = event?.agentId;
+        if (!ids.has(agentId)) return { allow: false, reason: "POLICY_DENIED" };
+        if (agentId !== "main")
+          return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
+        return { allow: true };
+      },
       beforeIngress(event) {
+        // M12/T9 F-049: the prompt transcript is durable and long-lived, so it
+        // must not carry a third party's account id in the clear. The OWNER's
+        // own id is still substituted exactly as it always was — the owner's
+        // identity handling is unchanged — and every OTHER Discord identity
+        // (a mention, or a bare snowflake the owner pasted) becomes a hashed
+        // reference.
         return {
-          prompt: sanitizeDelegationText(event.prompt)
-            .split(config.ownerDiscordId)
-            .join("[OWNER_PRINCIPAL]"),
+          prompt: tokenizeDiscordPrincipalReferences(
+            sanitizeDelegationText(event.prompt),
+            {
+              identityKey: resolveIdentityKey(paths),
+              ownerDiscordId: config.ownerDiscordId,
+            },
+          ),
         };
       },
       async beforeRun(event, context, signal) {
@@ -3835,12 +8195,30 @@ export default {
         // must pass through full run-admission governance — the previous local
         // copy waved it through at admission while the end-of-run path
         // correctly classified it as governed.
+        //
+        // M10/T2-R14: `ownedByLedger` was hardcoded `false` here, so the ledger
+        // ownership test this comment relies on was never actually evaluated —
+        // the admission seam and the end-of-run seam classified the same session
+        // differently by construction. It now answers the real question, but the
+        // snapshot is read ONLY when the cheap preconditions for the internal
+        // verdict already hold, so the ordinary governed path pays nothing.
+        const cheapInternalShape =
+          !context.runId && !context.currentMessageId && !context.message;
+        const ownedByLedger = cheapInternalShape
+          ? Boolean(
+              findSession(
+                readSnapshot(paths),
+                context.sessionKey,
+                context.runId,
+              ),
+            )
+          : false;
         if (
           classifyInternalRunEnd({
             agentId: context.agentId,
             sessionKey: context.sessionKey,
             runId: context.runId,
-            ownedByLedger: false,
+            ownedByLedger,
             hasMessageIdentity:
               Boolean(context.currentMessageId) || Boolean(context.message),
           }).isInternal
@@ -3861,9 +8239,11 @@ export default {
               context.channelId === config.officeChannelId) ||
             (Boolean(config.discordOfficeChannelId) &&
               context.channelId === config.discordOfficeChannelId));
+        let ingressReentry = false;
         if (isDiscordIngress) {
           const admission = authenticateIngress(context);
           if (admission?.allow !== true) return admission;
+          ingressReentry = admission.modelFallbackReentry === true;
         } else {
           await awaitSpawnReceipt(context, signal);
         }
@@ -3872,8 +8252,19 @@ export default {
         // only. No session state is written, no model override is created and
         // no model pin is persisted. Quota is advisory here; a real provider
         // failure still takes the native reactive failover path.
+        //
+        // M10/T2-R9-C: that sentence must hold on a same-run fallback re-entry.
+        // `resolveRuntimeModel` reads QUOTA, which a model failure never lowers,
+        // so on the retry it would resolve to the PRIMARY again — the very model
+        // just aborted at 372s — and pin the host's reactive failover candidate
+        // away. Proven live 2026-10-07: the host had already decided to fail over
+        // to `gemini/gemini-3.6-flash` (16:44:19.423 candidate_failed), so the
+        // proactive resolution must stand aside and let the host's reactive
+        // decision stand. Skipped ONLY for a recognized same-run re-entry; every
+        // other admission still resolves exactly as before.
         const decision = await guard.beforeRun(event, context, signal);
         if (decision?.allow !== true) return decision;
+        if (ingressReentry) return decision;
         const modelResolution = await resolveRunModelFor(config, context);
         return modelResolution ? { ...decision, modelResolution } : decision;
       },
@@ -3938,30 +8329,24 @@ export default {
             "zink_n8n",
           ].includes(event.toolName)
         ) {
-          const isSynthetic = Boolean(
-            event.params?.call_id &&
-            event.params?.specialist &&
-            event.params?.tool_id &&
-            event.params?.input,
-          );
-
-          if (isSynthetic) {
-            const decision = await guard.beforeToolCall(event, context, signal);
-            if (decision?.allow) {
-              const lKey = leaseKey(
-                { ...context, toolCallId: event.toolCallId },
-                event,
-              );
-              const pHash = canonicalHash(
-                "zink-native-call-v1",
-                event.params ?? {},
-              );
-              setLease(lKey, pHash);
-            }
-            return decision;
-          }
-
-          // Live OpenClaw agent tool call
+          // M12/T9 F-242: ONE governed path, chosen by POLICY and never by the
+          // shape of the model's own parameters.
+          //
+          // The branch used to be selected by `isSynthetic`: a call whose
+          // params happened to carry call_id/specialist/tool_id/input went
+          // through guard.beforeToolCall, and EVERY OTHER call - which is every
+          // live call the runtime actually makes - went through a capability
+          // lookup and a path check and was ALLOWED. A delegated operation the
+          // policy marks `requiresApproval` therefore executed with no
+          // approval record, no delegation binding and no
+          // AuthorizationDecisionContext, and a model could opt out of the
+          // governed path simply by shaping its arguments.
+          //
+          // The path is now ONE path, and it is the canonical one: the plugin
+          // builds the tool-call envelope from TRUSTED context - the ledger's
+          // delegation, the policy's operation table - and the guard decides.
+          // The model's parameters are DATA (the input), never the authority
+          // that selects the path.
           const access = evaluateToolAccess(context.agentId, event.toolName);
           if (!access.allowed) {
             api.logger?.warn?.(
@@ -3974,142 +8359,49 @@ export default {
             };
           }
 
-          // Path & Query Safety Validation (M7-005/M7-007: the live path
-          // calls the canonical validators — no second SQL/path policy)
-          if (event.toolName === "zink_excel") {
-            const filePath = event.params?.file_path;
-            if (!filePath || typeof filePath !== "string") {
-              return {
-                allow: false,
-                block: true,
-                reason: "SCHEMA_VALIDATION_FAILED",
-              };
-            }
-            const pathCheck = await validateLiveArtifactPath(filePath);
-            if (!pathCheck.ok) {
-              return {
-                allow: false,
-                block: true,
-                reason: pathCheck.reason,
-              };
-            }
-          } else if (event.toolName === "zink_sql") {
-            const query = event.params?.query || event.params?.sql;
-            if (!query || typeof query !== "string") {
-              return {
-                allow: false,
-                block: true,
-                reason: "SCHEMA_VALIDATION_FAILED",
-              };
-            }
-            const sqlCheck = await validateLiveSqlQuery(
-              query,
-              event.params?.parameters,
-            );
-            if (!sqlCheck.ok) {
-              return {
-                allow: false,
-                block: true,
-                reason: sqlCheck.reason,
-              };
-            }
-          } else if (event.toolName === "zink_n8n") {
-            // M7-006: the live n8n path uses the SAME canonical registry,
-            // delegation scope and approval binding as the guarded path. The
-            // live branch previously performed none of them, so any agent with
-            // static tool access could trigger any workflow id.
-            // The policy authority loads asynchronously; decide only against a
-            // loaded policy, never against an empty projection.
+          // The policy authority loads asynchronously; decide only against a
+          // loaded policy, never against an empty projection.
+          try {
+            await whenGovernanceDependenciesReady();
+          } catch {
+            return {
+              allow: false,
+              block: true,
+              reason: "GOVERNANCE_DEPENDENCY_MISSING",
+            };
+          }
+
+          // The live input is the model's DATA. The operation comes from the
+          // canonical policy tables, so a payload cannot rename the operation
+          // it is asking for.
+          //
+          // The approval id is a GOVERNMENT ENVELOPE field, never tool input:
+          // the published tool-call contract carries it beside the input, and
+          // the published tool input contracts forbid it. So it is lifted out
+          // of the payload here and never reaches the envelope's `input`.
+          const rawInput = event.params?.input ?? event.params ?? {};
+          const { approval_id: inlineApprovalId, ...liveInput } = rawInput;
+          const approvalId =
+            typeof inlineApprovalId === "string"
+              ? inlineApprovalId
+              : typeof event.params?.approval_id === "string"
+                ? event.params.approval_id
+                : null;
+          const operation = governedOperationFor(event.toolName, liveInput);
+          if (!operation) {
+            return {
+              allow: false,
+              block: true,
+              reason: "RUNTIME_CAPABILITY_MISMATCH",
+            };
+          }
+          if (event.toolName === "zink_n8n") {
+            // M7-006: the live n8n path resolves the workflow through the ONE
+            // canonical registry, so an unregistered workflow is a capability
+            // mismatch and an agent outside the workflow allowlist is denied -
+            // before any approval is considered.
             try {
-              await whenGovernanceDependenciesReady();
-            } catch {
-              return {
-                allow: false,
-                block: true,
-                reason: "GOVERNANCE_DEPENDENCY_MISSING",
-              };
-            }
-            let owner;
-            try {
-              owner = findSession(
-                readSnapshot(paths),
-                context.sessionKey,
-                context.runId,
-              );
-            } catch {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_NOT_FOUND",
-              };
-            }
-            if (!owner?.delegation) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_NOT_FOUND",
-              };
-            }
-            const liveRun = owner.delegation;
-            // Delegation scope: the run must be live, the agent must own it,
-            // the run id must match, and the tool must be in the delegation's
-            // own allowlist. A root session has no delegation to scope to.
-            if (liveRun.run_state === "REVOKED") {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_REVOKED",
-              };
-            }
-            if (liveRun.run_state !== "RUNNING") {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_DELEGATION_INACTIVE",
-              };
-            }
-            if (context.agentId !== liveRun.agent_id) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_UNAUTHORIZED_TARGET",
-              };
-            }
-            if (context.runId !== liveRun.native_run_id) {
-              return {
-                allow: false,
-                block: true,
-                reason: "LINEAGE_MISMATCH",
-              };
-            }
-            if (
-              String(owner.task?.brief_revision) !==
-              String(liveRun.brief_revision)
-            ) {
-              return {
-                allow: false,
-                block: true,
-                reason: "REVISION_SUPERSEDED",
-              };
-            }
-            // The recorded delegation tool list, when present, may only NARROW
-            // the canonical ceiling that evaluateToolAccess already applied. It
-            // can never add authority the canonical policy withheld, and its
-            // absence is not a licence: the canonical projection stands alone.
-            if (
-              Array.isArray(liveRun.allowed_tools) &&
-              !liveRun.allowed_tools.includes("zink_n8n")
-            ) {
-              return {
-                allow: false,
-                block: true,
-                reason: "AUTH_POLICY_DENIED",
-              };
-            }
-            const liveInput = event.params?.input ?? event.params ?? {};
-            let invocation;
-            try {
-              invocation = resolveN8nInvocation({
+              resolveN8nInvocation({
                 workflowId: liveInput.workflow_id,
                 agentId: context.agentId,
               });
@@ -4120,47 +8412,131 @@ export default {
                 reason: registryErr?.message ?? "RUNTIME_CAPABILITY_MISMATCH",
               };
             }
-            if (invocation.requiresApproval) {
-              try {
-                bindInvocationApproval({
-                  paths,
-                  approvalId: event.params?.approval_id,
-                  taskId: owner.task_id,
-                  briefRevision: owner.task.brief_revision,
-                  originPrincipalRef:
-                    owner.task?.origin_principal_ref ??
-                    owner.task?.origin?.origin_principal_ref ??
-                    owner.task?.root_principal_ref,
-                  toolId: "zink_n8n",
-                  operationName: invocation.operationName,
-                  actualTarget: invocation.actualTarget,
-                  input: liveInput,
-                  runId: context.runId,
-                  currentTime: Date.now(),
-                });
-              } catch (approvalErr) {
-                return {
-                  allow: false,
-                  block: true,
-                  reason: approvalErr?.message ?? "AUTH_APPROVAL_INVALID",
-                };
-              }
+          }
+
+          // The delegation is the authority for the call, and it is resolved
+          // from the LEDGER - never asserted by the caller.
+          let owner;
+          try {
+            owner = findSession(
+              readSnapshot(paths),
+              context.sessionKey,
+              context.runId,
+            );
+          } catch {
+            owner = null;
+          }
+          const delegated =
+            AUTHORIZATION_MODE_BY_TOOL[event.toolName] === "delegated";
+          if (!owner || (delegated && !owner.delegation)) {
+            return {
+              allow: false,
+              block: true,
+              reason: "AUTH_DELEGATION_NOT_FOUND",
+            };
+          }
+
+          // The owner's approval is resolved through the guard's OWN resolver,
+          // so the live seam and the guarded seam can never disagree about
+          // which record backs a call. The record is CONSUMED by the guard
+          // below; this step only proves that a well-formed, unexpired record
+          // exists, and it NAMES the refusal when it does not.
+          if (
+            OPERATION_POLICY[event.toolName]?.[operation]?.requiresApproval ===
+            true
+          ) {
+            if (!approvalId) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_APPROVAL_REQUIRED",
+              };
             }
-          } else if (event.toolName === "zink_python") {
-            if (event.params?.entrypoint) {
-              const pathCheck = await validateLiveArtifactPath(
-                String(event.params.entrypoint),
-              );
-              if (!pathCheck.ok) {
-                return {
-                  allow: false,
-                  block: true,
-                  reason: pathCheck.reason,
-                };
-              }
+            let approvalRecord;
+            try {
+              approvalRecord = resolveAuthenticatedApproval(paths, approvalId);
+            } catch (approvalErr) {
+              return {
+                allow: false,
+                block: true,
+                reason: approvalErr?.message ?? "AUTH_APPROVAL_INVALID",
+              };
+            }
+            if (!approvalRecord) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_APPROVAL_INVALID",
+              };
+            }
+            const approvalExpiry = Date.parse(approvalRecord.expires_at);
+            if (
+              !Number.isFinite(approvalExpiry) ||
+              Date.now() > approvalExpiry
+            ) {
+              return {
+                allow: false,
+                block: true,
+                reason: "AUTH_APPROVAL_EXPIRED",
+              };
             }
           }
 
+          // The canonical tool-call envelope. Every field except `input` comes
+          // from trusted context: the identity, the delegation and the call
+          // id. `input` is the model's data, and the published tool-call
+          // contract is what validates it.
+          const canonicalParams = {
+            call_id: randomUUID(),
+            specialist: context.agentId,
+            tool_id: event.toolName,
+            input: liveInput,
+            constraints: { timeout_seconds: 300, max_memory_mb: 1024 },
+            ...(delegated
+              ? {
+                  provenance: {
+                    delegation_id:
+                      owner.delegation?.delegation_id ?? owner.delegation?.id,
+                    task_id: owner.task_id,
+                    session_key: context.sessionKey,
+                  },
+                }
+              : {
+                  provenance: {
+                    task_id: owner.task_id,
+                    session_key: context.sessionKey,
+                  },
+                }),
+            ...(approvalId ? { approval_id: approvalId } : {}),
+          };
+          const canonicalEvent = {
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            turn:
+              typeof event.turn === "number" && event.turn > 0 ? event.turn : 1,
+            params: canonicalParams,
+            batchToolNames: [event.toolName],
+            assistantText: "",
+          };
+
+          // The guard decides. It issues the immutable
+          // AuthorizationDecisionContext, resolves the delegation from the
+          // ledger, binds and CONSUMES the approval when the operation
+          // requires one, and throws on every refusal. A throw here IS the
+          // refusal: it is never swallowed into an allow.
+          const canonicalDecision = await guard.beforeToolCall(
+            canonicalEvent,
+            context,
+            signal,
+          );
+          if (event.toolName === "zink_n8n") {
+            // The n8n adapter ran INSIDE the guard, so its result is the
+            // truthful outcome of the call and is surfaced verbatim.
+            return canonicalDecision;
+          }
+          // The other governed tools execute in this plugin's own registered
+          // tool, so the guard's CONTRACT-SEAM result is not the tool's
+          // outcome: what matters here is that the guard AUTHORIZED the call.
           const lKey = leaseKey(
             { ...context, toolCallId: event.toolCallId },
             event,
@@ -4177,6 +8553,312 @@ export default {
           return { allow: true };
         }
 
+        // M10/T2-R12: first-approval bootstrap for sessions_spawn.
+        //
+        // Deadlock this closes: a fresh Main task cannot spawn (the guard
+        // requires an approved brief), but the only approval-request path
+        // needed a child announce, which needs a spawn. Main may now ASK:
+        // when an otherwise-valid spawn is denied ONLY for lack of approval,
+        // the denial ALSO records a first-class WORKFLOW_APPROVAL_REQUESTED
+        // and posts the card to #approvals. Creating the request never
+        // authorizes the spawn — the denial below is returned unchanged, and
+        // REQUESTED never satisfies the spawn gate. Only a valid Owner
+        // approval (APPROVE → QUEUED + approved_at) unblocks a later attempt
+        // under the SAME task/run.
+        //
+        // Precondition (R12 §6): this helper runs only after the plugin's own
+        // topology/session/proposal validation passed AND the guard denied
+        // with AUTH_APPROVAL_REQUIRED, which since the R12 guard reorder
+        // fires only after params/node/topology/budget/lineage validation.
+        // Anything else denied stays denied with no request and no card.
+        async function requestFirstSpawnApproval({
+          ownerTaskId,
+          briefRevision,
+          targetAgentId,
+          spawnInputs,
+          spawnNodeId,
+        }) {
+          const taskId = ownerTaskId;
+          try {
+            // Dedupe: an existing request means the card flow already ran for
+            // this task. Retries (same or different run) must not mint another
+            // approval or post another card. The ledger reducer additionally
+            // no-ops same-agent+run retries and rejects a second requester.
+            // M12/T2-R1: the dedupe key is the *surface*, not the request. A recorded
+            // request with no thread means the card was never shown (a failed post, or a
+            // required tag that could not be resolved), and the owner would otherwise wait
+            // for a card that is not coming. The reducer keeps the request itself
+            // idempotent, so re-driving posts the card without minting a second approval;
+            // a task with a thread already recorded can never get a second card.
+            const snap = readSnapshot(paths);
+            const t = snap?.tasks?.[taskId];
+            if (!t) return;
+            if (t.approval_thread_id) {
+              api.logger?.info?.(
+                `[zink-governance] first-approval already surfaced for ${taskId} in thread ${t.approval_thread_id}; no duplicate card`,
+              );
+              return;
+            }
+            if (t.approved_at) return;
+            const alreadyRequested = Boolean(t.approval_requested_at);
+            if (!alreadyRequested) {
+              recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_REQUESTED", {
+                task_id: taskId,
+                agent_id: context.agentId,
+                session_key: context.sessionKey,
+                run_id: context.runId,
+                brief_revision: briefRevision,
+              });
+            }
+            // R6 read-back: the request must be visible before anything is
+            // surfaced. A failed write posts no card.
+            const confirmed = readSnapshot(paths);
+            if (!confirmed?.tasks?.[taskId]?.approval_requested_at) {
+              throw new Error("APPROVAL_REQUEST_NOT_DURABLE");
+            }
+            if (alreadyRequested)
+              api.logger?.info?.(
+                `[zink-governance] first-approval requested for ${taskId} but never surfaced; re-driving the card`,
+              );
+          } catch (requestError) {
+            api.logger?.warn?.(
+              `[zink-governance] first-approval request NOT recorded; card suppressed: ${requestError?.message}`,
+            );
+            return;
+          }
+          try {
+            await postFirstSpawnApprovalCard({
+              taskId,
+              briefRevision,
+              targetAgentId,
+              spawnInputs,
+              spawnNodeId,
+            });
+          } catch (postError) {
+            // Fail-closed: the denial stands; the recorded request keeps the
+            // task approvable by text (taskId) on retry. Never throw: this
+            // helper must not change the spawn verdict.
+            api.logger?.warn?.(
+              `[zink-governance] first-approval card NOT posted: ${postError?.message}`,
+            );
+          }
+        }
+
+        // Card content comes from the exported module-level builder (tested
+        // directly); the poster below only transports it.
+
+        async function postFirstSpawnApprovalCard({
+          taskId,
+          briefRevision,
+          targetAgentId,
+          spawnInputs,
+          spawnNodeId,
+        }) {
+          const approvalsForumId = resolveDiscordDestination(
+            config,
+            "discordApprovalsForumId",
+            "approvalsChannelId",
+          );
+          if (!approvalsForumId) {
+            api.logger?.error?.(
+              "[zink-governance] first-approval card not posted: no configured approvals forum",
+            );
+            return;
+          }
+          const token = resolveDiscordBotToken("main");
+          // M12/T1-R1: the plan the owner reads comes from the durable brief
+          // record, not from the model's spawn payload, so the card cannot present a
+          // plan the ledger never admitted. An unreadable snapshot degrades to the
+          // spawn-only step rather than dropping the card.
+          let governedTask = null;
+          try {
+            governedTask = readSnapshot(paths)?.tasks?.[taskId] ?? null;
+          } catch {
+            api.logger?.warn?.(
+              "[zink-governance] approval plan read from the ledger failed; the card shows the spawn step only",
+            );
+          }
+          let previewPath = null;
+          const previewRoot = resolveAgentSandboxDir("main", context);
+          if (previewRoot) {
+            // M12/T9 F-302 (legacy R7-C6-02): the expected-result preview had NO
+            // producer for its table inputs, so every generated image was the
+            // placeholder layout while the plan that would fill it was in
+            // scope. The table is now built from the ADMITTED plan - the task's
+            // own nodes - and never from invented data.
+            const previewInputs = buildExpectedResultPreviewInputs(
+              governedTask,
+              spawnInputs,
+            );
+            // M12/T9 F-305 (legacy R7-C6-06): the rasteriser performs no
+            // redaction of its own, so the seam guarantees the invariant: a
+            // string that is not already sanitised is REFUSED here and never
+            // reaches the image.
+            const previewStrings = [
+              ...previewInputs.columns,
+              ...previewInputs.rows.flat(),
+              previewInputs.notes,
+            ];
+            const unsanitised = previewStrings.filter(
+              (value) =>
+                typeof value === "string" && !previewInputIsSanitised(value),
+            );
+            if (unsanitised.length > 0) {
+              api.logger?.warn?.(
+                "[zink-governance] expected-result preview refused: the declared plan text is not sanitised for a Discord-visible surface",
+              );
+            } else {
+              try {
+                previewPath = renderExpectedResultPreview({
+                  target: targetAgentId,
+                  title: `TASK ${displayTaskToken(taskId)}`,
+                  columns: previewInputs.columns,
+                  rows: previewInputs.rows,
+                  notes: previewInputs.notes,
+                  outputDirectory: previewRoot,
+                });
+              } catch (previewError) {
+                // The card is still worth approving without a picture; the reason is
+                // recorded so an owner asking "where is the image?" has an answer.
+                api.logger?.warn?.(
+                  `[zink-governance] expected-result preview not rendered: ${previewError?.message}`,
+                );
+              }
+            }
+          } else {
+            api.logger?.warn?.(
+              "[zink-governance] expected-result preview skipped: no governed sandbox root",
+            );
+          }
+          const { title, bodyContent, buttons } = buildFirstSpawnApprovalCard({
+            taskId,
+            taskCode:
+              typeof governedTask?.task_code === "string" &&
+              governedTask.task_code.length > 0
+                ? governedTask.task_code
+                : null,
+            briefRevision,
+            targetAgentId,
+            spawnInputs,
+            spawnNodeId,
+            planNodes: Array.isArray(governedTask?.nodes)
+              ? governedTask.nodes
+              : [],
+            previewImage: previewPath ? path.basename(previewPath) : null,
+          });
+          // M12/T2-R1: the thread carries exactly one tag per category the approvals forum
+          // requires, resolved from that forum's own available_tags. When a required tag
+          // cannot be resolved nothing is posted and the recorded request stays durable,
+          // so the next attempt surfaces the card instead of the owner waiting for a
+          // thread that is not coming (requirements 4 and 5).
+          const surfaced = await postGovernedThread({
+            surface: "approvals",
+            channelId: approvalsForumId,
+            token,
+            title,
+            bodyContent,
+            selections: approvalTagSelectionsFor(governedTask, targetAgentId),
+          });
+          if (!surfaced.posted)
+            throw new Error(`APPROVAL_CARD_NOT_SURFACED:${surfaced.code}`);
+          const thread = { id: surfaced.threadId };
+          // M12/T2-R1: record the surface, not just the request, so a later retry of the
+          // same task can see that the owner was already shown this card.
+          try {
+            recordWorkflowEvent(paths, "WORKFLOW_APPROVAL_SURFACED", {
+              task_id: taskId,
+              channel: "approvals",
+              thread_id: thread.id,
+            });
+          } catch (surfaceError) {
+            api.logger?.error?.(
+              `[zink-governance] APPROVAL_SURFACE_UNRECORDED task=${taskId} thread=${thread.id} cause=${surfaceError?.message}`,
+            );
+            return;
+          }
+          // R4-EXCEPTION (owner decision 2026-10-07): buttons travel by raw
+          // REST in the SAME call flow as the permitted thread creation. The
+          // native adapter cannot deliver from this hook context (proven live
+          // twice); this /messages post is the sole permitted exception, marked
+          // and test-enforced. See buildApprovalButtonsMessage.
+          // M12/T9 F-124: the body is published ONCE - in the thread above.
+          // This message carries the buttons and a short ledger-derived
+          // pointer, so the owner's approval surface never shows the same
+          // body twice.
+          const approvalActionLine = buildApprovalActionLine(taskId);
+          try {
+            const msgRes = await fetch(
+              `https://discord.com/api/v10/channels/${thread.id}/messages`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bot ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(
+                  buildApprovalButtonsMessage(approvalActionLine, buttons),
+                ),
+                signal: AbortSignal.timeout(DISCORD_REST_DEADLINE_MS),
+              },
+            );
+            if (!msgRes.ok) {
+              throw new Error(`APPROVAL_BUTTONS_POST_FAILED:${msgRes.status}`);
+            }
+            const posted = await msgRes.json();
+            // M12/T1-R1: this site transports by raw REST under the R4-EXCEPTION,
+            // so the host's own component send never sees these buttons and would
+            // answer every click with "This component has expired." The ids must be
+            // registered against the message id that now carries them.
+            await registerPostedNativeComponents({
+              api,
+              buttons,
+              messageId: posted?.id ?? "",
+              accountId: "main",
+            });
+            // M12/T1-R1: the expected-result image is a second message of the same
+            // thread, because the host carries components on only the first media
+            // item. The attachment is confined by the same governed sandbox root the
+            // internal tool path already uses, so nothing outside it can be published.
+            if (previewPath) {
+              const containment = containOutboundAttachment(
+                previewPath,
+                "main",
+                context,
+              );
+              if (!containment.contained) {
+                api.logger?.warn?.(
+                  `[zink-governance] expected-result preview not sent: ${containment.reason}`,
+                );
+              } else {
+                try {
+                  await sendNativePayload({
+                    api,
+                    to: thread.id,
+                    threadId: thread.id,
+                    accountId: "main",
+                    payload: {
+                      text: `🖼️ Kết quả dự kiến của tác vụ \`${displayTaskToken(taskId)}\` — ${specialistSoftwareLabel(targetAgentId)}`,
+                    },
+                    mediaUrl: previewPath,
+                    mediaLocalRoots: [previewRoot],
+                  });
+                } catch (mediaErr) {
+                  api.logger?.warn?.(
+                    `[zink-governance] expected-result preview delivery failed: ${mediaErr?.message}`,
+                  );
+                }
+              }
+            }
+            api.logger?.info?.(
+              `[zink-governance] first-approval card posted for task ${taskId} into #approvals (threadId: ${thread.id}, messageId: ${posted.id})`,
+            );
+          } catch (deliveryErr) {
+            api.logger?.error?.(
+              `[zink-governance] first-approval component delivery failed: ${deliveryErr?.message}`,
+            );
+          }
+        }
+
         if (event.toolName === "sessions_spawn") {
           let parsedProposal = null;
           try {
@@ -4191,16 +8873,17 @@ export default {
           }
 
           let isPreAdmittedFixture = false;
+          let fixtureOwner = null;
           if (parsedProposal?.node_id && parsedProposal?.inputs) {
             try {
               const currentSnapshot = readSnapshot(paths);
-              const testOwner = findSession(
+              fixtureOwner = findSession(
                 currentSnapshot,
                 context.sessionKey,
                 context.runId,
               );
               if (
-                testOwner?.task?.nodes?.some(
+                fixtureOwner?.task?.nodes?.some(
                   (n) =>
                     n.node_id === parsedProposal.node_id &&
                     n.agent_id === event.params?.agentId,
@@ -4209,12 +8892,39 @@ export default {
                 isPreAdmittedFixture = true;
               }
             } catch {
+              // M12/T9 F-079: an unreadable ledger is not a fixture: the branch
+              // is skipped and the canonical path decides. The refusal is
+              // never swallowed into "this is a fixture".
               isPreAdmittedFixture = false;
+              fixtureOwner = null;
             }
           }
 
           if (isPreAdmittedFixture) {
-            const decision = await guard.beforeToolCall(event, context, signal);
+            let decision;
+            try {
+              decision = await guard.beforeToolCall(event, context, signal);
+            } catch (gateError) {
+              // M12/T9 F-079: this branch must never be a DEAD END. The guard
+              // refuses with AUTH_APPROVAL_REQUIRED when the owner still has to
+              // approve; the canonical path answers that refusal with the
+              // first-approval surface (the request plus the card), so this
+              // branch answers it the SAME way. Otherwise a model-supplied
+              // node id could skip the approval surface entirely and the task
+              // would wait for an approval nobody was ever asked for.
+              if (gateError?.message === "AUTH_APPROVAL_REQUIRED") {
+                await requestFirstSpawnApproval({
+                  ownerTaskId: fixtureOwner?.task_id,
+                  briefRevision: fixtureOwner?.task?.brief_revision ?? 1,
+                  targetAgentId: event.params?.agentId,
+                  spawnInputs: sanitizeDelegationText(
+                    parsedProposal?.inputs ?? "",
+                  ),
+                  spawnNodeId: parsedProposal?.node_id,
+                });
+              }
+              throw gateError;
+            }
             if (decision?.allow) {
               const params = decision.spawnLabel
                 ? {
@@ -4293,15 +9003,39 @@ export default {
               : `node-${targetAgentId}`;
           let assignedNodeId = candidateNodeId;
 
-          const CANONICAL_AGENT_PRIMARY_STACK = Object.freeze({
-            main: "decision",
-            o1: "data_plant",
-            o2: "intelligence",
-            excel: "data_plant",
-            "power-bi": "intelligence",
-            sql: "data_plant",
-            python: "data_plant",
-          });
+          // M10/T2-R12: the canonical proposal strings are derived ONCE here
+          // and used for BOTH the admitted nodes below and the canonical
+          // proposal further down, so the guard's digest check (handoff vs
+          // node digests) can succeed for a well-formed request. Previously
+          // the nodes carried hardcoded digests ("{}" / the schema filename)
+          // while the guard recomputed over the proposal's actual strings, so
+          // NO live spawn through this path could ever pass lineage — every
+          // approved spawn would still die at LINEAGE_MISMATCH. Same fallback
+          // logic the canonical proposal uses; no new semantics.
+          const canonicalConstraints =
+            typeof parsedProposal?.constraints === "string"
+              ? parsedProposal.constraints
+              : "{}";
+          const canonicalValidation =
+            typeof parsedProposal?.validation_criteria === "string"
+              ? parsedProposal.validation_criteria
+              : "agent-result-payload.schema.json";
+
+          // M12/T9 F-122: the stack an agent owns is canonical, and an agent the
+          // canonical roster does not know is REFUSED BY NAME. The target's
+          // stack is resolved BEFORE anything is written, so an unmapped agent
+          // can never receive a `data_plant` node and never records one.
+          const targetPrimaryStack = canonicalAgentPrimaryStack(targetAgentId);
+          if (!targetPrimaryStack) {
+            api.logger?.warn?.(
+              `[zink-governance] spawn blocked: agent '${targetAgentId}' has no canonical stack mapping (canonical topology violation)`,
+            );
+            return {
+              allow: false,
+              block: true,
+              reason: "AUTH_UNAUTHORIZED_TARGET",
+            };
+          }
 
           if (owner && owner.task) {
             const task = owner.task;
@@ -4316,19 +9050,26 @@ export default {
                 "sql",
                 "python",
               ];
-              const nodes = candidateAgents.map((id) => ({
-                node_id: `node-${id}`,
-                agent_id: id,
-                stack_id: CANONICAL_AGENT_PRIMARY_STACK[id] || "data_plant",
-                dependencies: [],
-                required: false,
-                input_digest: canonicalHash("zink-input-v1", sanitizedTask),
-                constraints_digest: canonicalHash("zink-constraints-v1", "{}"),
-                validation_digest: canonicalHash(
-                  "zink-validation-v1",
-                  "agent-result-payload.schema.json",
-                ),
-              }));
+              const nodes = candidateAgents
+                .map((id) => ({
+                  node_id: `node-${id}`,
+                  agent_id: id,
+                  // F-122: no silent default. An agent with no canonical stack
+                  // contributes NO node rather than a `data_plant` one.
+                  stack_id: canonicalAgentPrimaryStack(id),
+                  dependencies: [],
+                  required: false,
+                  input_digest: canonicalHash("zink-input-v1", sanitizedTask),
+                  constraints_digest: canonicalHash(
+                    "zink-constraints-v1",
+                    canonicalConstraints,
+                  ),
+                  validation_digest: canonicalHash(
+                    "zink-validation-v1",
+                    canonicalValidation,
+                  ),
+                }))
+                .filter((node) => node.stack_id !== null);
 
               if (
                 candidateNodeId &&
@@ -4337,25 +9078,28 @@ export default {
                 nodes.push({
                   node_id: candidateNodeId,
                   agent_id: targetAgentId,
-                  stack_id:
-                    CANONICAL_AGENT_PRIMARY_STACK[targetAgentId] ||
-                    "data_plant",
+                  // F-122: the target's stack was resolved (and refused when it
+                  // is unmapped) before this record was attempted.
+                  stack_id: targetPrimaryStack,
                   dependencies: [],
                   required: false,
                   input_digest: canonicalHash("zink-input-v1", sanitizedTask),
                   constraints_digest: canonicalHash(
                     "zink-constraints-v1",
-                    "{}",
+                    canonicalConstraints,
                   ),
                   validation_digest: canonicalHash(
                     "zink-validation-v1",
-                    "agent-result-payload.schema.json",
+                    canonicalValidation,
                   ),
                 });
               }
 
               try {
-                recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
+                // M10/T2-R2: this is a coordinator-originated task mutation, so
+                // it commits under current execution authority like the spawn
+                // reservation does. A superseded coordinator records nothing.
+                recordCoordinatorFenced(owner, "WORKFLOW_BRIEF_ACTIVATED", {
                   task_id: owner.task_id,
                   brief_revision: briefRevision,
                   // M7-016: the activated brief's semantic contract status is
@@ -4404,6 +9148,9 @@ export default {
           // decision: topology, approval, lineage, attempt derivation and the
           // reservation write all happen in guard.beforeToolCall, which is the
           // same function the synthetic route uses.
+          // Single derivation point: the nodes above were digested over these
+          // exact strings, so the guard's recomputation matches by
+          // construction rather than by duplicated fallback logic.
           const canonicalProposal = {
             schema_version: SCHEMA_VERSION,
             governance_version:
@@ -4413,14 +9160,8 @@ export default {
             input_refs: Array.isArray(parsedProposal?.input_refs)
               ? parsedProposal.input_refs
               : [],
-            constraints:
-              typeof parsedProposal?.constraints === "string"
-                ? parsedProposal.constraints
-                : "{}",
-            validation_criteria:
-              typeof parsedProposal?.validation_criteria === "string"
-                ? parsedProposal.validation_criteria
-                : "agent-result-payload.schema.json",
+            constraints: canonicalConstraints,
+            validation_criteria: canonicalValidation,
           };
 
           const canonicalEvent = {
@@ -4442,11 +9183,30 @@ export default {
             assistantText: "",
           };
 
-          const canonicalDecision = await guard.beforeToolCall(
-            canonicalEvent,
-            context,
-            signal,
-          );
+          const canonicalDecision = await guard
+            .beforeToolCall(canonicalEvent, context, signal)
+            .catch(async (gateError) => {
+              // M10/T2-R12: the guard denies by THROWING, so the approval
+              // bootstrap must live in the catch path. The ONLY throw that
+              // creates an approval request is AUTH_APPROVAL_REQUIRED, which
+              // since the R12 guard reorder fires only after params/node/
+              // topology/budget/lineage validation — i.e. the request is
+              // otherwise valid but unapproved (§6). Every other throw
+              // propagates untouched: no request, no card. The original error
+              // is always re-thrown, so the denial is unchanged and REQUESTED
+              // never authorizes the spawn (§4, §12).
+              if (gateError?.message === "AUTH_APPROVAL_REQUIRED") {
+                await requestFirstSpawnApproval({
+                  ownerTaskId: owner.task_id,
+                  briefRevision: owner.task?.brief_revision ?? 1,
+                  targetAgentId,
+                  spawnInputs: sanitizedTask,
+                  spawnNodeId: assignedNodeId,
+                });
+              }
+              throw gateError;
+            });
+
           if (!canonicalDecision?.allow) {
             return (
               canonicalDecision ?? {
@@ -4518,13 +9278,29 @@ export default {
       async beforeAnnounce(event, context, signal) {
         const decision = await guard.beforeAnnounce(event, context, signal);
         if (decision?.action === "deliver") {
+          // M12/T9 F-109: the publish verdict is READ, never discarded. Every
+          // path in which a governed approval card was not published yields a
+          // verdict, the verdict is recorded, and the host is never told the
+          // announcement was delivered when the card never left the process.
+          let verdict;
           try {
-            await maybePublishDiscordCard(event);
+            verdict = await maybePublishDiscordCard(event);
           } catch (pubErr) {
             api.logger?.warn?.(
               `[zink-governance] Discord card publish warning: ${pubErr?.message}`,
             );
+            verdict = { status: "BLOCKED", error: "ANNOUNCE_DELIVERY_FAILED" };
           }
+          if (verdict?.status === "BLOCKED") {
+            api.logger?.warn?.(
+              `[zink-governance] approval card not published: reason=${verdict.error}`,
+            );
+          } else if (verdict && verdict.status !== "PUBLISHED") {
+            api.logger?.info?.(
+              `[zink-governance] no governed approval card in this announce (status=${verdict.status})`,
+            );
+          }
+          return resolveAnnouncePublishDecision({ decision, verdict });
         }
         return decision;
       },
@@ -4596,6 +9372,22 @@ export default {
           );
         }
         if (owner && !owner.delegation && owner.task?.brief_state === "DRAFT") {
+          // M12/T9 F-122: the node's stack is canonical, and an agent with no
+          // canonical stack is refused BY NAME. The previous inline table fell
+          // back to the data-plant stack, so an unmapped agent silently
+          // received a data-plant node and that node was written into durable
+          // state.
+          const directStackId = canonicalAgentPrimaryStack(context.agentId);
+          if (!directStackId) {
+            api.logger?.warn?.(
+              `[zink-governance] brief activation refused: agent '${context.agentId}' has no canonical stack mapping`,
+            );
+            return {
+              allow: false,
+              reason: "AUTH_UNAUTHORIZED_TARGET",
+              taskCompleted: false,
+            };
+          }
           try {
             recordWorkflowEvent(paths, "WORKFLOW_BRIEF_ACTIVATED", {
               task_id: owner.task_id,
@@ -4605,16 +9397,7 @@ export default {
                 {
                   node_id: `node-${context.agentId}`,
                   agent_id: context.agentId,
-                  stack_id:
-                    {
-                      main: "decision",
-                      o1: "data_plant",
-                      o2: "intelligence",
-                      excel: "data_plant",
-                      "power-bi": "intelligence",
-                      sql: "data_plant",
-                      python: "data_plant",
-                    }[context.agentId] || "data_plant",
+                  stack_id: directStackId,
                   dependencies: [],
                   required: true,
                   input_digest: canonicalHash(
@@ -4638,8 +9421,33 @@ export default {
             );
           }
         }
+        // M10/T2: a BOUND coordinator end is not a task-completion claim
+        // (coordinator result ingestion is a separate future task), so it must
+        // not run completion-claim governance and must not be denied as one.
+        // Recognition requires the ledger binding, not just the queue claim:
+        // ending a run is authority-adjacent. Anything less falls through to
+        // the existing fail-closed path below.
+        const coordinatedEnd = resolveCoordinatorRun(
+          context.sessionKey,
+          context.runId,
+          context.agentId,
+          { requireBinding: true },
+        );
+        if (coordinatedEnd) {
+          api.logger?.info?.(
+            `[zink-governance] coordinator run ended without completion claim: task ${coordinatedEnd.taskId} attempt ${coordinatedEnd.attempt}`,
+          );
+          return { allow: true, taskCompleted: false, coordinatorRun: true };
+        }
         try {
-          return guard.beforeRunEnd(event, context);
+          const runEnd = guard.beforeRunEnd(event, context);
+          // M12/T9 F-113 (legacy R1-A16-03): a result the owner has to judge
+          // must be announced to him as soon as the ledger records it. The
+          // ACCEPT path is not the only producer able to make a pending result
+          // visible, so a task can never sit pending with zero producers able
+          // to announce it.
+          announcePendingResult(owner?.task_id ?? null);
+          return runEnd;
         } catch (err) {
           // In live Discord conversational interactions with human user, Main is the conversational interface to #office.
           // Plain-text conversational replies (clarifications, status, plan explanations, questions)
@@ -4696,7 +9504,23 @@ export default {
     });
     api.on("gateway_stop", () => {
       for (const check of [...startingRuns]) check(true);
-      leases.clear();
+      // M12/T9 F-042: only this registration's leases are revoked.
+      clearScopeLeases();
+      // M12/T9 F-075: the pickup loop is shared by every registration for this
+      // ledger scope, so it stops only when the LAST one stops. One
+      // registration's shutdown must not silence another's lane.
+      if (pickupEntry) {
+        pickupEntry.registrations = Math.max(0, pickupEntry.registrations - 1);
+        if (pickupEntry.registrations === 0) {
+          try {
+            pickupEntry.loop?.stop();
+          } catch {
+            // Shutdown must not throw: the loop holds no authority and the queue
+            // persists independently.
+          }
+          pickupLoops.delete(pickupScope);
+        }
+      }
       unregister();
     });
     api.on("before_tool_call", (event, context = {}) => {
@@ -4719,8 +9543,12 @@ export default {
         api.logger?.warn?.(
           `[zink-lease:get] match=${matched} agent=${context.agentId} tool=${event.toolName}`,
         );
-        leases.delete(key);
-        if (!matched) throw new Error("POLICY_DENIED");
+        // M12/T9 F-087: only the call the lease authorizes may consume it. A wrong
+        // or duplicated call must not burn the one-shot proof, and the three causes
+        // are named so the log says WHICH one refused the call.
+        if (matched) consumeLease(key, actualHash);
+        if (!expected) throw new Error("POLICY_DENIED:LEASE_MISSING");
+        if (!matched) throw new Error("POLICY_DENIED:LEASE_DIGEST_MISMATCH");
       } catch (err) {
         api.logger?.warn?.(`[zink-lease:blocked] ${err?.message ?? err}`);
         return {
@@ -4730,6 +9558,28 @@ export default {
       }
     });
     function authenticateIngress(context) {
+      // M10/T2-R8: ingress verdict observability. Every denial and every
+      // conversational allow is logged with the reason code plus metadata
+      // PRESENCE flags only (counts/booleans — never message content, sender
+      // identity, or secrets), so a future live message can be correlated
+      // end-to-end without guessing which boundary acted. Logging never
+      // alters the verdict: it observes, then the original return stands.
+      const ingressEvidence = () => ({
+        mentions:
+          (Array.isArray(context.mentionedUserIds)
+            ? context.mentionedUserIds.length
+            : 0) +
+          (Array.isArray(context.mentions) ? context.mentions.length : 0),
+        reply: Boolean(context.replyReferenceAuthorId),
+        threadOwner: Boolean(context.threadOwnerId),
+      });
+      const deny = (reason) => {
+        const evidence = ingressEvidence();
+        api.logger?.warn?.(
+          `[zink-governance] ingress denied: reason=${reason} agent=${context.agentId} mentions=${evidence.mentions} reply=${evidence.reply} threadOwner=${evidence.threadOwner} msg=${context.currentMessageId ?? context.messageId}`,
+        );
+        return { allow: false, reason };
+      };
       const isDiscordChannel =
         context.sessionKey?.includes(":discord:") ||
         context.channelId === "discord" ||
@@ -4742,54 +9592,99 @@ export default {
           context.channelId === config.discordOfficeChannelId);
 
       if (!isDiscordChannel || !ids.has(context.agentId))
-        return { allow: false, reason: "POLICY_DENIED" };
+        return deny("POLICY_DENIED");
       // M7-018: verified sender identity precedes owner authorization.
       const senderAuth = isIngressSenderAuthorized(
         context,
         config.ownerDiscordId,
       );
-      if (!senderAuth.ok) return { allow: false, reason: senderAuth.reason };
+      if (!senderAuth.ok) return deny(senderAuth.reason);
       if (context.isBot === true || context.author?.bot === true) {
-        return { allow: false, reason: "BOT_INGRESS_DENIED" };
+        return deny("BOT_INGRESS_DENIED");
+      }
+      // M10/T2-R5: structured author bot flag from the inbound event (see
+      // the sender-authorization gate above for the same rule).
+      if (context.authorIsBot === true) {
+        return deny("BOT_INGRESS_DENIED");
       }
       // Direct intake at Discord ingress is strictly Main only (Decision 3 & RC-01).
       if (context.agentId !== "main") {
-        return { allow: false, reason: "NON_MAIN_DIRECT_INGRESS" };
+        return deny("NON_MAIN_DIRECT_INGRESS");
       }
       const msgId = context.currentMessageId ?? context.messageId;
       if (typeof msgId !== "string" || !/^[1-9][0-9]{16,19}$/u.test(msgId)) {
-        return { allow: false, reason: "LINEAGE_MISMATCH" };
+        return deny("LINEAGE_MISMATCH");
       }
       const routing = resolveIngressRouting({
         message: context.message || {
           id: msgId,
           content: context.content,
-          mentions: context.mentions,
+          // M10/T2-R5: structured Discord inbound metadata forwarded from
+          // the preflight seam. Structured ids take precedence over the
+          // legacy unforwarded fields; both are validated snowflake shapes
+          // by the boundary before they reach this point.
+          mentions: [
+            ...(Array.isArray(context.mentions) ? context.mentions : []),
+            ...toStructuredMentionEntries(context.mentionedUserIds),
+            ...toStructuredMentionEntries(context.mentionedRoleIds),
+          ],
           mention_roles: context.mentionRoles,
           author: context.author,
         },
         context,
         identifiers: { discordGuildId: config.discordGuildId },
       });
+      // M10/T2-R8: the admission SIGNAL is computed here but NOT logged here.
+      // Live evidence showed MAIN_DIRECTED emitted at 11:08:11.788 and the same
+      // event denied as DUPLICATE_DISCORD_EVENT at 11:08:11.875, so the audit
+      // recorded an admission that never happened. The signal is logged only
+      // after the duplicate check below has passed, which makes MAIN_DIRECTED
+      // mean "admission succeeded" instead of "routing reached this line".
+      let admissionSignal;
       if (routing.needs_clarification || routing.target_agents[0] !== "main") {
-        return {
-          allow: false,
-          reason: routing.clarification_reason || "INGRESS_NOT_ADMITTED",
-        };
-      }
-      const identityPath =
-        paths.identityKey || path.resolve(paths.root, "../identity.key");
-      noLinks(identityPath);
-      if (!existsSync(identityPath)) {
-        mkdirSync(path.dirname(identityPath), { recursive: true });
-        writeFileSync(identityPath, `${randomBytes(32).toString("hex")}\n`, {
-          mode: 0o600,
+        // M10/T2-R5: deterministic conversational signals beyond the literal
+        // mention. Bypassed ONLY when the routing layer refused solely for a
+        // missing mention. Every check above (channel, agent roster, sender
+        // authorization, bot filter, Main-only intake) already passed; the
+        // lineage, task-derivation and inner-governance checks below still
+        // run unchanged. Order: reply first (strongest identity evidence),
+        // then thread ownership.
+        const missingMention =
+          routing.clarification_reason === MISSING_MENTION_REFUSAL;
+        const reply = resolveMainReplyAdmission({
+          agentId: context.agentId,
+          replyReferenceMessageId: context.replyReferenceMessageId,
+          replyReferenceAuthorId: context.replyReferenceAuthorId,
+          mainBotId: DISCORD_BOT_IDS.main,
+          missingMentionRefusal: missingMention,
         });
+        if (reply.admitted) {
+          admissionSignal = `${MAIN_DIRECTED}: agent=main via reply msg=${msgId}`;
+        } else {
+          const continuation = resolveMainConversationAdmission({
+            agentId: context.agentId,
+            threadId: context.threadId,
+            threadOwnerId: context.threadOwnerId,
+            mainBotId: DISCORD_BOT_IDS.main,
+            missingMentionRefusal: missingMention,
+          });
+          if (!continuation.admitted) {
+            return deny(routing.clarification_reason || "INGRESS_NOT_ADMITTED");
+          }
+          admissionSignal = `${MAIN_CONVERSATION_CONTINUATION}: agent=main msg=${msgId}`;
+        }
+      } else {
+        // Routing targeted Main directly (structured mention path): record
+        // which signal admitted, so a future live message is attributable
+        // to its evidence rather than to an assumption. Emitted after the
+        // duplicate check, so a duplicate never claims an admission.
+        admissionSignal = `${MAIN_DIRECTED}: agent=main via mention msg=${msgId}`;
       }
-      // Trusted HMAC use only; the key never enters prompts or logs.
-      const key = readFileSync(identityPath, "utf8").trim();
-      if (!/^[a-f0-9]{64}$/u.test(key))
-        throw new Error("EXECUTION_STATE_UNKNOWN");
+      // Trusted HMAC use only; the key never enters prompts or logs. The key
+      // is created by the ONE writer (`resolveIdentityKey`), so two paths can
+      // never publish two different keys for one ledger.
+      const key = resolveIdentityKey(paths);
+      if (!key) throw new Error("EXECUTION_STATE_UNKNOWN");
       const origin = {
         origin: "discord",
         origin_principal_ref: derivePrincipalRef(
@@ -4798,25 +9693,134 @@ export default {
         ),
         origin_message_id: msgId,
       };
-      const taskId = deriveTaskId({
-        ...origin,
-        agent_id: context.agentId,
-      });
-      // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened
       const currentSnapshot = readSnapshot(paths);
-      if (currentSnapshot?.tasks?.[taskId]) {
+      // M12/T1-R1: the identity is the owner-visible 12-character code, so it is
+      // minted rather than derived — and a re-delivered Discord message can no
+      // longer be recognized by recomputing an id. Replay protection therefore
+      // reads the origin binding the ledger already recorded for the task.
+      const replayedTaskId = findTaskByOriginBinding(currentSnapshot, {
+        ...origin,
+        root_agent_id: context.agentId,
+      });
+      const taskId =
+        replayedTaskId ??
+        mintTaskId({
+          date: new Date(),
+          // M12/T9 F-227: the code IS the identity, so it is minted from a
+          // cryptographic byte source, never from the ambient PRNG.
+          random: createTaskCodeRandomSource(),
+          isTaken: (candidate) =>
+            Object.hasOwn(currentSnapshot?.tasks ?? {}, candidate) ||
+            Object.values(currentSnapshot?.tasks ?? {}).some(
+              (task) => task.task_code === candidate,
+            ),
+        });
+      // D06: Check snapshot; do not write duplicate WORKFLOW_OPENED event if task already opened.
+      // M10/T2-R8: this check now runs BEFORE the admission signal is logged, so
+      // a duplicate event produces no MAIN_DIRECTED and no admission claim at all.
+      const existingTask = currentSnapshot?.tasks?.[taskId];
+      if (existingTask) {
+        // M10/T2-R9-C: a model-fallback re-entry is NOT a replay. OpenClaw's
+        // fallback starts a new lane for the SAME already-authenticated run:
+        // proven live 2026-10-07 16:44:20, msg 1557326125670342669, runId
+        // 98aae218-ae57-447f-8a66-1150262e4f3b — the same runId that opened the
+        // task, 916ms after `model-fallback/decision candidate_failed`. Denying
+        // it here produced `Embedded agent failed before reply` and the owner
+        // received nothing, so a HUNG primary (372s, zero bytes) could never
+        // fail over. Same defect, first seen 2026-10-06 on msg 1556853993278541867.
+        //
+        // The discriminator is the task's own recorded root identity, not a
+        // timing heuristic: a retry re-enters under the SAME runId that opened
+        // the task, so it is a second model attempt of one admitted run. A
+        // genuine re-delivery arrives under a DIFFERENT runId and still denies.
+        // Replay protection is therefore unchanged for every other caller.
+        // Agent and session must also match, so a second agent or a second
+        // session can never ride the root identity through.
+        const isSameAdmittedRun =
+          typeof context.runId === "string" &&
+          existingTask.root_run_id === context.runId &&
+          existingTask.root_agent_id === context.agentId &&
+          existingTask.root_session_key === context.sessionKey;
+        if (isSameAdmittedRun) {
+          // Log-only attribution: admission is already durable, so no second
+          // WORKFLOW_OPENED is written and the signal is not re-emitted.
+          api.logger?.info?.(
+            `[zink-governance] ingress re-entry admitted as model-fallback retry: agent=${context.agentId} msg=${msgId} runId=${context.runId} task=${taskId}`,
+          );
+          return { allow: true, taskId, modelFallbackReentry: true };
+        }
+        // M10/T2-R9-A: log-only. The denying run's runId is recorded so a later
+        // change can tell "this same Discord event re-entered by OpenClaw's own
+        // model fallback" from "this same event re-delivered" using evidence.
+        // Live evidence for why this is needed: on 2026-10-06 the fallback
+        // re-entry of msg 1556853993278541867 was denied here 545ms after the
+        // fallback decision and made zero model calls, while the identical
+        // fallback event on a non-Discord session did call the model.
+        api.logger?.warn?.(
+          `[zink-governance] ingress denied: reason=DUPLICATE_DISCORD_EVENT agent=${context.agentId} msg=${msgId} runId=${context.runId ?? "none"}`,
+        );
         return { allow: false, reason: "DUPLICATE_DISCORD_EVENT" };
+      }
+      // Admission is proven here: routing admitted, identity resolved, task id
+      // derived, and the event is not a duplicate. Only now is the signal an
+      // auditable fact.
+      if (admissionSignal)
+        api.logger?.info?.(`[zink-governance] ${admissionSignal}`);
+      // M12/T1-R1: no separate display alias is minted any more. For a task
+      // opened under the new rule the identity IS the owner-visible code, so the
+      // recorded `task_code` equals `task_id`; for a task admitted before the rule
+      // the ledger's own value is carried, and only when the replayed binding is
+      // somehow not in the snapshot does nothing get recorded.
+      let taskCode = isTaskCodeForm(taskId) ? taskId : null;
+      if (taskCode === null) {
+        const recorded = currentSnapshot?.tasks?.[taskId]?.task_code;
+        if (typeof recorded === "string" && recorded.length > 0)
+          taskCode = recorded;
       }
       recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
         ...origin,
         task_id: taskId,
+        ...(taskCode ? { task_code: taskCode } : {}),
         root_agent_id: context.agentId,
         root_session_key: context.sessionKey,
         root_run_id: context.runId,
       });
-      return { allow: true, taskId };
+      return { allow: true, taskId, ...(taskCode ? { taskCode } : {}) };
     }
     api.on("before_prompt_build", async (_event, context = {}) => {
+      // M10/T2: a recognized coordinator run gets its authoritative brief as
+      // advisory context — never the unresolvable-run BLOCKED instruction
+      // below, which would sabotage the turn it is meant to serve. Recognition
+      // here needs a LIVE queue claim (advisory level), so a first prompt that
+      // races the ledger bind write still starts from truthful state while a
+      // SUPERSEDED run is not served stale coordinator context. M10/T2-R2 made
+      // "live" explicit: recognition for this seam requires the claim to be
+      // current, never satisfied by a historical binding alone.
+      // Authority for everything the turn does still comes from the ledger
+      // binding via the guard, never from this text.
+      const coordinatedPrompt = resolveCoordinatorRun(
+        context.sessionKey,
+        context.runId,
+        context.agentId,
+        { requireLiveClaim: true },
+      );
+      if (coordinatedPrompt) {
+        const brief =
+          typeof coordinatedPrompt.queueItem?.payload?.brief === "string"
+            ? coordinatedPrompt.queueItem.payload.brief
+            : null;
+        return {
+          prependContext: buildCoordinatorPromptContext({
+            taskId: coordinatedPrompt.taskId,
+            coordinator: coordinatedPrompt.coordinator,
+            requiredCapabilities:
+              coordinatedPrompt.queueItem?.requiredCapabilities ?? [],
+            attempt: coordinatedPrompt.attempt,
+            leaseId: coordinatedPrompt.queueItem?.leaseId ?? null,
+            brief,
+          }),
+        };
+      }
       // R7 G1: an exempt heartbeat has no ledger owner by design, so no
       // governance receipt is built for it. Nothing is fabricated.
       //
@@ -4906,6 +9910,11 @@ export default {
      */
     const blockUnreconciledNativeRun = ({ reason, runId, childSessionKey }) => {
       const blocked = [];
+      // M11/T1-R1 (4.3): containment is per target, not per sweep. A single
+      // failed write leaves that task running with no ledger record of its
+      // suspension, so the whole decision must report UNKNOWN and name the
+      // tasks still uncontained instead of claiming the sweep finished.
+      const uncontainedTasks = [];
       let ledgerWritten = false;
       let ledgerError = null;
       let scope = "NONE";
@@ -4961,22 +9970,56 @@ export default {
             blocked.push({ task_id, alreadyTerminal: false });
           } catch (writeErr) {
             ledgerError = writeErr?.message ?? String(writeErr);
+            // The list names the tasks left uncontained, so a task with
+            // several failing delegations is reported once.
+            if (!uncontainedTasks.includes(task_id)) {
+              uncontainedTasks.push(task_id);
+            }
           }
         }
       } catch (readErr) {
         ledgerError = readErr?.message ?? String(readErr);
       }
+      // Containment holds only when at least one ledger write proved it AND no
+      // target failed to be recorded. `ledgerWriteFailed` keeps its original
+      // meaning (the authoritative ledger does not reflect this sweep), which
+      // the zero-target and unreadable-ledger cases already reported.
+      const contained = ledgerWritten && uncontainedTasks.length === 0;
+      // M12/T2-R1: the containment above is already decided and, where it succeeded,
+      // durable. The incident surface therefore runs as its own guarded chain and cannot
+      // change this verdict, so a Discord failure never consumes the governance event
+      // (requirement 5).
+      const incidentTaskIds = [
+        ...new Set(
+          blocked.map((entry) => entry.task_id).concat(uncontainedTasks),
+        ),
+      ];
+      if (incidentTaskIds.length > 0 || ledgerError) {
+        surfaceGovernanceIncident({
+          reason,
+          runId,
+          childSessionKey,
+          scope,
+          taskIds: incidentTaskIds,
+          ledgerError,
+        }).catch((surfaceErr) => {
+          api.logger?.warn?.(
+            `[zink-governance] INCIDENT_SURFACE_FAILED reason=${reason} cause=${surfaceErr?.message}`,
+          );
+        });
+      }
       return {
         allow: false,
         blocked: true,
-        governanceState: ledgerWritten ? "BLOCKED" : "UNKNOWN",
+        governanceState: contained ? "BLOCKED" : "UNKNOWN",
         reason,
         scope,
         blockedTasks: blocked,
-        // When the authoritative ledger could not be written at all, the state
-        // is UNKNOWN rather than BLOCKED: nothing may assume the child is
-        // contained until the ledger says so.
-        ledgerWriteFailed: !ledgerWritten,
+        // When the authoritative ledger could not be written for every target,
+        // the state is UNKNOWN rather than BLOCKED: nothing may assume the
+        // child is contained until the ledger says so.
+        ledgerWriteFailed: !contained,
+        uncontainedTasks,
         ledgerError,
       };
     };
@@ -4984,6 +10027,29 @@ export default {
     api.on("subagent_ended", (event, context = {}) => {
       const runId = context.runId || event.runId;
       const childSessionKey = context.childSessionKey || event.targetSessionKey;
+      // M10/T2: a recognized coordinator run ending is attributed narrowly to
+      // its own task attempt — never to the unreconciled-run containment below,
+      // which must not suspend unrelated live runs over a run this governance
+      // layer started itself. No result is recorded here (result ingestion is a
+      // separate future task); the queue/ledger state advances only through the
+      // existing lease and stale-recovery semantics.
+      // M10/T2-R2: recognition is on identity, so this stays narrow for a
+      // SUPERSEDED run too. Before R2 a coordinator ending while its queue item
+      // was QUEUED (the window between stale recovery and the next pickup) fell
+      // through here, matched no delegation, and reached the ALL_LIVE_RUNS
+      // containment sweep. It is still classified as a coordinator run and still
+      // records nothing.
+      const coordinatedEnd = resolveCoordinatorRun(
+        childSessionKey,
+        runId,
+        context.agentId ?? event.agentId,
+      );
+      if (coordinatedEnd) {
+        api.logger?.info?.(
+          `[zink-governance] coordinator run ended: task ${coordinatedEnd.taskId} attempt ${coordinatedEnd.attempt} bound=${coordinatedEnd.bound} outcome=${event?.outcome ?? "unknown"}`,
+        );
+        return { allow: true, governanceState: "COORDINATOR_RUN_ENDED" };
+      }
       try {
         const owner = findSession(readSnapshot(paths), childSessionKey, runId);
         if (!owner.delegation) throw new Error("LINEAGE_MISMATCH");
@@ -5023,6 +10089,25 @@ export default {
       }
     });
     api.on("subagent_spawned", (event, context = {}) => {
+      // M10/T2: a recognized coordinator run starting carries no delegation
+      // receipt to reconcile (it was gateway-started, not spawn-reserved), so
+      // it must not enter the delegation-matching path below, which would treat
+      // it as a lineage mismatch. Benign acknowledgment only; the ledger
+      // binding recorded at pickup time is the authoritative record.
+      // M10/T2-R2: identity-based recognition, so a coordinator spawn observed
+      // while the queue item is QUEUED is still recognized and never reaches the
+      // ALL_LIVE_RUNS containment sweep below.
+      const coordinatedSpawn = resolveCoordinatorRun(
+        event.childSessionKey,
+        event.runId,
+        event.agentId ?? context.agentId,
+      );
+      if (coordinatedSpawn) {
+        api.logger?.info?.(
+          `[zink-governance] coordinator run recognized at spawn: task ${coordinatedSpawn.taskId} attempt ${coordinatedSpawn.attempt} bound=${coordinatedSpawn.bound}`,
+        );
+        return { allow: true, governanceState: "COORDINATOR_RUN_RECOGNIZED" };
+      }
       let reconciled = true;
       try {
         const requesterSessionKey =
@@ -5075,6 +10160,117 @@ export default {
       }
       return { allow: true, governanceState: "RECORDED" };
     });
+    /**
+     * M12/T9 F-066: the EXECUTION_FINISHED seam.
+     *
+     * `handleExecutionFinished`, `queueManager.finishExecution` and
+     * `formatGovernedResultCard` all existed, but NOTHING registered the
+     * runtime event that drives them. The only producer able to make a
+     * pending result visible was the ACCEPT path itself, so a finished
+     * execution had no live edge to RESULT_PENDING_REVIEW, the queue never
+     * left EXECUTING, and the operator documentation described a lifecycle
+     * the build did not have.
+     *
+     * This handler is that edge. The runtime says "the execution finished";
+     * the plugin finishes the queue item, records the result in the ledger,
+     * and announces the pending result on #results BEFORE the owner's verdict
+     * - never after it.
+     *
+     * Identity comes from the LEDGER and from the QUEUE's own claim, never
+     * from the event payload: an event that names a task the ledger does not
+     * own, or an attempt the queue never leased, records nothing.
+     */
+    api.on("execution_finished", (event, context = {}) => {
+      const sessionKey = context.sessionKey ?? event?.sessionKey ?? null;
+      const runId = context.runId ?? event?.runId ?? null;
+      const agentId = context.agentId ?? event?.agentId ?? null;
+      if (typeof sessionKey !== "string" || typeof runId !== "string") {
+        api.logger?.info?.(
+          "[zink-governance] execution_finished carries no governed run identity; no result recorded",
+        );
+        return { allow: true, governanceState: "UNGOVERNED_RUN" };
+      }
+      // The owning task is resolved from the LEDGER's own coordinator
+      // binding - the same binding the pickup loop and the run-end seam use -
+      // and never from the event payload.
+      const coordinated = resolveCoordinatorRun(sessionKey, runId, agentId, {
+        requireBinding: true,
+      });
+      if (!coordinated) {
+        api.logger?.info?.(
+          `[zink-governance] execution_finished for an unbound run ${runId}; no result recorded`,
+        );
+        return { allow: true, governanceState: "UNGOVERNED_RUN" };
+      }
+      const taskId = coordinated.taskId;
+      const task = readSnapshot(paths)?.tasks?.[taskId] ?? {};
+      // A result the owner must judge has to be VISIBLE to him. The root
+      // completion-claim path records its own result, so this seam only has
+      // to announce what is already pending - and that announcement is
+      // idempotent on the recorded thread.
+      if (task.workflow_status === "RESULT_PENDING_REVIEW") {
+        announcePendingResult(taskId);
+        return { allow: true, governanceState: "RESULT_PENDING_REVIEW" };
+      }
+      const queueItem = coordinated.queueItem ?? null;
+      if (!queueItem) {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} has no queue claim; no result recorded`,
+        );
+        return { allow: true, governanceState: "NO_QUEUE_CLAIM" };
+      }
+      const sandboxRoot = resolveAgentSandboxDir(
+        queueItem.claimedBy ?? context.agentId ?? "main",
+        context,
+      );
+      const artifacts = readExecutionArtifacts(event)
+        .map((entry) =>
+          path.isAbsolute(entry) || !sandboxRoot
+            ? entry
+            : path.join(sandboxRoot, entry),
+        )
+        .filter(Boolean);
+      if (artifacts.length === 0) {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} carried no artifact; no result recorded`,
+        );
+        return { allow: true, governanceState: "NO_ARTIFACT" };
+      }
+      // M12/T9 F-532: the finish fence fields come from the run's own LEDGER
+      // BINDING, never from the queue record being verified. Copying
+      // claimedBy/leaseId/attempt off `coordinated.queueItem` made the M7-029
+      // three-way check inside finishExecution a self-comparison, so a
+      // superseded run (attempt N) delivered its result under the LIVE attempt
+      // (N+1) after stale recovery re-issued the lease. The binding is the
+      // run's authority record — the same source recordCoordinatorFenced
+      // fences on — and `requireBinding: true` above guarantees it exists.
+      const outcome = handleExecutionFinished({
+        taskId,
+        agentId: coordinated.binding.coordinator,
+        leaseId: coordinated.binding.lease_id,
+        attempt: coordinated.binding.attempt,
+        artifacts,
+        artifactPath: artifacts[0],
+        // M12/T9 F-535: the run's result envelope, when the event carries
+        // one, is validated against the published agent-result-payload
+        // contract before anything is recorded (see handleExecutionFinished).
+        resultPayload: event?.resultPayload ?? event?.result_payload ?? null,
+        sandboxDir: sandboxRoot,
+        paths,
+        queueManager: defaultQueueManager,
+      });
+      if (outcome?.status !== "READY_FOR_REVIEW") {
+        api.logger?.warn?.(
+          `[zink-governance] execution_finished for task ${taskId} did not produce a reviewable result: ${outcome?.status ?? "UNKNOWN"}${outcome?.error ? ` (${outcome.error})` : ""}`,
+        );
+        return {
+          allow: true,
+          governanceState: outcome?.status ?? "NOT_RECORDED",
+        };
+      }
+      announcePendingResult(taskId);
+      return { allow: true, governanceState: "RESULT_PENDING_REVIEW" };
+    });
     // Canonical Discord surface channel IDs (E18)
     const CANONICAL_DISCORD_SURFACE_IDS = new Set();
     for (const rawId of [
@@ -5095,6 +10291,55 @@ export default {
     // Outbound broadcast mention patterns (E19)
     const OUTBOUND_BROADCAST_RE = /@(everyone|here)/gu;
 
+    const SPECIALIST_AGENT_IDS = Object.freeze([
+      "excel",
+      "power-bi",
+      "sql",
+      "python",
+    ]);
+
+    /**
+     * M12/T1-R1: is this specialist allowed to speak to the owner right now?
+     *
+     * The answer comes from the durable ledger only. A specialist reports its own work
+     * when the session emitting the message owns a task the owner approved and that is
+     * executing or awaiting review; an unapproved, unknown, finished or rejected task
+     * keeps the previous suppression. Nothing here consults the message text, so a
+     * specialist cannot earn admission by what it says.
+     */
+    function specialistExecutionProvenance(agentId, ctx = {}) {
+      const sessionKey = ctx.sessionKey;
+      if (typeof sessionKey !== "string" || sessionKey.length === 0) {
+        return { allowed: false, reason: "NO_SESSION_IDENTITY" };
+      }
+      let task;
+      let delegationAgent;
+      let delegation;
+      try {
+        const owner = findSession(
+          readSnapshot(paths),
+          sessionKey,
+          ctx.runId,
+          true,
+        );
+        task = owner?.task ?? null;
+        delegationAgent = owner?.delegation?.agent_id ?? null;
+        delegation = owner?.delegation ?? null;
+        if (!task && owner?.task_id) {
+          task = readSnapshot(paths)?.tasks?.[owner.task_id] ?? null;
+        }
+      } catch {
+        return { allowed: false, reason: "LEDGER_READ_FAILED" };
+      }
+      return evaluateSpecialistProvenance({
+        agentId,
+        task,
+        delegationAgentId: delegationAgent,
+        runId: ctx.runId,
+        delegation,
+      });
+    }
+
     api.on("message_sending", async (event, ctx = {}) => {
       if (ctx.channelId !== "discord") return;
       const agentIdMatch = (ctx.sessionKey || "").match(/^agent:([^:]+)/);
@@ -5111,10 +10356,38 @@ export default {
         return { block: true, cancel: true };
       }
 
-      // Suppress specialist messages: specialists are execution agents, never direct broadcasters to #office
-      if (["excel", "power-bi", "sql", "python"].includes(agentId)) {
+      // M12/T1-R1 (owner option D): a specialist is an execution agent, and the
+      // owner's instruction is that the bot which DID the work answers him — "sau khi
+      // accept thì chính bot O1 trả về kết quả chứ không phải main". A blanket
+      // suppression made that impossible, so the rule is now a provenance gate: a
+      // specialist message is admitted only when the emitting session owns a task the
+      // owner has approved and that is actually executing. Everything else — an
+      // unapproved task, a session the ledger does not recognize, a finished or
+      // rejected task, or any unsolicited broadcast — keeps being blocked exactly as
+      // before. The destination is still checked against the canonical governed
+      // surfaces by the gate below this one, so admitting the agent never admits an
+      // arbitrary channel.
+      if (SPECIALIST_AGENT_IDS.includes(agentId)) {
+        const provenance = specialistExecutionProvenance(agentId, ctx);
+        if (!provenance.allowed) {
+          api.logger?.warn?.(
+            `[zink-governance] Suppressed specialist '${agentId}' Discord message: ${provenance.reason}`,
+          );
+          return { block: true, cancel: true };
+        }
+        api.logger?.info?.(
+          `[zink-governance] specialist '${agentId}' reporting its own task ${provenance.taskId}`,
+        );
+      }
+
+      // M10/T2-R12: a governance machine payload is not a reply. The brief
+      // envelope is consumed by the gate at the sessions_spawn call and must
+      // never reach #office as a user-visible message (live 2026-10-08 15:41).
+      // The approval card posted to #approvals is the human-facing artifact for
+      // that turn, so suppression loses nothing.
+      if (isGovernanceMachinePayload(event.content)) {
         api.logger?.warn?.(
-          `[zink-governance] Suppressed specialist '${agentId}' direct broadcast to Discord`,
+          `[zink-governance] Suppressed governance machine payload from agent='${agentId}' direct reply (consumed by the spawn gate)`,
         );
         return { block: true, cancel: true };
       }
@@ -5130,18 +10403,34 @@ export default {
         typeof rawDest === "string"
           ? rawDest.replace(/^(channel|discord|user):/u, "").trim()
           : rawDest;
-      const isCanonical =
+      // F-OC-009: the canonical-surface predicate must relate identifiers to the configured set,
+      // not short-circuit on their mere presence. A thread ID or parent channel without comparison
+      // against CANONICAL_DISCORD_SURFACE_IDS allows any ordinary thread metadata to bypass the gate.
+      let isCanonical =
         !destChannel ||
         destChannel === "discord" ||
         CANONICAL_DISCORD_SURFACE_IDS.size === 0 ||
         CANONICAL_DISCORD_SURFACE_IDS.has(destChannel) ||
-        CANONICAL_DISCORD_SURFACE_IDS.has(rawDest) ||
-        Boolean(
-          ctx.threadId ||
-          event.threadId ||
-          ctx.parentChannelId ||
-          event.parentChannelId,
+        CANONICAL_DISCORD_SURFACE_IDS.has(rawDest);
+      // Also check if thread's parent belongs to canonical surfaces
+      if (!isCanonical && typeof ctx.parentChannelId === "string") {
+        const parentChannel = ctx.parentChannelId.replace(
+          /^(channel|discord|user):/u,
+          ""
         );
+        if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
+          isCanonical = true;
+        }
+      }
+      if (!isCanonical && typeof event.parentChannelId === "string") {
+        const parentChannel = event.parentChannelId.replace(
+          /^(channel|discord|user):/u,
+          ""
+        );
+        if (CANONICAL_DISCORD_SURFACE_IDS.has(parentChannel)) {
+          isCanonical = true;
+        }
+      }
       if (!isCanonical) {
         api.logger?.warn?.(
           `[zink-governance] message_sending blocked: non-canonical destination channel`,
@@ -5161,7 +10450,11 @@ export default {
         safeContent = safeContent.replace(OUTBOUND_BROADCAST_RE, "@\u200b$1");
       }
 
-      // E20: Validate outbound attachments/files linkage if present
+      // E20: Validate outbound attachments/files linkage if present, and since
+      // M11/T1-R1 (4.1) confine them too. The existence check alone followed
+      // `..` and symlinked components, so any readable host file could be
+      // published to #office by naming it here. `http(s)` URLs keep their
+      // existing pass-through behavior.
       if (Array.isArray(event.attachments) && event.attachments.length > 0) {
         for (const att of event.attachments) {
           const filePath =
@@ -5173,7 +10466,18 @@ export default {
           ) {
             if (!existsSync(filePath)) {
               api.logger?.warn?.(
-                `[zink-governance] message_sending blocked: unlinked/missing attachment '${filePath}'`,
+                `[zink-governance] message_sending blocked: unlinked/missing attachment`,
+              );
+              return { block: true, cancel: true };
+            }
+            const containment = containOutboundAttachment(
+              filePath,
+              agentId,
+              ctx,
+            );
+            if (!containment.contained) {
+              api.logger?.warn?.(
+                `[zink-governance] message_sending blocked: attachment '${path.basename(filePath)}' ${containment.reason}`,
               );
               return { block: true, cancel: true };
             }
@@ -5186,6 +10490,19 @@ export default {
         content: formatForDiscord(safeContent, { agentName }),
       };
     });
+
+    // M12/T9 F-083: a host without the interactive API loads GREEN while every
+    // button is silently lost, and the component SDK is resolved from the running
+    // entrypoint. Both are named at load, so a silent capability loss is visible
+    // in the log instead of being inferred from a card that never reacts.
+    const interactiveHandlerAvailable =
+      typeof api.registerInteractiveHandler === "function";
+    const componentSdkAvailable = componentSdkResolvable();
+
+    const capabilityLine = `[zink-governance] capabilities: interactive_handler=${interactiveHandlerAvailable ? "available" : "MISSING"} component_sdk=${componentSdkAvailable ? "available" : "MISSING"}`;
+    if (interactiveHandlerAvailable && componentSdkAvailable)
+      api.logger?.info?.(capabilityLine);
+    else api.logger?.warn?.(capabilityLine);
 
     // Interactive button callback handler for Discord components (namespace: "zink")
     if (typeof api.registerInteractiveHandler === "function") {
@@ -5214,13 +10531,92 @@ export default {
               return;
             }
 
+            // Dedicated skill-learning path. A skill candidate is a
+            // governance transaction, never a workflow task: this branch
+            // must never reach handleDiscordAction or executeApprovedTask,
+            // and the execution approval path must never reach skill state.
+            if (
+              parsed.actionKey === "SKILL_APPROVE" ||
+              parsed.actionKey === "SKILL_REJECT"
+            ) {
+              const skillSender =
+                ctx.senderId ||
+                ctx.interaction?.senderId ||
+                ctx.interaction?.user?.id ||
+                ctx.interaction?.member?.user?.id;
+              const repoRoot = findRepoRoot();
+              const skillResult = await handleSkillDiscordAction({
+                action:
+                  parsed.actionKey === "SKILL_APPROVE" ? "approve" : "reject",
+                proposalId: parsed.taskId,
+                contentSha256: parsed.revision,
+                senderId: skillSender,
+                config,
+                // M11/T1-R1 (2.4): the owner-approved plan reference is
+                // operator configuration, never a hardcoded constant. An
+                // unconfigured ref fails the approval closed
+                // (APPROVAL_DECISION_REF_REQUIRED) rather than stamping a
+                // false provenance into the canonical lifecycle.
+                decisionRef: config.skillApprovalDecisionRef,
+                skillsRoot: repoRoot
+                  ? path.join(repoRoot, "zink-skill-store", "skills")
+                  : undefined,
+                proposalStorageDir: path.isAbsolute(config.ledgerRoot ?? "")
+                  ? path.join(config.ledgerRoot, "skill-proposals")
+                  : undefined,
+                notify: async ({ text }) => {
+                  const officeId = resolveDiscordDestination(
+                    config,
+                    "discordOfficeChannelId",
+                    "officeChannelId",
+                  );
+                  if (!officeId) return;
+                  try {
+                    await sendNativePayload({
+                      api,
+                      to: officeId,
+                      accountId: "main",
+                      payload: { text },
+                    });
+                  } catch (deliveryErr) {
+                    api.logger?.warn?.(
+                      `[zink-governance] skill office notice failed: ${deliveryErr?.message}`,
+                    );
+                  }
+                },
+              });
+              const skillMsg = skillResult.ok
+                ? `✅ ${skillResult.status === "APPROVED" ? "Đã phê duyệt và materialize skill" : "Đã từ chối skill"} (proposal \`${parsed.taskId}\`).`
+                : `⛔ Skill approval bị từ chối: ${skillResult.reason}`;
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({
+                  text: skillMsg,
+                  ephemeral: !skillResult.ok,
+                });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({
+                  text: skillMsg,
+                  ephemeral: !skillResult.ok,
+                });
+              }
+              return;
+            }
+
             const ownerId = resolveOwnerDiscordId(config);
             const senderSnowflake =
               ctx.senderId ||
               ctx.interaction?.senderId ||
               ctx.interaction?.user?.id ||
               ctx.interaction?.member?.user?.id;
-            if (senderSnowflake !== ownerId) {
+            // M10/T2-R14: guard the unresolved-owner case explicitly. Every other
+            // owner gate in this file already writes `!ownerId || ...`
+            // (908, 1350, 426-429); these two compared the bare values, and
+            // `undefined !== undefined` is false, so a malformed
+            // `ownerDiscordId` combined with an event carrying no sender field
+            // would have passed the owner check. `resolveOwnerDiscordId` returns
+            // undefined for any id that is not 17-19 digits, while the config
+            // gate admits 20-digit ids, so that combination is reachable.
+            if (!ownerId || senderSnowflake !== ownerId) {
               const unauthMsg =
                 "⛔ Bạn không có quyền phê duyệt kế hoạch này. Chỉ User/Owner mới có thẩm quyền.";
               if (typeof ctx.respond?.followUp === "function") {
@@ -5286,37 +10682,41 @@ export default {
                 messageId: ctx.interaction?.messageId,
                 threadId,
                 origin_message_id: ctx.interaction?.messageId,
-                resultId: parsed.revision || `res-${parsed.taskId.slice(0, 8)}`,
+                resultId: parsed.revision || `res-${parsed.taskId}`,
+                // M12/T9 F-025 (legacy R1-A03-02): the button carries the brief
+                // revision the card was issued for, so the verdict can be
+                // refused when the plan it showed has been superseded.
+                briefRevision: parsed.revision,
               },
             });
 
             if (res.allowed) {
-              const actionLabel =
-                normAction === ACTIONS.APPROVE
-                  ? "phê duyệt (APPROVE)"
-                  : normAction === ACTIONS.REJECT_APPROVAL
-                    ? "từ chối (REJECT)"
-                    : normAction === ACTIONS.REQUEST_REVISION_APPROVAL
-                      ? "yêu cầu sửa đổi (REQUEST REVISION)"
-                      : normAction === ACTIONS.ACCEPT_RESULT
-                        ? "nghiệm thu (ACCEPT)"
-                        : "từ chối kết quả (REJECT)";
+              const actionLabel = describeOwnerAction(normAction);
 
               const confirmText =
                 normAction === ACTIONS.ACCEPT_RESULT
                   ? `🎉 **Đã nghiệm thu kết quả thành công!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Hoàn tất thành công và lưu trữ an toàn trong sổ cái governance)`
                   : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${parsed.taskId}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi)`;
 
-              if (typeof ctx.respond?.followUp === "function") {
-                await ctx.respond.followUp({
-                  text: confirmText,
-                  ephemeral: false,
-                });
-              } else if (typeof ctx.respond?.reply === "function") {
-                await ctx.respond.reply({
-                  text: confirmText,
-                  ephemeral: false,
-                });
+              // Cosmetic ack, guarded: an expired interaction token (~15 min lifetime) or a
+              // 429 makes `followUp`/`reply` reject, which used to skip the
+              // dispatch below and leave the task approved-but-never-run.
+              try {
+                if (typeof ctx.respond?.followUp === "function") {
+                  await ctx.respond.followUp({
+                    text: confirmText,
+                    ephemeral: false,
+                  });
+                } else if (typeof ctx.respond?.reply === "function") {
+                  await ctx.respond.reply({
+                    text: confirmText,
+                    ephemeral: false,
+                  });
+                }
+              } catch (respondErr) {
+                api.logger?.warn?.(
+                  `[zink-governance] discord interaction ack failed (non-fatal): ${respondErr?.message}`,
+                );
               }
 
               if (threadId) {
@@ -5333,66 +10733,26 @@ export default {
                 });
               }
 
-              // Post-action execution trigger
-              if (normAction === ACTIONS.APPROVE) {
-                executeApprovedTask({
-                  taskId: parsed.taskId,
-                  paths,
-                  config,
-                  api,
-                  originThreadId: threadId,
-                }).catch((err) => {
-                  api.logger?.error?.(
-                    `[zink-governance] executeApprovedTask async error: ${err?.message}`,
-                  );
-                });
-              } else if (normAction === ACTIONS.ACCEPT_RESULT) {
-                try {
-                  // M7-012: complete only from the verified owner principal
-                  // bound to the current authoritative result digest.
-                  // senderSnowflake was verified === ownerId above.
-                  defaultQueueManager.completeTask({
-                    taskId: parsed.taskId,
-                    userConfirmationRef: "user-button-accept",
-                    userPrincipalRef: senderSnowflake,
-                    resultDigest: defaultQueueManager.getTask(parsed.taskId)
-                      ?.resultDigest,
-                  });
-                } catch (qErr) {
-                  api.logger?.warn?.(
-                    `[zink-governance] completeTask warning: ${qErr?.message}`,
-                  );
-                }
-
-                const officeChannelId = resolveDiscordDestination(
-                  config,
-                  "discordOfficeChannelId",
-                  "officeChannelId",
-                );
-                const resultsForumId = resolveDiscordDestination(
-                  config,
-                  "discordResultsForumId",
-                  "resultsChannelId",
-                );
-                // Both destinations must be configured: the notice text names the
-                // results forum, so posting with an unresolved forum would render
-                // a dangling mention into an undesignated channel.
-                if (officeChannelId && resultsForumId) {
-                  sendNativePayload({
-                    api,
-                    to: officeChannelId,
-                    accountId: "main",
-                    payload: {
-                      text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${parsed.taskId.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                    },
-                  }).catch((deliveryErr) => {
-                    api.logger?.warn?.(
-                      `[zink-governance] discord delivery failed (office-completion-notice-button): ${deliveryErr?.message}`,
-                    );
-                  });
-                }
-              }
+              // Post-action execution trigger (R16: shared with the text path, so the two
+              // can no longer drift apart).
+              applyOwnerDecisionEffect({
+                api,
+                config,
+                paths,
+                normAction,
+                taskId: parsed.taskId,
+                userPrincipalRef: senderSnowflake,
+                userConfirmationRef: "user-button-accept",
+                threadId,
+              });
             } else {
+              // M12/T9 F-123: a decision against an expired card is refused,
+              // and the card then says so: its STATUS tag becomes EXPIRED. The
+              // refusal is already answered to the owner; the tag is the
+              // projection of it, and a failure to project is only a log line.
+              if (res.reason === "AUTH_APPROVAL_EXPIRED") {
+                projectExpiredApprovalTag(parsed.taskId);
+              }
               const errMsg = `⚠️ Không thể thực hiện: ${res.reason || "Lỗi xử lý"}`;
               if (typeof ctx.respond?.followUp === "function") {
                 await ctx.respond.followUp({ text: errMsg, ephemeral: true });
@@ -5405,10 +10765,19 @@ export default {
               `[zink-governance] interactive callback error: ${intErr?.message}`,
             );
             const errMsg = `⚠️ Đã xảy ra lỗi: ${intErr?.message}`;
-            if (typeof ctx.respond?.followUp === "function") {
-              await ctx.respond.followUp({ text: errMsg, ephemeral: true });
-            } else if (typeof ctx.respond?.reply === "function") {
-              await ctx.respond.reply({ text: errMsg, ephemeral: true });
+            // Guarded: a rejection here escapes the handler entirely, and under
+            // Node's default unhandled-rejection behaviour that terminates the
+            // gateway process.
+            try {
+              if (typeof ctx.respond?.followUp === "function") {
+                await ctx.respond.followUp({ text: errMsg, ephemeral: true });
+              } else if (typeof ctx.respond?.reply === "function") {
+                await ctx.respond.reply({ text: errMsg, ephemeral: true });
+              }
+            } catch (reportErr) {
+              api.logger?.error?.(
+                `[zink-governance] error report to owner also failed: ${reportErr?.message}`,
+              );
             }
           }
         },
@@ -5428,7 +10797,9 @@ export default {
         const actionWord = approveMatch[1].replace(/[ _-]/g, "_");
         const ownerId = resolveOwnerDiscordId(config);
         const senderId = event.senderId || ctx.senderId;
-        if (senderId !== ownerId) return;
+        // M10/T2-R14: `!ownerId ||` — an unresolved owner must never equal an
+        // absent sender. See the button path for the full reasoning.
+        if (!ownerId || senderId !== ownerId) return;
 
         const threadId = event.threadId || ctx.conversationId || ctx.channelId;
         const snapshot = readSnapshot(paths);
@@ -5447,7 +10818,18 @@ export default {
           ctx.taskId ||
           activeTasks
             .map((task) => task.task_id)
-            .find((taskId) => content.includes(taskId));
+            .find((taskId) => content.includes(taskId)) ||
+          // M10/T2-R12: the owner's short code. The full task id is tried FIRST
+          // because it is the more specific token. M12/T1-R1: for a task admitted
+          // under the new rule the id IS the code, so the two branches converge;
+          // the second branch still correlates a legacy 64-hex task the owner
+          // quotes by its code. The reducer enforces uniqueness of both, so a
+          // substring hit resolves to exactly one task, and a code that matches
+          // nothing falls through to the same EXACT_TASK_CORRELATION denial as
+          // before — correlation is never loosened, only widened.
+          activeTasks
+            .filter((task) => typeof task.task_code === "string")
+            .find((task) => content.includes(task.task_code))?.task_id;
         if (!requestedTaskId) {
           api.logger?.warn?.(
             "[zink-governance] text action blocked: EXACT_TASK_CORRELATION_REQUIRED",
@@ -5474,6 +10856,46 @@ export default {
           ? "RESULT_PENDING_REVIEW"
           : "APPROVAL_PENDING";
 
+        // M12/T9 F-244: the channel is OBSERVED, never invented. The action
+        // word used to decide which channel the verdict was recorded in, so
+        // the owner typing `APPROVE <task>` in a DM or in any other channel
+        // was admitted and journalled as `channel: "approvals"` — the
+        // authority rule then compared the event against the value the caller
+        // had itself fabricated, so "approval must occur in #approvals" could
+        // never fail. The verdict is now accepted only where it was observed.
+        const observedChannelId = String(
+          ctx.channelId ??
+            event.channelId ??
+            ctx.conversationId ??
+            ctx.interaction?.channelId ??
+            "",
+        )
+          .replace(/^channel:/u, "")
+          .trim();
+        const expectedSurfaceId = isResult
+          ? resolveDiscordDestination(
+              config,
+              "discordResultsForumId",
+              "resultsChannelId",
+            )
+          : resolveDiscordDestination(
+              config,
+              "discordApprovalsForumId",
+              "approvalsChannelId",
+            );
+        if (
+          observedChannelId.length === 0 ||
+          expectedSurfaceId === undefined ||
+          observedChannelId !== expectedSurfaceId
+        ) {
+          // Fail closed: without a configured destination, or outside it,
+          // there is no approval surface to record a verdict in.
+          api.logger?.warn?.(
+            "[zink-governance] text action blocked: APPROVAL_SURFACE_MISMATCH",
+          );
+          return;
+        }
+
         const res = handleDiscordAction({
           actor: "user",
           channel: targetChannel,
@@ -5488,19 +10910,12 @@ export default {
             resultId:
               pendingTask.accepted_payload_digest?.slice(0, 8) ||
               pendingTask.result_id ||
-              `res-${pendingTask.task_id.slice(0, 8)}`,
+              `res-${displayTaskToken(pendingTask.task_id)}`,
           },
         });
 
         if (res.allowed) {
-          const actionLabel =
-            normAction === ACTIONS.APPROVE
-              ? "phê duyệt (APPROVE)"
-              : normAction === ACTIONS.REJECT_APPROVAL
-                ? "từ chối (REJECT)"
-                : normAction === ACTIONS.REQUEST_REVISION_APPROVAL
-                  ? "yêu cầu sửa đổi (REQUEST REVISION)"
-                  : "nghiệm thu (ACCEPT)";
+          const actionLabel = describeOwnerAction(normAction);
 
           const confirmText =
             normAction === ACTIONS.ACCEPT_RESULT
@@ -5508,73 +10923,39 @@ export default {
               : `✅ **Đã ghi nhận ${actionLabel} từ anh Zink!**\n- **Mã tác vụ:** \`${pendingTask.task_id}\`\n- **Trạng thái:** \`${res.nextState}\` (Đã đưa vào hàng đợi thực thi cho các Specialist)`;
 
           if (threadId) {
-            await sendNativePayload({
+            // The confirmation is cosmetic and must never gate the dispatch
+            // below. It used to be `await`ed here, so a delivery failure
+            // (NATIVE_OUTBOUND_UNAVAILABLE when the host runtime config is
+            // unresolved) skipped `executeApprovedTask` and left the task
+            // approved-but-never-dispatched, unrecoverably. See R15/R16.
+            sendNativePayload({
               api,
               to: threadId,
               threadId,
               accountId: "o1",
               payload: { text: confirmText },
-            });
-          }
-
-          // Post-action execution trigger
-          if (normAction === ACTIONS.APPROVE) {
-            executeApprovedTask({
-              taskId: pendingTask.task_id,
-              paths,
-              config,
-              api,
-              originThreadId: threadId,
-            }).catch((err) => {
-              api.logger?.error?.(
-                `[zink-governance] executeApprovedTask async error: ${err?.message}`,
-              );
-            });
-          } else if (normAction === ACTIONS.ACCEPT_RESULT) {
-            try {
-              // M7-012: senderId was verified === ownerId above; bind the
-              // current authoritative result digest.
-              defaultQueueManager.completeTask({
-                taskId: pendingTask.task_id,
-                userConfirmationRef: "user-text-accept",
-                userPrincipalRef: senderId,
-                resultDigest: defaultQueueManager.getTask(pendingTask.task_id)
-                  ?.resultDigest,
-              });
-            } catch (qErr) {
+            }).catch((deliveryErr) => {
               api.logger?.warn?.(
-                `[zink-governance] completeTask text warning: ${qErr?.message}`,
+                `[zink-governance] discord delivery failed (text-approval-confirm): ${deliveryErr?.message}`,
               );
-            }
-
-            const officeChannelId = resolveDiscordDestination(
-              config,
-              "discordOfficeChannelId",
-              "officeChannelId",
-            );
-            const resultsForumId = resolveDiscordDestination(
-              config,
-              "discordResultsForumId",
-              "resultsChannelId",
-            );
-            // Both destinations must be configured: the notice text names the
-            // results forum, so posting with an unresolved forum would render
-            // a dangling mention into an undesignated channel.
-            if (officeChannelId && resultsForumId) {
-              sendNativePayload({
-                api,
-                to: officeChannelId,
-                accountId: "main",
-                payload: {
-                  text: `🎉 **Chúc mừng!** Anh Zink đã chính thức nghiệm thu kết quả tác vụ \`${pendingTask.task_id.slice(0, 8)}\` tại <#${resultsForumId}>. Tác vụ đã hoàn tất xuất sắc và được lưu trữ an toàn trong sổ cái governance. Quản Lý xin cảm ơn anh Zink!`,
-                },
-              }).catch((deliveryErr) => {
-                api.logger?.warn?.(
-                  `[zink-governance] discord delivery failed (office-completion-notice-text): ${deliveryErr?.message}`,
-                );
-              });
-            }
+            });
           }
+
+          // Post-action execution trigger (R16: shared with the button path).
+          applyOwnerDecisionEffect({
+            api,
+            config,
+            paths,
+            normAction,
+            taskId: pendingTask.task_id,
+            userPrincipalRef: senderId,
+            userConfirmationRef: "user-text-accept",
+            threadId,
+          });
+        } else if (res.reason === "AUTH_APPROVAL_EXPIRED") {
+          // M12/T9 F-123: the text path projects the same refusal onto the
+          // card's tag as the button path does.
+          projectExpiredApprovalTag(pendingTask.task_id);
         }
       } catch (mErr) {
         api.logger?.warn?.(

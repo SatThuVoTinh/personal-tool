@@ -1,4 +1,4 @@
-.PHONY: install format format-check lint test repo-check verify
+.PHONY: install format format-check lint test test-knowledge repo-check verify
 
 install:
 	npm ci
@@ -14,6 +14,9 @@ lint:
 
 test:
 	npm test
+
+test-knowledge:
+	npm run test:knowledge
 
 repo-check:
 	npm run repo:check

@@ -13,20 +13,182 @@
 
 /** Common standard-library and data-science imports to classify script purpose */
 const DATA_SCIENCE_MODULES = new Set([
-  "pandas", "numpy", "scipy", "sklearn", "matplotlib",
-  "seaborn", "plotly", "statsmodels", "xgboost", "lightgbm",
-  "tensorflow", "torch", "keras",
+  "pandas",
+  "numpy",
+  "scipy",
+  "sklearn",
+  "matplotlib",
+  "seaborn",
+  "plotly",
+  "statsmodels",
+  "xgboost",
+  "lightgbm",
+  "tensorflow",
+  "torch",
+  "keras",
 ]);
 
 const DB_MODULES = new Set([
-  "sqlalchemy", "psycopg2", "pymysql", "sqlite3", "duckdb",
-  "pyarrow", "fastparquet",
+  "sqlalchemy",
+  "psycopg2",
+  "pymysql",
+  "sqlite3",
+  "duckdb",
+  "pyarrow",
+  "fastparquet",
 ]);
 
 const FILE_IO_MODULES = new Set([
-  "csv", "json", "openpyxl", "xlrd", "xlwt", "xlsxwriter",
-  "pdfplumber", "pdfminer", "pypdf", "docx", "python-docx",
+  "csv",
+  "json",
+  "openpyxl",
+  "xlrd",
+  "xlwt",
+  "xlsxwriter",
+  "pdfplumber",
+  "pdfminer",
+  "pypdf",
+  "docx",
+  "python-docx",
 ]);
+
+// ---------------------------------------------------------------------------
+// Deny rules (F-236 / R7-D5-02)
+// ---------------------------------------------------------------------------
+
+/**
+ * The constructs a governed Python artifact must not contain.
+ *
+ * Measured at HEAD: `validatePythonFileContent` was a regex line/classifier
+ * that counted definitions, classes and imports and tagged the imported
+ * modules. It had no deny rule and returned no violation field, so nothing it
+ * observed could be refused, while the README and the CHANGELOG published it
+ * as the AST safety gate for `zink_python`.
+ *
+ * These rules are the observable half of that gate: each one is a construct
+ * the summariser can see without executing anything, and each one is reported
+ * with the line it was seen on so a caller can refuse the file.
+ */
+export const PYTHON_DENY_RULES = Object.freeze([
+  {
+    rule: "PYTHON_EXEC",
+    description: "exec() executes arbitrary code at runtime.",
+    pattern: /(^|[^.\w])exec\s*\(/,
+  },
+  {
+    rule: "PYTHON_EVAL",
+    description: "eval() executes arbitrary code at runtime.",
+    pattern: /(^|[^.\w])eval\s*\(/,
+  },
+  {
+    rule: "PYTHON_OS_SYSTEM",
+    description: "os.system() runs a host command.",
+    pattern: /\bos\s*\.\s*system\s*\(/,
+  },
+  {
+    rule: "PYTHON_SUBPROCESS",
+    description: "the subprocess module runs a host command.",
+    pattern: /(^|[^.\w])subprocess\b/,
+  },
+  {
+    rule: "PYTHON_OPEN",
+    description: "open() reaches the host filesystem.",
+    pattern: /(^|[^.\w])open\s*\(/,
+  },
+]);
+
+/**
+ * The text that cannot execute, blanked out.
+ *
+ * F-462 (R9-T08-4): the deny rules were applied to every character of every
+ * line, so a `# use subprocess …` comment, a docstring describing `exec()`, and
+ * a string literal naming `open()` were all refused. A construct that lives
+ * only inside a comment or a literal cannot run, so over-refusal teaches a
+ * caller to phrase the same effect so the gate misses it — a gate that cries
+ * wolf is worse than no gate.
+ *
+ * Comments (to end of line), `'''`/`"""` blocks and single-quoted literals are
+ * replaced with spaces; line breaks and every character position are preserved,
+ * so a violation still names the executable line it was seen on. A quote inside
+ * a comment and a `#` inside a string are each consumed by whichever construct
+ * opens first, which is what the raw-text scan got wrong.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function maskNonCodeText(content) {
+  const out = Array.from(content);
+  const length = content.length;
+  const blank = (from, to) => {
+    for (let index = from; index < to && index < length; index += 1) {
+      if (content[index] !== "\n") out[index] = " ";
+    }
+  };
+
+  let index = 0;
+  while (index < length) {
+    const character = content[index];
+    if (character === "#") {
+      let end = index;
+      while (end < length && content[end] !== "\n") end += 1;
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    const delimiter =
+      content.slice(index, index + 3) === '"""'
+        ? '"""'
+        : content.slice(index, index + 3) === "'''"
+          ? "'''"
+          : character === '"' || character === "'"
+            ? character
+            : null;
+    if (delimiter === null) {
+      index += 1;
+      continue;
+    }
+    let end = index + delimiter.length;
+    while (end < length) {
+      if (content[end] === "\\") {
+        end += 2;
+        continue;
+      }
+      if (delimiter.length === 1 && content[end] === "\n") {
+        // An unterminated single-quoted literal ends at the line, as in Python.
+        break;
+      }
+      if (content.startsWith(delimiter, end)) {
+        end += delimiter.length;
+        break;
+      }
+      end += 1;
+    }
+    blank(index, end);
+    index = end;
+  }
+  return out.join("");
+}
+
+/**
+ * The deny rules a piece of Python content violates.
+ *
+ * @param {string} content
+ * @returns {Array<{rule: string, description: string, line: number}>}
+ */
+export function findPythonViolations(content) {
+  if (typeof content !== "string") return [];
+  const lines = maskNonCodeText(content).split(/\r?\n/);
+  const violations = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    for (const { rule, description, pattern } of PYTHON_DENY_RULES) {
+      if (pattern.test(line)) {
+        violations.push({ rule, description, line: index + 1 });
+      }
+    }
+  }
+  return violations;
+}
 
 // ---------------------------------------------------------------------------
 // Main API
@@ -34,6 +196,9 @@ const FILE_IO_MODULES = new Set([
 
 /**
  * Statically analyzes the content of a Python script file.
+ *
+ * F-236 (R7-D5-02): the analysis now carries a violation set, so the
+ * observations it makes can be refused instead of only described.
  *
  * @param {string} content - Raw Python file content
  * @returns {{
@@ -48,6 +213,7 @@ const FILE_IO_MODULES = new Set([
  *   fileIoModules: string[],
  *   hasMainBlock: boolean,
  *   firstLines: string[],
+ *   violations: Array<{rule: string, description: string, line: number}>,
  * }}
  */
 export function validatePythonFileContent(content) {
@@ -60,7 +226,9 @@ export function validatePythonFileContent(content) {
 
   // Count definitions — functionCount includes all def declarations (sync + async)
   const functionCount = (content.match(/\bdef\s+[a-zA-Z_]/gm) || []).length;
-  const asyncFunctionCount = (content.match(/^\s*async\s+def\s+[a-zA-Z_]/gm) || []).length;
+  const asyncFunctionCount = (
+    content.match(/^\s*async\s+def\s+[a-zA-Z_]/gm) || []
+  ).length;
   const classCount = (content.match(/^\s*class\s+[a-zA-Z_]/gm) || []).length;
 
   // Collect import lines
@@ -102,7 +270,39 @@ export function validatePythonFileContent(content) {
     fileIoModules,
     hasMainBlock,
     firstLines: nonEmpty.slice(0, 10),
+    // F-236 (R7-D5-02): the deny rules the summary observed, reported with
+    // the line each was seen on.
+    violations: findPythonViolations(content),
   };
+}
+
+/**
+ * F-236 (R7-D5-02): refuses a Python file that violates a deny rule.
+ *
+ * The summariser itself never throws on a violation, because a preview of a
+ * refused file is still useful to an operator.
+ *
+ * F-462 (R9-T08-4) — what this actually is: an ADVISORY check with no
+ * production caller at HEAD, not the `zink_python` safety gate. The live handler
+ * executes nothing (`ENGINE_NOT_IMPLEMENTED` in the governed `zink_python`
+ * arm), the production `.py` artifact path runs an empty/counts/`py_compile`
+ * check with no deny rule, and this module is imported by test lanes only. It is
+ * also a static scan of the five observable constructs in `PYTHON_DENY_RULES`
+ * and nothing more: it does not recognize a host effect reached by another
+ * library spelling (`os.popen`, a `read_csv` target, a `duckdb` query), and no
+ * path exempts `open()` under a sandbox root, because no sandbox root exists.
+ * A caller that wires it gets those five refusals; it does not get containment.
+ *
+ * @param {string} content - Raw Python file content
+ * @returns {void}
+ */
+export function assertNoPythonViolations(content) {
+  const violations = findPythonViolations(content);
+  if (violations.length === 0) return;
+  const summary = violations
+    .map((violation) => `${violation.rule} at line ${violation.line}`)
+    .join("; ");
+  throw new Error(`PYTHON_POLICY_VIOLATION: ${summary}`);
 }
 
 /**
@@ -130,8 +330,7 @@ export function formatPythonPreview(fileName, analysis) {
     `, ${analysis.classCount} class, ${analysis.importCount} import` +
     (tags.length > 0 ? `\n${tags.join(" · ")}` : "");
 
-  const codeBlock =
-    "```python\n" + analysis.firstLines.join("\n") + "\n```";
+  const codeBlock = "```python\n" + analysis.firstLines.join("\n") + "\n```";
 
   return `${header}\n${codeBlock}`;
 }

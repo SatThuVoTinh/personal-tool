@@ -1,72 +1,8 @@
-## Owner Decision Protocol
+# Execution
 
-When a material decision is required, stop at the smallest safe boundary.
+The Owner Decision Protocol is owned by `.agents/skills/planning/SKILL.md`; use that
+template verbatim when a material decision is required.
 
-Ask the owner using:
-
-```text
-OWNER DECISION REQUIRED
-
-Issue:
-<what was discovered>
-
-Why it matters:
-<why the current decision may be wrong, redundant, unsafe, or inefficient>
-
-Current approved approach:
-<what PLAN/contracts currently require>
-
-Recommended approach:
-<best technical recommendation>
-
-Why recommended:
-<concise technical reasoning>
-
-Impact if changed:
-<scope/files/contracts/schema/dependencies/tests/roadmap>
-
-Impact if unchanged:
-<risk/cost/complexity/limitation>
-
-Options:
-A. <recommended option>
-B. <alternative>
-C. Keep current approved approach
-
-Recommendation:
-A
-
-Question:
-Which option should be applied?
-```
-
-The owner decides.
-
-Do not treat silence as approval.
-
-After the owner answers, follow the decision.
-
-If the answer requires a plan revision:
-
-```text
-STOP execution
-↓
-Execution Authorization = NO
-↓
-Codex invalidates/removes the stale ACTIVE.md
-↓
-Codex planning mode
-↓
-bounded revised plan
-↓
-owner approval
-↓
-new Plan Revision + new ACTIVE.md
-↓
-Execution Authorization = YES
-↓
-resume
-```
 # Mandatory preflight
 
 Before modifying repository state:
@@ -117,8 +53,13 @@ Files under `.agents/states/` are optional working memory, never authority.
   execution. It must not restate the full contract.
 - `handoff.md`: Cursor should create/update this at the execution handoff with what
   changed, validation actually run, known limitations/blockers, and review notes.
-- `findings.md`: owned by Codex review/remediation; Cursor must not use it to broaden
-  implementation scope.
+- The defect register is `docs/execution/findings.md`, outside this directory: tracked, and
+  never transient-deleted. **Accountable writer:** Codex review/remediation.
+  **Serialization:** one row, one writer — a second lane that finds the same `F-xxx` block already being edited does not edit it and hands the conflict to the orchestrator.
+  dsh must not use the register to broaden implementation scope, and a row's existence is
+  not an execution grant.
+
+**State is historical:** `PLAN.md` wins without comparison — a state file is working memory, never a second source to reconcile against.
 
 If any transient state conflicts with `PLAN.md`, the valid `ACTIVE.md`, architecture,
 or persistent contracts, ignore the transient state and follow the authoritative
@@ -137,11 +78,11 @@ Reuse existing patterns before creating alternatives.
 
 Do not perform:
 
-* unrelated cleanup;
-* opportunistic refactoring;
-* mass formatting;
-* speculative future-proofing;
-* unrelated bug fixing.
+- unrelated cleanup;
+- opportunistic refactoring;
+- mass formatting;
+- speculative future-proofing;
+- unrelated bug fixing.
 
 Do not create placeholder production code and claim completion.
 
@@ -149,15 +90,15 @@ Do not materially change a Change Impact surface marked `NONE`.
 
 Do not silently alter:
 
-* public API;
-* schema/migration semantics;
-* persistent identifiers;
-* storage ownership;
-* network exposure;
-* security boundaries;
-* resource ceilings;
-* runtime topology;
-* compatibility guarantees.
+- public API;
+- schema/migration semantics;
+- persistent identifiers;
+- storage ownership;
+- network exposure;
+- security boundaries;
+- resource ceilings;
+- runtime topology;
+- compatibility guarantees.
 
 Do not add/remove/upgrade/re-resolve dependencies unless authorized by the task.
 
@@ -171,16 +112,16 @@ Do not hand-edit generated artifacts when an authoritative generator exists.
 Supported operator environments include Windows PowerShell and POSIX shells
 where repository equivalents exist.
 
-* Use UTF-8 and LF.
-* Follow `.editorconfig` and `.gitattributes`.
-* Prefer repository-relative portable paths.
-* Quote paths and arguments.
-* Do not assume drive letters, shell syntax, case sensitivity, executable
+- Use UTF-8 and LF.
+- Follow `.editorconfig` and `.gitattributes`.
+- Prefer repository-relative portable paths.
+- Quote paths and arguments.
+- Do not assume drive letters, shell syntax, case sensitivity, executable
   suffixes, current directory, or symlink behavior.
-* Prefer checked-in Node/Python logic over complex shell logic.
-* Do not alter host/global configuration merely to make a task pass.
-* Do not remove resource ceilings merely because a workload exceeds them.
-* Retries must be bounded and diagnostic.
+- Prefer checked-in Node/Python logic over complex shell logic.
+- Do not alter host/global configuration merely to make a task pass.
+- Do not remove resource ceilings merely because a workload exceeds them.
+- Retries must be bounded and diagnostic.
 
 Host-facing V1 HTTP entry points remain loopback-only unless an owner-approved
 contract changes that model.

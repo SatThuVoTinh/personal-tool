@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: docker
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -57,7 +65,14 @@ test("M3/T3 protects deletion, ownership, and rebuild recovery", () => {
 
 test("M3/T3 serializes only bounded safe errors", () => {
   assert.match(errors, /MAX_ERROR_ENTRIES = 50/);
-  assert.match(errors, /key=lambda item: \(item\[0\] or "", item\[1\]\)/);
+  // F-550 (R10-T06-2) widened this key to three members so two rows that differ
+  // only by their cause still serialize in a stable order. The control is that
+  // the ordering key totals every member the record carries, so the expectation
+  // tracks the record rather than its arity.
+  assert.match(
+    errors,
+    /key=lambda item: \(item\[0\] or "", item\[1\], item\[2\] or ""\)\)/u,
+  );
   assert.match(errors, /LEGACY_FAILURE_DETAIL/);
   assert.match(errors, /Legacy failure detail is unavailable/);
 });

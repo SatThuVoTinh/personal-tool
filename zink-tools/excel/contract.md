@@ -21,4 +21,4 @@ The Excel interface supports four closed operations:
 
 - Logical paths are validated via `validateArtifactLogicalPath`.
 - Authorization is governed strictly by `TOOL_POLICY` and runtime delegation.
-- Under Model A (Contract Tool Interface), invocation returns deterministic `ENGINE_NOT_IMPLEMENTED` via the contract seam.
+- Executable mode: invocation executes the hosted workbook engine (or returns deterministic `ENGINE_NOT_IMPLEMENTED` via the contract seam when dispatched to the contract seam).

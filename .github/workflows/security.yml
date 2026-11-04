@@ -3,8 +3,10 @@ name: Security
 on:
   pull_request:
     branches: [main]
+  # No branch filter: the secret scan must see every branch push, not only the
+  # default branch, or a credential committed to a task branch reaches main
+  # through a merge without any lane ever having looked at the branch.
   push:
-    branches: [main]
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
@@ -40,7 +42,13 @@ jobs:
           test "$(node --version)" = "v24.15.0"
           test "$(npm --version)" = "12.0.2"
       - name: Audit dependencies
+        # The recorded baseline is known-red, so this step reports and the
+        # comparison below decides. A bare audit returns the same answer for
+        # the recorded baseline and for a new high-severity dependency.
+        continue-on-error: true
         run: npm audit --audit-level=high
+      - name: Compare the audit against the recorded baseline
+        run: node scripts/audit-baseline.mjs
   secret-scan:
     name: secret-scan
     runs-on: ubuntu-24.04
@@ -56,4 +64,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          # The report artifact is what makes a "zero leaks" claim
+          # re-inspectable instead of a sentence in a plan file.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"

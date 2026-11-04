@@ -15,6 +15,25 @@ from tokenizers import Encoding, Tokenizer
 
 TARGET_CHARS = 1500
 MAX_CHARS = 2000
+# M10/T2-R23: memory bound for ONE source read.
+
+# MAX_CHARS bounds a single SEGMENT, so it bounds nothing about how much is
+# read. Before this, candidate.read_bytes() had no bound at all, and the file
+# was materialised three times over (raw bytes, decoded str, splitlines)
+# before any limit was evaluated. A pathological note - a pasted dataset, a
+# base64 export, or a OneDrive placeholder that has not hydrated - could
+# exhaust the service process. The MemoryError escaped _validate_source
+# (no except) and scan_vault (no except) and landed in index_lifecycle's
+# blanket handler as INDEXING_UNEXPECTED_FAILURE with NO source path, so one
+# file aborted the whole run and the operator could not tell which one.
+
+# This is the markdown twin of the bound pdf_foundation already applies to
+# sidecars and pdf_pipeline already applies to PDFs. 16 MiB is deliberately far
+# above any hand-written note (the sidecar ceiling is 64 KiB) while still
+# being a real memory bound. The vault is not reachable from this machine, so
+# the ceiling could not be measured against real content; it is a single
+# constant and is the one judgement call in this change.
+MAX_MARKDOWN_SOURCE_BYTES = 16 * 1024 * 1024
 QUERY_MAX_TOKENS = 256
 PAIR_MAX_TOKENS = 1024
 PAIR_SPECIAL_TOKENS_EXPECTED = 4
@@ -64,6 +83,14 @@ for slug, display_topic in CANONICAL_SLUG_TO_TOPIC.items():
     if display_topic in TOPIC_TO_TAG:
         TOPIC_TO_TAG[slug] = TOPIC_TO_TAG[display_topic]
 TAG_TO_TOPIC = {tag: topic for topic, tag in TOPIC_TAGS}
+# F-308 (R7-E1-03): the write side now recognises the SAME alias spellings
+# the query side publishes. The eighteen-entry slug table was only ever
+# consulted when a query filtered by topic, so a note tagged with an alias
+# produced no topic, stayed invisible to a topic filter, and -- when it
+# carried aliases only -- was refused with a "missing tag" error that named
+# the wrong cause.
+for _slug, _display_topic in CANONICAL_SLUG_TO_TOPIC.items():
+    TAG_TO_TOPIC.setdefault(f"#{_slug}", _display_topic)
 ERROR_PRECEDENCE = {
     code: index
     for index, code in enumerate(
@@ -71,6 +98,7 @@ ERROR_PRECEDENCE = {
             "SOURCE_PATH_OUTSIDE_VAULT",
             "SOURCE_LINK_NOT_ALLOWED",
             "SOURCE_READ_FAILED",
+            "SOURCE_TOO_LARGE",
             "UNSUPPORTED_TOPIC",
             "INVALID_UTF8",
             "MALFORMED_FRONTMATTER",
@@ -282,7 +310,17 @@ class MarkdownVaultScanner:
             for entry in entries:
                 path = Path(entry.path)
                 relative = path.relative_to(vault_root).as_posix()
-                if self._is_link_like_entry(entry):
+                try:
+                    link_like = self._is_link_like_entry(entry)
+                except OSError:
+                    # F-325 (R7-E1-05): an unreadable component is not "no
+                    # link". The old helper returned False for both, so a
+                    # component whose metadata cannot be read was admitted
+                    # and indexed. The entry is refused, with the code that
+                    # names the real cause.
+                    errors.append(self._error(relative, "SOURCE_READ_FAILED"))
+                    continue
+                if link_like:
                     if path.suffix == ".md":
                         candidates.append(path)
                     else:
@@ -300,15 +338,20 @@ class MarkdownVaultScanner:
 
     @staticmethod
     def _is_link_like_entry(entry: os.DirEntry[str]) -> bool:
-        try:
-            if entry.is_symlink():
-                return True
-            is_junction = getattr(entry, "is_junction", None)
-            if is_junction is not None and is_junction():
-                return True
-            metadata = entry.stat(follow_symlinks=False)
-        except OSError:
-            return False
+        """Say whether an entry is link-like.
+
+        F-325 (R7-E1-05): an OSError while stating the entry used to be
+        reported as "not a link", which is the one answer that admits the
+        entry. The error is now raised to the caller, which refuses the
+        entry with the code that names the real cause.
+        """
+
+        if entry.is_symlink():
+            return True
+        is_junction = getattr(entry, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        metadata = entry.stat(follow_symlinks=False)
         attributes = getattr(metadata, "st_file_attributes", 0)
         reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
         if not (reparse_flag and attributes & reparse_flag):
@@ -331,8 +374,14 @@ class MarkdownVaultScanner:
             source_path = candidate.name
             return None, [self._error(source_path, "SOURCE_PATH_OUTSIDE_VAULT")]
 
-        if self._has_link_component(knowledge_root, candidate):
-            return None, [self._error(source_path, "SOURCE_LINK_NOT_ALLOWED")]
+        try:
+            if self._has_link_component(knowledge_root, candidate):
+                return None, [self._error(source_path, "SOURCE_LINK_NOT_ALLOWED")]
+        except OSError:
+            # F-325 (R7-E1-05): a component whose metadata cannot be read is
+            # "cannot tell", not "no link". The source is refused with the
+            # code that names the real cause, never admitted.
+            return None, [self._error(source_path, "SOURCE_READ_FAILED")]
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -340,8 +389,38 @@ class MarkdownVaultScanner:
         except (OSError, RuntimeError, ValueError):
             return None, [self._error(source_path, "SOURCE_PATH_OUTSIDE_VAULT")]
 
+        # M11/T1-R1 3.8 (K-08): this stat is a second lookup of a file the scan
+        # already resolved, so it raises OSError when the source disappears in
+        # between. That escaped the per-source validator and surfaced as an
+        # unattributed INDEXING_UNEXPECTED_FAILURE for the whole run; it now
+        # shares the read arm's attribution. `resolved` is the path
+        # resolve(strict=True) above just proved exists.
         try:
-            raw_bytes = candidate.read_bytes()
+            source_size = resolved.stat().st_size
+        except OSError:
+            return None, [self._error(source_path, "SOURCE_READ_FAILED")]
+
+        if source_size > MAX_MARKDOWN_SOURCE_BYTES:
+            return None, [self._error(source_path, "SOURCE_TOO_LARGE")]
+
+        # M10/T2-R23: bound the read BEFORE allocating, not after.
+
+        # A pre-read stat is the only bound that actually bounds memory. Checking
+        # len(raw_bytes) afterwards would repeat the defect this fixes, which is
+        # exactly what pdf_foundation documents: the length check used to run after
+        # read_bytes() had already materialised the whole file, so the cap bounded
+        # nothing. Reporting SOURCE_TOO_LARGE rather than letting a MemoryError escape
+        # also attributes the failure: scan_vault returns ok=False on any error, so
+        # the run still stops, but it now stops with the offending path named
+        # instead of an unattributed INDEXING_UNEXPECTED_FAILURE.
+        try:
+            # F-055 (R5-E15-05): the read comes from the VALIDATED candidate.
+            # The size bound above was measured on `resolved` while the read
+            # used `candidate` -- two path objects, one checked and one
+            # opened -- so the object that was bounded and the object that
+            # was read were not provably the same file. The read handle is
+            # now the validated one.
+            raw_bytes = resolved.read_bytes()
         except OSError:
             return None, [self._error(source_path, "SOURCE_READ_FAILED")]
 
@@ -363,6 +442,11 @@ class MarkdownVaultScanner:
             TAG_TO_TOPIC[raw_tag] for raw_tag in raw_tags if raw_tag in TAG_TO_TOPIC
         )
         if not canonical_topics:
+            # F-308 (R7-E1-03): the alias spellings the module publishes are
+            # recognised on the write side now, so a note that carries one of
+            # them produces its canonical topic. A note whose tags the module
+            # does not recognise at all is still refused with the missing-tag
+            # code, which names the cause the owner can act on.
             errors.append(self._error(source_path, "REQUIRED_TOPIC_TAG_MISSING"))
 
         segments, segmentation_errors = self._segment_blocks(source_path, blocks)
@@ -398,14 +482,18 @@ class MarkdownVaultScanner:
 
     @staticmethod
     def _has_link_component(root: Path, candidate: Path) -> bool:
+        """Say whether any component of the candidate is a link.
+
+        F-325 (R7-E1-05): an OSError while stating a component used to be
+        reported as "no link", the one answer that admits the candidate. The
+        error is now raised to the caller, which refuses the source.
+        """
+
         current = root
         relative = candidate.relative_to(root)
         for component in relative.parts:
             current = current / component
-            try:
-                metadata = os.lstat(current)
-            except OSError:
-                return False
+            metadata = os.lstat(current)
             if stat.S_ISLNK(metadata.st_mode):
                 return True
             attributes = getattr(metadata, "st_file_attributes", 0)
@@ -502,7 +590,21 @@ class MarkdownVaultScanner:
                 )
                 continue
 
-            visible, in_comment = self._strip_html_comments(line, in_comment)
+            # M10/T2-R23: inline code is stripped BEFORE HTML comments.
+            #
+            # The order was reversed, so an HTML comment opener sitting inside a backtick
+            # span was consumed as a REAL opener and opened a comment state that never
+            # closed. Proven by execution on the production functions: a note whose third
+            # line was "Start `<!--` marker." lost every remaining line -- body
+            # prose AND its `#supplychain` topic tag -- so the note never indexed, and
+            # because the topic tag is required, the validation error took the whole index
+            # run down with it.
+            #
+            # Fenced blocks are already handled above and `continue`, so this only ever
+            # sees ordinary lines. Stripping code first cannot break a real comment either:
+            # a genuine comment survives, because its opener is outside any code span.
+            without_code = self._strip_inline_code(line)
+            visible, in_comment = self._strip_html_comments(without_code, in_comment)
             atx = _ATX_HEADING.match(visible)
             if atx:
                 flush_paragraph()
@@ -529,8 +631,10 @@ class MarkdownVaultScanner:
                 index += 2
                 continue
 
-            without_code = self._strip_inline_code(visible)
-            tag_matches = self._extract_tags(without_code)
+            # R23: tag extraction reads `visible`, the fully stripped line.
+            # `without_code` is bound before the comment strip, so it still
+            # carries comment text and would re-admit it as tags.
+            tag_matches = self._extract_tags(visible)
             line_tags = [raw_tag for raw_tag, _, _ in tag_matches]
             for raw_tag in line_tags:
                 if raw_tag not in seen_raw_tags:
@@ -539,9 +643,9 @@ class MarkdownVaultScanner:
             tagless_parts: list[str] = []
             tag_cursor = 0
             for _, tag_start, tag_end in tag_matches:
-                tagless_parts.append(without_code[tag_cursor:tag_start])
+                tagless_parts.append(visible[tag_cursor:tag_start])
                 tag_cursor = tag_end
-            tagless_parts.append(without_code[tag_cursor:])
+            tagless_parts.append(visible[tag_cursor:])
             tagless = "".join(tagless_parts)
             if line_tags and not tagless.strip():
                 flush_paragraph()
@@ -859,6 +963,7 @@ class MarkdownVaultScanner:
             "SOURCE_PATH_OUTSIDE_VAULT": "The source path escapes the configured Vault root.",
             "SOURCE_LINK_NOT_ALLOWED": "Symbolic and link-like source paths are not allowed.",
             "SOURCE_READ_FAILED": "The source could not be read.",
+            "SOURCE_TOO_LARGE": "The source exceeds the maximum indexable size.",
             "UNSUPPORTED_TOPIC": "The source is not under a canonical topic folder.",
             "INVALID_UTF8": "The source is not valid UTF-8.",
             "MALFORMED_FRONTMATTER": "The source frontmatter is malformed.",

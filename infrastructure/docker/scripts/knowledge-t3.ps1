@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "acceptance-common.ps1")
 
+$runId = New-AcceptanceRunId
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 if (-not $EnvironmentFile) { $EnvironmentFile = Join-Path $scriptDirectory "..\env\.env" }
 $projectName = "personal-tool-m3-t3"
@@ -17,7 +19,6 @@ $fixtureRoot = Join-Path $repositoryRoot "apps\knowledge\tests\fixtures\vault"
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "personal-tool-m3-t3-$([guid]::NewGuid().ToString('N'))"
 $vaultRoot = Join-Path $temporaryRoot "vault"
 $script:nginxPort = 0
-$priorEmbeddingModel = $env:KNOWLEDGE_EMBEDDING_MODEL
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -97,8 +98,19 @@ New-SyntheticPdf -Path $pdfPath -Text "PDF acceptance text"
   [Text.UTF8Encoding]::new($false)
 )
 $env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT = $vaultRoot
-$env:KNOWLEDGE_EMBEDDING_MODEL = "bge-m3:latest"
 $started = $false
+$script:bodyFailed = $false
+$finalizationError = $null
+# F-291 (R7-C4-04): the run's evidence carries the finalisation record, so a
+# cleanup failure is never dropped and never replaces the body's own failure.
+$evidence = [ordered]@{
+  schema_version = 1
+  mode = "Acceptance"
+  result = "FAIL"
+  acceptance_run_id = $runId
+  compose_project = $projectName
+  started_at = [DateTime]::UtcNow.ToString("o")
+}
 
 try {
   Invoke-Compose @("build", "knowledge")
@@ -152,26 +164,47 @@ try {
   $orphanIndexId = [guid]::NewGuid().ToString()
   $orphanRunId = [guid]::NewGuid().ToString()
   $model = (Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get).models | Where-Object { $_.name -eq "bge-m3:latest" } | Select-Object -First 1
+  # F-293 (R7-C4-06): the provider's response is untrusted data. Its digest is
+  # validated against the shape the column's CHECK constraint accepts, and it
+  # reaches the database as a psql VARIABLE, so a quote in the response cannot
+  # terminate the literal and start a second statement.
+  if (-not $model -or -not $model.digest -or $model.digest -notmatch '^[0-9a-f]{64}$') {
+    throw "The bge-m3:latest model digest is unavailable or does not have the documented shape."
+  }
   $recoverySql = @"
 INSERT INTO knowledge.indexes (id, status, embedding_model_name, embedding_model_digest, embedding_dimensions)
-VALUES ('$orphanIndexId', 'BUILDING', 'bge-m3:latest', '$($model.digest)', 1024);
+VALUES ('$orphanIndexId', 'BUILDING', 'bge-m3:latest', :'model_digest', 1024);
 INSERT INTO knowledge.index_runs (id, index_id, kind, status)
 VALUES ('$orphanRunId', '$orphanIndexId', 'FULL_REBUILD', 'RUNNING');
 "@
-  Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command", $recoverySql)
+  Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--set=model_digest=$($model.digest)", "--command", $recoverySql)
   Invoke-Compose @("stop", "knowledge")
   Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "knowledge")
   $recoveryState = Invoke-Compose @("exec", "-T", "postgres", "psql", "--username=postgres", "--dbname=postgres", "--tuples-only", "--no-align", "--command", "SELECT (SELECT status FROM knowledge.index_runs WHERE id = '$orphanRunId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$orphanIndexId') || ':' || (SELECT status FROM knowledge.indexes WHERE id = '$($fullRun.index_id)');")
   if (($recoveryState -join "").Trim() -ne "INTERRUPTED:FAILED:ACTIVE") { throw "Full rebuild restart recovery did not preserve the active index." }
-  Write-Output "M4/T3 index lifecycle acceptance passed."
+  $evidence.result = "PASS"
+}
+catch {
+  $script:bodyFailed = $true
+  $evidence.error = $_.Exception.Message
+  throw
 }
 finally {
-  if ($started) {
-    $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } finally { $ErrorActionPreference = $previous }
+  Invoke-AcceptanceFinalization -Label "M4/T3" -RunId $runId -Evidence $evidence -EvidenceName "acceptance-M4-T3-$runId.json" -Cleanup {
+    $cleanupError = $null
+    if ($started) {
+      $previous = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+      try { Invoke-Compose @("down", "--volumes", "--remove-orphans") } catch { $cleanupError = $_.Exception } finally { $ErrorActionPreference = $previous }
+    }
+    if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
+    Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
+    if ($null -ne $cleanupError) { throw $cleanupError }
   }
-  if (Test-Path -LiteralPath $temporaryRoot) { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
-  Remove-Item Env:KNOWLEDGE_ACCEPTANCE_VAULT_ROOT -ErrorAction SilentlyContinue
-  if ($null -eq $priorEmbeddingModel) { Remove-Item Env:KNOWLEDGE_EMBEDDING_MODEL -ErrorAction SilentlyContinue }
-  else { $env:KNOWLEDGE_EMBEDDING_MODEL = $priorEmbeddingModel }
+  $finalizationError = $evidence["finalization"].error
 }
+
+if ($null -ne $finalizationError -and -not $script:bodyFailed) {
+  throw "M4/T3 acceptance finalization failed: $finalizationError"
+}
+
+Write-Output "M4/T3 index lifecycle acceptance passed."

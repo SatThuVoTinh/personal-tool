@@ -18,6 +18,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+// M10/T2-R9: `configure.mjs` is spawned as a child process and now fails
+// closed without a router endpoint/credential, so supply non-routable
+// placeholders. Reachability is proven by verify.mjs, never by these.
+import {
+  ROUTER_TEST_API_KEY,
+  ROUTER_TEST_HOST,
+  ROUTER_TEST_PORT,
+} from "./helpers/router-env.mjs";
+// M12/T9 F-111: the apply is bound to the transaction the apply orchestration
+// took; a lane that drives the builder directly takes the same one.
+import { takeApplyTransaction } from "./helpers/apply-transaction.mjs";
 
 const REPO = process.cwd();
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -31,138 +42,62 @@ const CONFIGURE_SOURCE = readFileSync(CONFIGURE, "utf8");
 const R5_NATIVE_BOUNDARY_SHA256 =
   "49352d47ac88798cc918c654875f84241a7efbb1d5a661c64b77e7efbacf3be9";
 
-// Every change this file's boundary has received SINCE the R5 build. The R5 body
-// is the current source with all of them reverted; the digest assertion below is
-// what proves the derivation is exact, so a missed hunk fails loudly rather than
-// silently weakening the allowlist test.
-const POST_R5_HUNKS = [
-  // R7 G2: cause preservation + diagnostic logging.
-  [
-    `  } catch (error) {
-    // R7 G2: the host-visible contract string is unchanged, but the original
-    // failure is preserved as the cause so a governance verdict and a genuine
-    // execution-state fault stay distinguishable. Only the fixed error message
-    // is logged: never the stack, the run context, or message content.
-    console.error(
-      "[zink-native-gate] enterNativeRun:",
-      error?.message ?? error,
-    );
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE", { cause: error });
-  }`,
-    `  } catch {
-    throw new Error("GOVERNANCE_RUN_UNAVAILABLE");
-  }`,
-  ],
-  // R10: the host-assigned heartbeat discriminator forwarded to the guard.
-  [
-    `        // R10: the host-assigned run discriminator and the canonical host
-        // heartbeat representation. Both are plain strings the host already
-        // holds at the injection anchor; neither is user content, a message
-        // object, or Discord-layer data.
-        trigger: context.trigger,
-        transcriptPrompt: context.transcriptPrompt,
-`,
-    ``,
-  ],
-  // R18: admission-time liveness recovery (module helpers). Inverted so the
-  // derived R5 body reproduces the packaged R5 digest exactly.
-  [
-    `// R18: the admission-time liveness discriminator, recovered at run-end.
-//
-// The host forwards \`trigger\` and \`transcriptPrompt\` to \`enterNativeRun\` but NOT
-// to \`finishNativeRun\` (its run-end call passes only agentId/sessionKey/runId).
-// Without them at run-end, \`isPureLivenessHeartbeat\` returns false there even
-// though admission recognised the same run as a pure liveness heartbeat, so the
-// run-end seam applied full governance and failed with
-// GOVERNANCE_COMPLETION_UNAVAILABLE. Threading them through the pinned selection
-// would change the installed selection and break the R7/R10 native lineage; this
-// records them per run at admission and recovers them at run-end so BOTH seams
-// classify a run with the single predicate. A run that never passed admission has
-// no record and therefore keeps the existing full-governance behaviour.
-//
-// Bounded so a run that dies before run-end cannot grow this without limit.
-const RUN_LIVENESS = new Map();
-const RUN_LIVENESS_LIMIT = 256;
+/**
+ * The R5-era SOURCE of lib/native-boundary.mjs, read from the commit that
+ * produced the packaged R5 asset.
+ *
+ * The derivation used to REVERSE every post-R5 change out of the CURRENT
+ * source text, which froze the denial path's literal wording: propagating a
+ * decision reason through native-boundary.mjs - the fix the governance seam
+ * needs - reddened this provenance gate with no behavioural change at all.
+ * The historical commit is the authority for the packaged digest, and the
+ * current source is checked against it by SURFACE, never by text.
+ */
+const R5_SOURCE_COMMIT = "74325e4e638cc1f71811362d98d1cf618ed81791";
+const R5_SOURCE_RELATIVE =
+  "integrations/openclaw/topology/lib/native-boundary.mjs";
+// The packaging rewrite the deployer applies to a topology/lib module: the
+// installed plugin flattens the shared siblings into one lib/ tree.
+const PACKAGE_REWRITE_SEARCH = '"../../lib/';
+const PACKAGE_REWRITE_REPLACEMENT = '"./';
 
-function rememberRunLiveness(runId, trigger, transcriptPrompt) {
-  if (typeof runId !== "string" || runId === "") return;
-  if (RUN_LIVENESS.size >= RUN_LIVENESS_LIMIT) {
-    const oldest = RUN_LIVENESS.keys().next().value;
-    RUN_LIVENESS.delete(oldest);
+/** Every symbol a module exports, by name. */
+const exportedSymbols = (source) => {
+  const names = new Set();
+  for (const match of String(source ?? "").matchAll(
+    /^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gmu,
+  )) {
+    names.add(match[1]);
   }
-  RUN_LIVENESS.set(runId, { trigger, transcriptPrompt });
-}
-
-function takeRunLiveness(runId) {
-  if (typeof runId !== "string" || runId === "") return undefined;
-  const record = RUN_LIVENESS.get(runId);
-  RUN_LIVENESS.delete(runId);
-  return record;
-}
-
-`,
-    ``,
-  ],
-  // R18: the per-run liveness record, created only for an accepted admission.
-  [
-    `    // R18: record the discriminator only for a run admission ACCEPTED, so the
-    // record means precisely "admission recognised this run". A denied or failed
-    // admission leaves no record and its run-end therefore keeps full governance.
-    rememberRunLiveness(
-      context.runId,
-      context.trigger,
-      context.transcriptPrompt,
-    );
-`,
-    ``,
-  ],
-  // R18: run-end prefers the admission record for this runId.
-  [
-    `  // R18: prefer anything the host passes at this seam, then fall back to the
-  // values recorded at admission for this runId, so admission and run-end apply
-  // the same predicate to the same execution.
-  const liveness = takeRunLiveness(context.runId);
-`,
-    ``,
-  ],
-  // R18: the run-end guard context carries the recovered discriminator.
-  [
-    `        trigger: context.trigger ?? liveness?.trigger,
-        transcriptPrompt:
-          context.transcriptPrompt ?? liveness?.transcriptPrompt,
-`,
-    ``,
-  ],
-];
+  return names;
+};
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 const r5NativeBoundaryBody = () => {
-  const current = readFileSync(
-    path.join(
-      REPO,
-      "integrations",
-      "openclaw",
-      "topology",
-      "lib",
-      "native-boundary.mjs",
-    ),
-    "utf8",
+  // The R5-era source is read from the recorded commit, so this gate never
+  // depends on the CURRENT wording of the denial path.
+  const source = execFileSync(
+    "git",
+    [
+      "-c",
+      `safe.directory=${REPO}`,
+      "cat-file",
+      "blob",
+      `${R5_SOURCE_COMMIT}:${R5_SOURCE_RELATIVE}`,
+    ],
+    { cwd: REPO, maxBuffer: 16 * 1024 * 1024 },
+  ).toString("utf8");
+  const packaged = source.replaceAll(
+    PACKAGE_REWRITE_SEARCH,
+    PACKAGE_REWRITE_REPLACEMENT,
   );
-  let derived = current;
-  for (const [after, before] of POST_R5_HUNKS) {
-    assert.ok(
-      derived.includes(after),
-      "every post-R5 hunk must still be present for the R5 body to be derivable",
-    );
-    derived = derived.replace(after, before);
-  }
   assert.equal(
-    sha256(derived),
+    sha256(packaged),
     R5_NATIVE_BOUNDARY_SHA256,
-    "derived R5 body must reproduce the packaged R5 digest exactly",
+    "the R5-era source at the recorded commit must reproduce the packaged R5 digest exactly",
   );
-  return derived;
+  return packaged;
 };
 
 const identifiers = Object.freeze({
@@ -193,22 +128,44 @@ function provisioned() {
   const root = mkdtempSync(path.join(tmpdir(), "zink-r8-"));
   const stateDir = path.join(root, ".openclaw-zink");
   const systemdUserDir = path.join(root, ".config", "systemd", "user");
-  const env = { ...process.env, HOME: root, USERPROFILE: root };
-  const run = (mode) => () =>
-    execFileSync(
-      process.execPath,
-      [
-        "--",
-        CONFIGURE,
-        mode,
-        "--state-dir",
-        stateDir,
-        "--systemd-user-dir",
-        systemdUserDir,
-        ...identifierArgs,
-      ],
-      { env, stdio: "pipe" },
-    );
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    ZINK_ROUTER_HOST: ROUTER_TEST_HOST,
+    ZINK_ROUTER_PORT: ROUTER_TEST_PORT,
+    ZINK_ROUTER_API_KEY: ROUTER_TEST_API_KEY,
+  };
+  const run = (mode) => () => {
+    const args = [
+      "--",
+      CONFIGURE,
+      mode,
+      "--state-dir",
+      stateDir,
+      "--systemd-user-dir",
+      systemdUserDir,
+      ...identifierArgs,
+    ];
+    // M12/T9 F-111: the builder's apply is reachable only through the apply
+    // orchestration, which takes the transaction snapshot first and hands the
+    // builder its attempt id. A lane that drives the builder directly takes
+    // the same transaction and passes the same id; the helper is the operator
+    // driver's own two-step, so the record the builder reads is the production
+    // one. A fresh transaction per call, because the builder marks the one it
+    // is given as SPENT.
+    if (mode === "--apply") {
+      args.push(
+        "--apply-transaction",
+        takeApplyTransaction({
+          stateDir,
+          runtimeRoot: path.join(root, "runtime"),
+          systemdRoot: systemdUserDir,
+        }),
+      );
+    }
+    return execFileSync(process.execPath, args, { env, stdio: "pipe" });
+  };
   run("--apply")();
   const asset = (rel) =>
     path.join(stateDir, "extensions", "zink-governance", ...rel.split("/"));
@@ -223,6 +180,32 @@ function provisioned() {
 
 test("R8: the R5 body is derivable and hashes to the packaged R5 digest", () => {
   assert.equal(sha256(r5NativeBoundaryBody()), R5_NATIVE_BOUNDARY_SHA256);
+});
+
+test("R8: the current boundary still exposes the whole R5-era surface", () => {
+  // The R5 asset is an accepted predecessor of the CURRENT build, so the
+  // current build must still expose everything the R5 build exposed. The
+  // check is by SURFACE, not by text: a reworded comment or a reformatted
+  // denial path must not fail it, and a removed export must.
+  const current = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "lib",
+      "native-boundary.mjs",
+    ),
+    "utf8",
+  );
+  const missing = [...exportedSymbols(r5NativeBoundaryBody().toString("utf8"))]
+    .filter((name) => !exportedSymbols(current).has(name))
+    .sort();
+  assert.deepEqual(
+    missing,
+    [],
+    "the current boundary must still expose every R5-era export",
+  );
 });
 
 test("R8: the verified R5 predecessor digest is allowlisted for its exact path", () => {

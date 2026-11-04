@@ -20,6 +20,42 @@ n8n ───────►     │
                  └─ Simulation
 ```
 
+That diagram is a list of **capability families**, not of what the package
+exports, so the two are separated here.
+
+Callable tools — the surface OpenClaw may invoke
+(`CALLABLE_TOOL_REGISTRY` in `integrations/openclaw/lib/policy.mjs`):
+
+```text
+zink_excel  zink_power_bi  zink_sql  zink_python  zink_n8n
+```
+
+The contract-backed envelope in `zink-tools/contracts/tool-call.schema.json`
+and `tool-result.schema.json` covers **every registered tool**, not only these
+five: the plugin's loader registers eight — the five above plus
+`zink_skill_search`, `zink_knowledge_search` and `zink_skill_propose`. Both
+envelopes carry a branch per registered tool, and the specialist vocabulary of
+each branch is the one the canonical policy derives (the execution tools' grant
+from `getAllowedSpecialists()`, the memory tools' from `canAccessMemoryTool()`).
+The three memory tools are refused earlier, at the guard's capability seam, so
+their envelope branches are declarative — they state what a valid call would
+look like without changing a reachable behaviour.
+
+Adapters actually exported by `zink-tools/adapters/index.mjs` (each with its
+`*AdapterError` sibling; `Knowledge` and `Skill` also export their governed-query
+helpers):
+
+```text
+R2  MotherDuck  BigQuery  Kaggle  Databricks  MLflow  DagsHub
+HuggingFace  Streamlit  Knowledge  Skill
+```
+
+Forecast, Optimization, Operations Research and Simulation are first-class
+capabilities (`AGENTS.md` §9) with no callable tool and no module today:
+`zink-tools/<capability>/` holds a README and a `model-metadata/` directory, and
+nothing imports them. They are exercised through `zink_python` and the external
+compute adapters until a real provider difference requires a module of their own.
+
 ## Tool ownership
 
 ### Excel
@@ -49,8 +85,10 @@ OpenClaw safely decoupled from provider details that genuinely vary.
 
 ## OpenClaw boundary
 
-OpenClaw owns orchestration, `work | research` classification, specialist
-routing, sandbox/execution permissions and tool invocation policy.
+OpenClaw owns orchestration, specialist routing, sandbox/execution permissions and
+tool invocation policy. The work/research task-mode classification is not implemented
+today: no schema or runtime carries it, so it is recorded only as a proposal in
+`work-research-routing.md` and is not a boundary this document delegates.
 
 Baseline execution specialists are exactly:
 

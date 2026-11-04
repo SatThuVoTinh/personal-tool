@@ -25,7 +25,6 @@
 // asserted as hard as the positive.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -524,28 +523,70 @@ test("R18 12: governance disabled means neither seam records nor recovers", asyn
 // 3. The pinned native runtime is untouched
 // ---------------------------------------------------------------------------
 
-// The commit that carried the R17 result, and therefore the last state in which
-// the native patch was still the R10 one. R18 must not move it.
-const R17_NATIVE_PATCH_COMMIT = "2e462a9";
-const NATIVE_PATCH_REPO_PATH =
-  "integrations/openclaw/topology/lib/native-patch.mjs";
-const gitBlob = (rev, file) =>
-  execFileSync("git", ["show", `${rev}:${file}`], {
-    cwd: REPO,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+// M10/T2-R4 UPDATE: the R17-blob comparison this section used is retired —
+// the patch is intentionally extended by the R4-authorized threadId edit
+// (see R18 13). The R17 commit reference stays recorded here as history.
 
-// The patched selection currently deployed in the live runtime.
+// The patched selection currently deployed in the live runtime — now the
+// recognised R10 predecessor of the R4 selection (see R18 15).
 const DEPLOYED_SELECTION_SHA256 =
   "555f37dae8eec1fbbd35e25ae28222dc5e8d6965e383500695a93900e9d8ddf5";
 
 test("R18 13: R18 leaves the pinned native patch byte-identical", () => {
+  // M10/T2-R5 UPDATE (owner Option A): the patch is intentionally extended
+  // by the Discord preflight role plus the R10->R5 lineage descriptor. This
+  // pin now records the R5-authorized bytes so any further unreviewed
+  // native mutation still fails; see R5 H1-H3 for the contract.
+  //
+  // M10/T2-R8 UPDATE (H1 repair): the patch is intentionally extended AGAIN,
+  // by (a) the R8 union-sources preflight injection that unions the
+  // discord.js wrapper with the message's own rawDataValue and the raw
+  // gateway dispatch, and (b) the R5->R8 preflight lineage descriptor that
+  // recognizes the live R5-injected preflight file. Both are reviewed, the
+  // preflight region text is pinned verbatim by the R5 suite, and the exact
+  // lineage recognition is pinned by tests/m10-t2-r8-preflight-lineage.test.mjs.
+  // The pin therefore moves to the R8-authorized bytes; its purpose as a
+  // change detector is unchanged, since the next unreviewed edit still fails.
+  // M10/T2-R8 UPDATE (deployment safety): the patch is intentionally extended
+  // once more, by the canonical derivation of the patched runtime target list
+  // (`nativePatchedRuntimeRelatives`) and the expected post-image
+  // (`nativeRuntimePostImage`). The transaction snapshot now derives its
+  // runtime targets from these pins instead of a hand-maintained list, so no
+  // patched artifact can escape transaction tracking — the proven cause of a
+  // false `APPLY_NOT_VERIFIED` and a false `rollbackSucceeded`. The pin moves
+  // to the R8 Phase-1-authorized bytes; its purpose as a change detector is
+  // unchanged, and the derivation itself is pinned by
+  // tests/m10-t2-r8-deployment-snapshot-safety.test.mjs.
+  // M10/T2-R8 UPDATE (ingress diagnostics): the injection additionally emits
+  // one INFO line per inbound message carrying per-source counts (wrapper,
+  // message rawDataValue, raw dispatch) plus a boolean for a mention token in
+  // the content — never content, sender identity or a token. The union-sources
+  // repair did not recover the mention, and without this measurement
+  // "Discord delivered nothing" and "we lost it here" are indistinguishable.
+  // M10/T2-R8 UPDATE (stderr-grounded diagnostics + channel retarget): the
+  // report goes to stderr first — no transport, level or redaction filter in
+  // between — and the logger is called last and reports its own failure on
+  // stderr. The pin then moved to the file the host actually executes: the
+  // installed `@openclaw/discord` package, not the unloadable copy inside the
+  // runtime bundle the whole chain had been patching. Pinned by
+  // tests/m10-t2-r8-ingress-source-diagnostics.test.mjs and
+  // tests/m10-t2-r8-preflight-lineage.test.mjs.
   assert.equal(
     sha256(readFileSync(NATIVE_PATCH_PATH, "utf8")),
-    sha256(gitBlob(R17_NATIVE_PATCH_COMMIT, NATIVE_PATCH_REPO_PATH)),
-    "native-patch.mjs must be untouched, so no native file is mutated and the " +
-      "installed selection still matches the current edit set byte-for-byte",
+    // M12/T9: rolled for F-011 - the Discord channel root is now resolved from
+    // the INSTALLED plugin package instead of a pinned install content-hash -
+    // and for F-185 - the backup manifest's governance revision now comes from
+    // the one authoritative constant, and any revision the machinery wrote is
+    // accepted on restore. The pin still forbids ANY other drift.
+    //
+    // HANDOVER: this digest names the bytes in the tree as it stands. If the
+    // topology owner edits `native-patch.mjs` again, the pin has to be rolled
+    // again, in the same commit, following the convention this block already
+    // records. Recompute it with:
+    //   node -e "const{createHash}=require('crypto');const fs=require('fs');
+    //   console.log(createHash('sha256').update(fs.readFileSync('integrations/openclaw/topology/lib/native-patch.mjs','utf8')).digest('hex'))"
+    "981dc7dd15b2056e2f47e44e181c2dfabcdb0334626b662d8be55af5ee3c34cd",
+    "native-patch.mjs must equal the R8-stderr-grounded-authorized bytes; any other drift fails",
   );
 });
 
@@ -573,22 +614,23 @@ test("R18 14: the generated run-end call site is still unthreaded by design", ()
 });
 
 test("R18 15: the deployed selection needs no predecessor descriptor", async () => {
-  const { NATIVE_RUNTIME_PINS } =
+  // M10/T2-R5 UPDATE (owner Option A): the R10 selection (555f37da, live
+  // since the R16 deployment) is now the recognised predecessor of the R5
+  // selection, in the single active slot. The descriptor below asserts that
+  // exact lineage; R5 L1 pins the slot invariant.
+  const { NATIVE_RUNTIME_PINS, NATIVE_PATCH_PREDECESSORS } =
     await import("../integrations/openclaw/topology/lib/native-patch.mjs");
   const source = readFileSync(NATIVE_PATCH_PATH, "utf8");
   assert.equal(
-    source.includes(DEPLOYED_SELECTION_SHA256),
-    false,
-    "the deployed selection is the CURRENT patched output, recognised by exact " +
-      "content comparison; listing it as a predecessor would widen the surface " +
-      "for nothing",
+    source.split(DEPLOYED_SELECTION_SHA256).length - 1,
+    1,
+    "the deployed R10 selection is listed exactly once, as the R5 predecessor",
   );
-  // The R7 descriptor, which the R18 approach deliberately keeps working, is
-  // preserved.
-  assert.ok(
-    source.includes('revision: "R7"'),
-    "the historical R7 predecessor descriptor is preserved",
-  );
+  const descriptor =
+    NATIVE_PATCH_PREDECESSORS["2026.6.34"]["selection-DopzNY3I.js"];
+  assert.equal(descriptor.revision, "R10");
+  assert.equal(descriptor.successorRevision, "R5");
+  assert.equal(descriptor.sourceDigest, DEPLOYED_SELECTION_SHA256);
   // And the runtime pins the deployed selection derives from are untouched.
   assert.equal(
     typeof NATIVE_RUNTIME_PINS["2026.6.34"],

@@ -1,7 +1,7 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -75,20 +75,28 @@ describe("R4 Finding 2 — shared async file lock", () => {
     const timer = setInterval(() => {
       heartbeats += 1;
     }, 20);
+    let fault;
     try {
-      await assert.rejects(
-        acquire(lockDir, { timeoutMs: 300, retryDelayMs: 10 }),
-        /FILE_LOCK_TIMEOUT/,
-      );
+      await acquire(lockDir, { timeoutMs: 300, retryDelayMs: 10 });
+    } catch (error) {
+      fault = error;
     } finally {
       clearInterval(timer);
     }
     release(lockDir);
-    // A synchronous 300ms block (Atomics.wait style) would yield ~0 ticks.
+    // Two properties, asserted separately. LIVENESS: a synchronous wait
+    // (Atomics.wait style) starves every timer, so ONE tick proves the loop ran.
+    // The previous `>= 5` of a 20 ms interval inside a 300 ms window measured the
+    // host's timer resolution instead, and went red at ticks=4 under parallel
+    // load with nothing in the diff touching this suite (`R7-GATE-01`).
+    // DEADLINE: widening the liveness bound must not cost the gate its other
+    // half, so the contention timeout is asserted by code — a wait that returned
+    // instead of timing out leaves `fault` undefined here.
     assert.ok(
-      heartbeats >= 5,
+      heartbeats >= 1,
       `event loop stayed alive during contention wait (ticks=${heartbeats})`,
     );
+    assert.equal(fault?.code, "FILE_LOCK_TIMEOUT");
   });
 
   test("acquire times out with explicit error instead of waiting forever", async () => {
@@ -142,7 +150,12 @@ describe("R4 Finding 2 — shared async file lock", () => {
       /FILE_LOCK_TIMEOUT/,
       "orphaned lock must fail closed, never silently reclaimed",
     );
-    release(lockDir); // explicit operator-class recovery, not automatic
+    // M10/T2 owner-token design: an orphaned lock is recovered by the operator
+    // removing the directory itself — `release` now refuses a lock this process
+    // never acquired, which is exactly what stopped a stale holder from
+    // deleting the next holder's lock and forking events.jsonl.
+    rmSync(lockDir, { recursive: true, force: true });
+    assert.equal(existsSync(lockDir), false);
   });
 
   test("lock module works on the repository filesystem (Windows/OneDrive)", async () => {

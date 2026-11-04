@@ -22,6 +22,7 @@
 // temporary filesystem, so persistence, integrity and recovery are exercised for
 // real without WSL, systemctl, or a live OpenClaw process.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -34,7 +35,8 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { describe, it } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { applyRuntime } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
 import {
@@ -106,6 +108,26 @@ function buildRuntime() {
   writeFileSync(path.join(nativeR12, "manifest.json"), "{}\n");
   writeFileSync(path.join(nativeR12, "selection-DopzNY3I.js"), "// BASELINE\n");
 
+  // M12/T9 F-011: the Discord channel is an INSTALLED PLUGIN PACKAGE inside the
+  // state root, and the operator command resolves that root when it loads. A
+  // synthetic state root without the installed package is not shaped like the
+  // live one, and the command would refuse to load at all instead of reaching
+  // the gate these cases are about.
+  const channelPackage = path.join(
+    stateDir,
+    "npm",
+    "projects",
+    "openclaw-discord-r12",
+    "node_modules",
+    "@openclaw",
+    "discord",
+  );
+  mkdirSync(path.join(channelPackage, "dist"), { recursive: true });
+  writeFileSync(
+    path.join(channelPackage, "package.json"),
+    JSON.stringify({ name: "@openclaw/discord", version: "1.0.0" }),
+  );
+
   return {
     root,
     stateDir,
@@ -164,12 +186,22 @@ function mutateToR11(rt) {
   );
 }
 
+/**
+ * M12/T9 F-337: a fresh authorization instant, captured once so the fixture
+ * is stable across calls.
+ */
+const FRESH_AUTHORIZED_AT = new Date().toISOString();
+
 /** A valid explicit recovery authorization naming the only known target. */
 const recoveryAuthorization = (overrides = {}) => ({
   recoveryAuthorization: "EXPLICIT",
   target: "r12-t1-baseline",
   confirmation: RECOVERY_CONFIRMATION,
-  authorizedAt: "2026-09-30T00:00:00.000Z",
+  // M12/T9 F-337: the record is bounded by a freshness window now, so the
+  // fixture must be a FRESH record. The window itself is exercised by the
+  // dedicated case at the end of this file. The instant is captured ONCE so
+  // two calls of the fixture produce the same record.
+  authorizedAt: FRESH_AUTHORIZED_AT,
   ...overrides,
 });
 
@@ -178,9 +210,30 @@ const recoveryAuthorization = (overrides = {}) => ({
  * orphan detection are wired to the REAL implementation against a real
  * filesystem, so persistence, integrity and recovery are genuinely exercised.
  */
+/**
+ * M10/T2-R8: the expected post-image for each declared outcome, stated from the
+ * known constants rather than read back from the live tree. `verifyLiveRestore`
+ * refuses to call an apply verified unless the caller declares what the runtime
+ * must look like, so these fixtures state it explicitly.
+ */
+const expectedRuntime = (selection, bridge) => [
+  { relative: "dist/selection-DopzNY3I.js", sha256: sha256(selection) },
+  {
+    relative: "dist/zink-governance-boundary.mjs",
+    sha256: sha256(bridge),
+  },
+];
+const EXPECTED_R10 = expectedRuntime(R10_SELECTION, R10_BRIDGE);
+const EXPECTED_R11 = expectedRuntime("// selection R11\n", "// bridge R11\n");
+
 function harness(
   rt,
-  { failAt = null, orphans = null, liveMutation = mutateToR10 } = {},
+  {
+    failAt = null,
+    orphans = null,
+    liveMutation = mutateToR10,
+    expected = liveMutation === mutateToR11 ? EXPECTED_R11 : EXPECTED_R10,
+  } = {},
 ) {
   const calls = [];
   let restarted = false;
@@ -188,6 +241,7 @@ function harness(
   return {
     calls,
     deps: {
+      expectedNativePostImage: () => expected,
       readIdentifiers: () => ({ guildId: "1" }),
       runBuilder: (mode) => {
         const stage = `builder-${mode.replace(/^--/u, "")}`;
@@ -1027,6 +1081,174 @@ test("R12 H2: FALSIFICATION — without orphan detection the runtime is ambiguou
   }
 });
 
+// F-225: the command that OWNS this gate must stop when it refuses.
+//
+// `operator-rollback.mjs` drives the live host's state and runtime roots, so
+// these cases drive a copy of the shipped file whose relative imports are
+// absolute file URLs and whose runtime-root literal points at the synthetic
+// runtime above. The `systemctl` literal is replaced with a binary that cannot
+// exist: the service restart is not what a refusal is about, and no test lane
+// may be able to restart a real gateway if this file ever regresses again.
+// Every substitution asserts it landed exactly once, and the copy is checked
+// for any remaining live-host path, so a future edit that adds a third root
+// fails here instead of mutating the operator's machine.
+//
+// M12/T9 F-219: the machine-specific STATE root is not a literal in the
+// command any more - the operator names it, through `ZINK_OPERATOR_STATE_DIR`
+// (or the first argument), and the driver refuses to run without one. So the
+// copy under test is given its state root through the ENVIRONMENT, exactly as
+// the live command is, and the copy carries no live-host path at all. The
+// RUNTIME root is still a literal in the shipped file, so that substitution
+// stays.
+const ROLLBACK_CLI = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "integrations",
+  "openclaw",
+  "topology",
+  "fixtures",
+  "runtime-regression",
+  "operator-rollback.mjs",
+);
+const RUNTIME_ROOT_LITERAL =
+  'const runtimeRoot = "/home/hoang_vinh/.local/lib/node_modules/openclaw";';
+
+/** The environment the operator command is given: the state root is NAMED. */
+function rollbackEnvironment(rt) {
+  return { ...process.env, ZINK_OPERATOR_STATE_DIR: rt.stateDir };
+}
+
+function substituteOnce(src, needle, replacement, label) {
+  const found = src.split(needle).length - 1;
+  assert.equal(
+    found,
+    1,
+    `${label} must appear exactly once in the shipped command, found ${found}`,
+  );
+  return src.split(needle).join(replacement);
+}
+
+function buildRollbackCommand(rt) {
+  let src = readFileSync(ROLLBACK_CLI, "utf8");
+  src = substituteOnce(
+    src,
+    RUNTIME_ROOT_LITERAL,
+    `const runtimeRoot = ${JSON.stringify(rt.runtimeRoot)};`,
+    "runtimeRoot literal",
+  );
+  src = src.replace(
+    /from "(\.[^"]*)"/g,
+    (_match, spec) =>
+      `from ${JSON.stringify(
+        pathToFileURL(path.resolve(path.dirname(ROLLBACK_CLI), spec)).href,
+      )}`,
+  );
+  src = substituteOnce(
+    src,
+    '"systemctl"',
+    '"zink-service-restart-is-forbidden-in-tests"',
+    "systemctl literal",
+  );
+  assert.equal(
+    src.includes("/home/hoang_vinh"),
+    false,
+    "the copy under test must carry no live-host path",
+  );
+  assert.equal(
+    src.includes('"systemctl"'),
+    false,
+    "the copy under test must not be able to restart a real service",
+  );
+  const file = path.join(rt.root, "operator-rollback-under-test.mjs");
+  writeFileSync(file, src, "utf8");
+  return file;
+}
+
+function refusalRecords(stdout) {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
+test("R12 I: a refused argument ends the command at once, reporting one refusal", () => {
+  const rt = buildRuntime();
+  try {
+    const before = readFileSync(
+      path.join(rt.dist, "selection-DopzNY3I.js"),
+      "utf8",
+    );
+    const run = spawnSync(
+      process.execPath,
+      [buildRollbackCommand(rt), "--force"],
+      { encoding: "utf8", env: rollbackEnvironment(rt) },
+    );
+    const lines = refusalRecords(run.stdout);
+    assert.equal(
+      lines.length,
+      1,
+      `one refusal must produce exactly one record, got ${lines.length}: ${JSON.stringify(run.stdout)}`,
+    );
+    const record = JSON.parse(lines[0]);
+    assert.equal(record.status, "FAIL");
+    assert.equal(record.reason, RECOVERY_REFUSALS.UNSUPPORTED_ARGUMENT);
+    assert.equal(record.installed_mutation, false);
+    assert.equal(run.status, 1, "a refused recovery exits non-zero");
+    assert.equal(run.stderr, "");
+    assert.equal(
+      readFileSync(path.join(rt.dist, "selection-DopzNY3I.js"), "utf8"),
+      before,
+      "a refused recovery must not touch the runtime",
+    );
+  } finally {
+    rt.dispose();
+  }
+});
+
+test("R12 J: an unauthorized recovery ends at the authorization gate, not past it", () => {
+  const rt = buildRuntime();
+  try {
+    // Full arguments, valid target, explicit confirmation — and no recovery
+    // authorization on disk. The backup being present is exactly the condition
+    // the gate must not mistake for permission.
+    const run = spawnSync(
+      process.execPath,
+      [
+        buildRollbackCommand(rt),
+        "--target=r12-t1-baseline",
+        `--confirm=${RECOVERY_CONFIRMATION}`,
+      ],
+      { encoding: "utf8", env: rollbackEnvironment(rt) },
+    );
+    const lines = refusalRecords(run.stdout);
+    assert.equal(
+      lines.length,
+      1,
+      `one refusal must produce exactly one record, got ${lines.length}: ${JSON.stringify(run.stdout)}`,
+    );
+    const record = JSON.parse(lines[0]);
+    assert.equal(record.status, "FAIL");
+    assert.equal(record.reason, RECOVERY_REFUSALS.RECOVERY_NOT_AUTHORIZED);
+    assert.equal(record.installed_mutation, false);
+    assert.equal(run.status, 1);
+    assert.equal(run.stderr, "");
+    // The native tree stays patched. On a host that honors 0600 on the identifier
+    // file this is the call the unfixed command reached before it stopped.
+    assert.equal(
+      readFileSync(path.join(rt.dist, "selection-DopzNY3I.js"), "utf8"),
+      R7_SELECTION,
+      "the no-authorization probe must leave the native tree patched",
+    );
+    // The historical recovery evidence is retained and untouched either way.
+    assert.equal(
+      readFileSync(path.join(rt.r12, "t1-config.json"), "utf8"),
+      '{\n  "meta": "T1" }\n',
+    );
+  } finally {
+    rt.dispose();
+  }
+});
+
 function existsAsDirectory(target) {
   try {
     return readdirSync(target) !== null;
@@ -1052,3 +1274,76 @@ function existsOutside(stateDir, name) {
     if (existsAsFile(candidate)) return true;
   return false;
 }
+
+// =========================================================================
+// M12/T9 F-337 — the historical-recovery gate accepted an authorization
+// record of any age and never bound it to the runtime it is about to tear
+// down. A record written once stayed armed indefinitely.
+// =========================================================================
+describe("M12/T9 F-337 — the recovery authorization record is bounded", () => {
+  it("F-337: a fresh record authorizes, an old or malformed one does not", () => {
+    const now = Date.parse("2026-10-20T12:00:00.000Z");
+    const fresh = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-10-20T11:30:00.000Z",
+      },
+      { now },
+    );
+    assert.equal(fresh.authorized, true, "a fresh record still authorizes");
+
+    // A record that is older than the window no longer arms the destructive
+    // path: it was written for a different runtime generation.
+    const stale = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-09-30T00:00:00.000Z",
+      },
+      { now },
+    );
+    assert.equal(stale.authorized, false);
+    assert.equal(
+      stale.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_EXPIRED,
+    );
+
+    // A non-ISO timestamp is refused rather than accepted.
+    const malformed = evaluateRecoveryAuthorization(
+      {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "not-a-date",
+      },
+      { now },
+    );
+    assert.equal(malformed.authorized, false);
+    assert.equal(
+      malformed.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_TIMESTAMP_INVALID,
+    );
+
+    // And the complete gate refuses the stale record too, so the refusal is
+    // not only reachable through the record evaluator.
+    const gate = authorizeHistoricalRecovery({
+      authorization: {
+        recoveryAuthorization: "EXPLICIT",
+        target: "r12-t1-baseline",
+        confirmation: RECOVERY_CONFIRMATION,
+        authorizedAt: "2026-09-30T00:00:00.000Z",
+      },
+      options: { target: "r12-t1-baseline", confirmed: true },
+      backupPresent: true,
+      now,
+    });
+    assert.equal(gate.proceed, false);
+    assert.equal(
+      gate.refusal,
+      RECOVERY_REFUSALS.RECOVERY_AUTHORIZATION_EXPIRED,
+    );
+  });
+});

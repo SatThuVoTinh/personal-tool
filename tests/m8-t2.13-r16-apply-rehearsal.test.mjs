@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: wsl-rehearsal
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M8/T2.2-R16 — full apply rehearsal on an exact clone of the live R7 runtime.
 //
 // Two deployment attempts have been consumed by defects that only review found.
@@ -27,7 +35,7 @@
 // These tests require WSL, where the live runtime exists. They skip rather than
 // pass vacuously elsewhere; `r16-rehearsal.mjs` is what runs them for real.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -39,10 +47,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import {
   APPLY_NOT_VERIFIED,
@@ -50,6 +60,8 @@ import {
   classifyApplyReason,
 } from "../integrations/openclaw/topology/fixtures/runtime-regression/apply-orchestration.mjs";
 import {
+  NATIVE_DISCORD_CHANNEL_RELATIVE,
+  NATIVE_RUNTIME_PINS,
   applyNativePatch,
   checkNativePatch,
   inspectNativePatch,
@@ -70,7 +82,12 @@ import {
   assertNoSymlinkComponents,
   parseIdentifiers,
 } from "../integrations/openclaw/lib/policy.mjs";
-import { fingerprint, R16_ROOTS } from "./helpers/r16-fingerprint.mjs";
+import {
+  fingerprint,
+  R16_COMPONENTS,
+  R16_ROOTS,
+  R16_TREES,
+} from "./helpers/r16-fingerprint.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const CONFIGURE = path.join(REPO, "integrations", "openclaw", "configure.mjs");
@@ -108,9 +125,84 @@ const readDigest = (file) => sha256(readFileSync(file, "utf8"));
 
 // The rehearsal only runs inside the mount namespace the driver creates. Outside
 // it these tests would touch the live runtime, which is the one thing R16 forbids.
-const skip = REHEARSAL
-  ? false
-  : "requires the R16 rehearsal mount namespace (run r16-rehearsal.mjs)";
+//
+// F-208 (R1-A13-07): the skip used to be an ad-hoc string derived from an
+// absent environment variable, so the lane was permanently skipped in every
+// lane that does not set one, and a "skipped" count was free to read as green
+// in a gate total. The skip state is DECLARED per environment below, with the
+// reason, and the case at the end of this file proves that the suite's own
+// skip IS that declaration, that a skipped rehearsal says NOT RUN, and that
+// the number of rehearsal-gated cases is known.
+const REHEARSAL_ENVIRONMENTS = Object.freeze({
+  "rehearsal-namespace": Object.freeze({
+    runs: true,
+    reason: null,
+    gatedCases: 0,
+  }),
+  "no-rehearsal-namespace": Object.freeze({
+    runs: false,
+    reason:
+      "NOT RUN — the R16 apply rehearsal runs only inside the private mount namespace the rehearsal driver creates (r16-rehearsal.mjs), and this platform has no live runtime to clone. The lane is NOT RUN here, so its cases are never counted as passes.",
+    gatedCases: 9,
+  }),
+});
+
+const REHEARSAL_ENVIRONMENT = REHEARSAL
+  ? "rehearsal-namespace"
+  : "no-rehearsal-namespace";
+const REHEARSAL_STATUS = REHEARSAL_ENVIRONMENTS[REHEARSAL_ENVIRONMENT];
+// The suite's own skip IS the declared reason, so the two cannot drift apart.
+const skip = REHEARSAL_STATUS.runs ? false : REHEARSAL_STATUS.reason;
+
+// F-208: the skip state is declared, and a permanently skipped rehearsal
+// reads as NOT RUN rather than as a green count. This case never skips: the
+// declaration is decidable on every platform, and only the rehearsal itself
+// needs the mount namespace.
+test("R16-GATE: the rehearsal's skip state is declared per environment", () => {
+  assert.ok(
+    Object.hasOwn(REHEARSAL_ENVIRONMENTS, REHEARSAL_ENVIRONMENT),
+    `no declared status for the environment ${REHEARSAL_ENVIRONMENT}`,
+  );
+  if (REHEARSAL_STATUS.runs) {
+    assert.equal(
+      REHEARSAL_STATUS.reason,
+      null,
+      "an environment that runs the rehearsal declares no skip reason",
+    );
+    assert.equal(
+      skip,
+      false,
+      "the suite must not skip when the rehearsal namespace is present",
+    );
+  } else {
+    assert.equal(
+      typeof REHEARSAL_STATUS.reason,
+      "string",
+      "a skipped environment must declare a reason",
+    );
+    assert.match(
+      REHEARSAL_STATUS.reason,
+      /NOT RUN/u,
+      "a permanently skipped gate must state that it is NOT RUN, never read as green",
+    );
+    assert.equal(
+      skip,
+      REHEARSAL_STATUS.reason,
+      "the suite's skip must BE the declared reason, so the reason in the counts is the recorded one",
+    );
+  }
+  // The number of rehearsal-gated cases is declared, so a run whose skipped
+  // count differs from the declaration is visible. The count is read from
+  // this file's own source: adding a rehearsal-gated case without declaring
+  // it reddens this case rather than silently changing the skip total.
+  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const gated = (source.match(/\{\s*skip\s*\}/gu) ?? []).length;
+  assert.equal(
+    gated,
+    REHEARSAL_STATUS.gatedCases,
+    `the number of rehearsal-gated cases must be declared for the ${REHEARSAL_ENVIRONMENT} environment (found ${gated})`,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Overlay lifecycle
@@ -1031,3 +1123,351 @@ test(
     }
   },
 );
+
+test("R16-SCOPE: the fingerprint covers every root the real patcher writes", () => {
+  // The isolation proof is a comparison of two fingerprints, so it can only
+  // speak about the roots it enumerates. The Discord channel package is one of
+  // the roots the patcher writes: it lives inside the state root, and the
+  // patched preflight in it is the file the ingress repair rewrites. A scope
+  // that omits it proves nothing about the tree that actually changes.
+  const channelComponents = R16_COMPONENTS.filter(([label]) =>
+    label.startsWith("discord-channel/"),
+  );
+  assert.ok(
+    channelComponents.length > 0,
+    "the fingerprint must enumerate the Discord channel package",
+  );
+  for (const [label, relative, root] of channelComponents) {
+    assert.equal(root, "state", `${label} must be a state-relative component`);
+    assert.ok(
+      relative.startsWith(NATIVE_DISCORD_CHANNEL_RELATIVE),
+      `${label} must live under the installed channel package: ${relative}`,
+    );
+  }
+  assert.ok(
+    R16_TREES.some(
+      ([label, relative]) =>
+        label === "discord-channel" &&
+        relative === NATIVE_DISCORD_CHANNEL_RELATIVE,
+    ),
+    "the channel package must also be fingerprinted as a whole subtree",
+  );
+  // Every channel-scoped pin must be covered, so a new governed artifact in
+  // that package cannot drop out of the scope silently.
+  const pinnedChannelFiles = Object.values(NATIVE_RUNTIME_PINS)
+    .flatMap((pin) => Object.entries(pin.sources ?? {}))
+    .filter(([, entry]) => entry.scope === "discordChannel")
+    .map(([file]) => file);
+  assert.ok(
+    pinnedChannelFiles.length > 0,
+    "the pins must declare at least one channel-scoped artifact",
+  );
+  for (const file of pinnedChannelFiles) {
+    assert.ok(
+      channelComponents.some(([label]) => label.endsWith(`/${file}`)),
+      `the pinned channel artifact ${file} must be in the fingerprint scope`,
+    );
+  }
+});
+
+test("R16-08: the operator preflight names every known refusal class and leaks no message", () => {
+  // Provenance of this guard: a real deployment refusal arrived as
+  // `PREFLIGHT_REJECTED` because the classifier knew only nine classes, so the
+  // operator could not tell a missing router env from asset drift without burning
+  // a round trip. Naming the class is the fix; quoting the message never is.
+  const source = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "fixtures",
+      "runtime-regression",
+      "operator-preflight.mjs",
+    ),
+    "utf8",
+  );
+  for (const className of [
+    "ROUTER_HOST_UNAVAILABLE",
+    "ROUTER_PORT_UNAVAILABLE",
+    "ROUTER_API_KEY_UNAVAILABLE",
+    "must be a numeric Discord snowflake",
+    "surface IDs must be distinct",
+    "Existing config must be canonical JSON",
+    "Agent governance instructions drift",
+    "mode drift",
+    "Governance plugin package",
+    "Gemini stream hotfix utility",
+    "Password-store resolver",
+    "Systemd drop-in",
+    "Ledger corruption",
+    "symlink",
+  ])
+    assert.ok(
+      source.includes(`"${className}"`),
+      `the preflight classifier must name ${className}`,
+    );
+  assert.match(
+    source.replace(/\s+/gu, " "),
+    /const reason = known\.find/u,
+    "the report may only ever carry a whitelisted class, never raw stderr",
+  );
+  assert.equal(
+    /reason:\s*(error|output)\./.test(source),
+    false,
+    "a raw error message could quote config content or identifiers",
+  );
+});
+
+// Load one top-level function declaration out of a probe source file and
+// evaluate it on its own. The probe is a script, not an importable module: it
+// writes fixtures and exits when it runs. Its failure classification is a pure
+// function of the error, so extracting it is what lets this lane assert the
+// behaviour instead of the spelling of the source.
+function loadProbeFunction(source, name) {
+  const match = new RegExp(
+    `function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`,
+    "u",
+  ).exec(source);
+  assert.ok(match, `the probe must declare ${name}`);
+  const loaded = runInNewContext(`${match[0]}\n${name};`);
+  assert.equal(typeof loaded, "function", `${name} must be callable`);
+  return loaded;
+}
+
+test("F-209: the live governance probe names the check that failed", () => {
+  // F-209 (R2-B03-03): the probe's classifier built ONE detail string out of
+  // the error code or the error message, matched it against a fixed list of
+  // RPC/runtime classes and fell back to a single catch-all. An AssertionError
+  // carries no class of its own, so a completion or lineage regression in the
+  // state the probe reads and an unknown harness fault produced the SAME
+  // line: LIVE_GATE_REJECTED. The nested matrix carried one stage label for
+  // six delegated children, so the failing child was never named either.
+  const source = readFileSync(
+    path.join(
+      REPO,
+      "integrations",
+      "openclaw",
+      "topology",
+      "fixtures",
+      "runtime-regression",
+      "live-governance-probe.mjs",
+    ),
+    "utf8",
+  );
+
+  const classify = loadProbeFunction(source, "classifyProbeFailure");
+
+  // An assertion failure is a state regression, and it must say so.
+  assert.equal(
+    classify({
+      name: "AssertionError",
+      code: "ERR_ASSERTION",
+      message:
+        "Expected values to be strictly equal:\n\n'ACTIVE' !== 'COMPLETE'",
+    }),
+    "STATE_ASSERTION_FAILED",
+    "a completion regression must not be reported as a generic gate refusal",
+  );
+  assert.equal(classify({ code: "ERR_ASSERTION" }), "STATE_ASSERTION_FAILED");
+  assert.equal(
+    classify({ name: "AssertionError", message: "boom" }),
+    "STATE_ASSERTION_FAILED",
+  );
+
+  // The enumerated RPC/runtime classes keep their own names.
+  assert.equal(
+    classify({ message: "GOVERNANCE_COMPLETION_UNAVAILABLE" }),
+    "GOVERNANCE_COMPLETION_UNAVAILABLE",
+  );
+  assert.equal(classify({ code: "ETIMEDOUT" }), "ETIMEDOUT");
+  assert.equal(
+    classify({ message: "INVENTORY_SHAPE_MISMATCH" }),
+    "INVENTORY_SHAPE_MISMATCH",
+  );
+  assert.equal(classify({ message: "LINEAGE_MISMATCH" }), "LINEAGE_MISMATCH");
+
+  // An unrecognised fault keeps the catch-all, and only the catch-all.
+  assert.equal(classify({ message: "spawn ENOENT" }), "LIVE_GATE_REJECTED");
+  assert.equal(classify({}), "LIVE_GATE_REJECTED");
+
+  // The collapsing detail expression is the defect itself: one string matched
+  // against one list, with no way to tell an assertion from a runtime refusal.
+  assert.doesNotMatch(
+    source,
+    /error\?\.code \?\? error\?\.message/u,
+    "the classifier must not collapse the code and the message into one detail",
+  );
+
+  // The nested matrix must name the child that failed.
+  const childStage = loadProbeFunction(source, "nestedChildStage");
+  assert.equal(
+    childStage("nested-seven-role-matrix", "python"),
+    "nested-seven-role-matrix/child:python",
+  );
+  assert.match(
+    source,
+    /stage = nestedChildStage\(\s*NESTED_MATRIX_STAGE,\s*run\.agent_id\s*\)/u,
+    "the delegation loop must record the failing child in the stage",
+  );
+  assert.match(
+    source,
+    /stage:\s*NESTED_MATRIX_STAGE/u,
+    "the matrix PASS record must still name the matrix itself",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The driver's own gate (M12/T2.1 T2.1-8, `R5-E08-02`).
+//
+// These run on every host because they assert the ABSENCE of an effect: no mount
+// namespace, no live runtime and no scratch tree is touched. The suite above is
+// the one that needs WSL.
+// ---------------------------------------------------------------------------
+
+const DRIVER = path.join(
+  import.meta.dirname,
+  "..",
+  "integrations",
+  "openclaw",
+  "topology",
+  "fixtures",
+  "runtime-regression",
+  "r16-rehearsal.mjs",
+);
+
+const runDriver = (args, env = {}) => {
+  const childEnv = { ...process.env, ...env };
+  // These cases must be seen by the driver as an operator invocation even when
+  // this suite itself is running inside the rehearsal namespace, where both
+  // variables are set: inherited `R16_INSIDE=1` would waive the gate and put a
+  // nested rehearsal in the child.
+  delete childEnv.R16_INSIDE;
+  delete childEnv.R16_REHEARSAL_ROOT;
+  return spawnSync(process.execPath, [DRIVER, ...args], {
+    encoding: "utf8",
+    env: childEnv,
+  });
+};
+
+test("R16-DRIVER-01: no `test:` script names the recursive-delete driver", () => {
+  const scripts = JSON.parse(
+    readFileSync(path.join(import.meta.dirname, "..", "package.json"), "utf8"),
+  ).scripts;
+  assert.deepEqual(
+    Object.entries(scripts).filter(
+      ([name, command]) =>
+        name.startsWith("test:") && command.includes("r16-rehearsal"),
+    ),
+    [],
+    "a destructive operator entry must not be reachable under a `test:` name",
+  );
+  assert.ok(
+    Object.values(scripts).some((command) =>
+      command.includes("r16-rehearsal.mjs"),
+    ),
+    "the rehearsal route must still exist: renaming is not deleting",
+  );
+});
+
+test("R16-DRIVER-02: the default mode reports and touches nothing", () => {
+  const root = path.join(os.tmpdir(), `r16-gate-report-${process.pid}`);
+  const result = runDriver(["--rehearsal-root", root]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout.trim());
+  assert.equal(report.mode, "REPORT");
+  assert.equal(report.action, "NONE");
+  assert.equal(report.deletes_on_run, root);
+  assert.match(report.requires, /--run --confirm=R16_REHEARSAL_RUN/u);
+  if (process.platform !== "linux") {
+    assert.equal(
+      report.host_is_wsl,
+      false,
+      "a non-Linux host must be reported as not-WSL even where the POSIX runtime path exists",
+    );
+  }
+  assert.equal(
+    existsSync(root),
+    false,
+    "a report may not create the tree it describes",
+  );
+});
+
+test("R16-DRIVER-03: --run without the token is refused and deletes nothing", () => {
+  const root = path.join(os.tmpdir(), `r16-gate-refuse-${process.pid}`);
+  const missing = runDriver(["--rehearsal-root", root, "--run"]);
+  assert.equal(missing.status, 1);
+  assert.equal(
+    JSON.parse(missing.stdout.trim()).reason,
+    "CONFIRMATION_REQUIRED",
+    "a missing confirmation must be named as such",
+  );
+  assert.equal(existsSync(root), false);
+
+  // A wrong token is not a missing one, and must not open the gate either.
+  const wrong = runDriver([
+    "--rehearsal-root",
+    root,
+    "--run",
+    "--confirm=R16_REHEARSAL",
+  ]);
+  assert.equal(wrong.status, 1);
+  assert.equal(existsSync(root), false);
+});
+
+test("R16-DRIVER-05: the host refusal comes from the platform, not from a path", () => {
+  // `R16_ROOTS.stateDir` is `/home/hoang_vinh/.openclaw-zink`. On Windows Node
+  // resolves that against the current drive, and a stray `C:\home\…` tree made the
+  // answer `true` here since 2026-09-29 (`R6-I01-03`), so the driver's only
+  // host-safety guard reported "this is the live runtime" while running on Windows.
+  // The refusal must name the platform even when that path exists.
+  const root = path.join(os.tmpdir(), `r16-hostgate-${process.pid}`);
+  const result = runDriver([
+    "--rehearsal-root",
+    root,
+    "--run",
+    "--confirm=R16_REHEARSAL_RUN",
+  ]);
+  assert.equal(result.status, 1);
+  if (process.platform !== "linux") {
+    assert.match(
+      result.stdout,
+      /FATAL: this host is not WSL/u,
+      "a non-WSL host must be refused for a platform reason",
+    );
+    assert.doesNotMatch(
+      result.stdout,
+      /live runtime is not present/u,
+      "the path must not be the thing that decides the host",
+    );
+  }
+  assert.equal(
+    existsSync(root),
+    false,
+    "a refused host must not create its scratch tree",
+  );
+});
+
+test("R16-DRIVER-04: a root that can resolve upward is refused before it is read", () => {
+  // `force: true` makes a wrong root silent, so the value's shape is the guard.
+  // `.` and `..` matter most: both resolve to absolute paths, and `..` against
+  // npm's working directory is the parent of the repository.
+  for (const candidate of ["..", ".", "", os.homedir(), "C:\\", "/"]) {
+    const result = runDriver([
+      "--rehearsal-root",
+      candidate,
+      "--run",
+      "--confirm=R16_REHEARSAL_RUN",
+    ]);
+    assert.notEqual(
+      result.status,
+      0,
+      `the driver must refuse ${JSON.stringify(candidate)}`,
+    );
+    assert.match(
+      `${result.stderr}${result.stdout}`,
+      /absolute|refusing to treat|non-empty/u,
+      `the refusal must name why ${JSON.stringify(candidate)} is not a root`,
+    );
+  }
+});

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zink.local/contracts/tool-result.schema.json",
   "title": "Zink Tool Result Envelope Schema",
-  "x-zink-contract-version": "1.0.0",
+  "x-zink-contract-version": "1.1.0",
   "$defs": {
     "uuid_v4": {
       "type": "string",
@@ -45,7 +45,8 @@
             "N8N_REDIRECT_BLOCKED",
             "N8N_TRANSPORT_ERROR",
             "N8N_UNAVAILABLE",
-            "N8N_CONFIGURATION_INVALID"
+            "N8N_CONFIGURATION_INVALID",
+            "N8N_WORKFLOW_PENDING"
           ]
         },
         "message": {
@@ -350,6 +351,178 @@
         "call_id": { "$ref": "#/$defs/uuid_v4" },
         "tool_id": { "const": "zink_n8n" },
         "specialist": { "enum": ["o2", "python"] },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-skill.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_knowledge_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-knowledge.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_knowledge_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_knowledge_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_knowledge_search" },
+        "specialist": {
+          "enum": ["main", "o1", "o2", "excel", "power-bi", "sql", "python"]
+        },
+        "status": { "const": "cancelled" },
+        "error": { "$ref": "#/$defs/cancelled_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_propose" },
+        "specialist": { "enum": ["excel", "power-bi", "sql", "python"] },
+        "status": { "const": "success" },
+        "output": { "$ref": "tools/zink-skill.schema.json#/$defs/output" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "output", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_propose" },
+        "specialist": { "enum": ["excel", "power-bi", "sql", "python"] },
+        "status": { "const": "error" },
+        "error": { "$ref": "#/$defs/generic_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_propose" },
+        "specialist": { "enum": ["excel", "power-bi", "sql", "python"] },
+        "status": { "const": "timeout" },
+        "error": { "$ref": "#/$defs/timeout_error" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }
+      },
+      "required": ["call_id", "tool_id", "specialist", "status", "error", "artifacts"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "call_id": { "$ref": "#/$defs/uuid_v4" },
+        "tool_id": { "const": "zink_skill_propose" },
+        "specialist": { "enum": ["excel", "power-bi", "sql", "python"] },
         "status": { "const": "cancelled" },
         "error": { "$ref": "#/$defs/cancelled_error" },
         "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_ref" } }

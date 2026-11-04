@@ -1,5 +1,6 @@
 import {
   canonicalHash,
+  deriveLegacyDelegationId,
   deriveDelegationId,
   utcNow,
   GOVERNANCE_VERSION,
@@ -8,14 +9,97 @@ import { validateContract } from "./schema.mjs";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 
-const reasonPolicy = JSON.parse(
-  readFileSync(
-    new URL("../policy/reason-code-matrix.json", import.meta.url),
-    "utf8",
-  ),
+const REASON_POLICY_URL = new URL(
+  "../policy/reason-code-matrix.json",
+  import.meta.url,
 );
+const REASON_POLICY_REQUIRED = [
+  ["agent_claims", "array"],
+  ["runtime_reasons", "array"],
+  // F-251: the matrix publishes THREE vocabularies. The third one
+  // (task_suspension_reasons) names the codes the reducer writes when it
+  // suspends a task, and it was the only section no reader consulted: a
+  // declared suspension code was therefore invisible to the very check that
+  // every other durable reason passes.
+  ["task_suspension_reasons", "array"],
+  ["outcome_compatibility", "object"],
+  // M12/T9 F-127: the ONE declaration of the outcome vocabulary. It used to be
+  // re-listed independently in six places (two schemas, the ledger snapshot,
+  // the trusted result envelope, the agent result payload and a regex in this
+  // file), so editing one copy silently re-labelled history or rejected
+  // writes for an outcome another copy did not declare. Every consumer now
+  // derives from THIS list.
+  ["outcome_statuses", "array"],
+];
+
+// This matrix is what every governed denial gets attributed to, so a load that dies as a raw
+// fs/JSON error — or that quietly returns a policy missing a key its readers use — leaves the
+// whole runtime unable to explain itself at import time. Name the condition instead.
+export function loadReasonPolicy(policyUrl = REASON_POLICY_URL) {
+  let raw;
+  try {
+    raw = readFileSync(policyUrl, "utf8");
+  } catch (error) {
+    throw new Error(`REASON_POLICY_UNREADABLE: ${error.message}`, {
+      cause: error,
+    });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      "REASON_POLICY_MALFORMED: reason-code-matrix.json is not valid JSON",
+      { cause: error },
+    );
+  }
+
+  for (const [key, kind] of REASON_POLICY_REQUIRED) {
+    const value = parsed?.[key];
+    const holds =
+      kind === "array"
+        ? Array.isArray(value)
+        : typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!holds) {
+      throw new Error(
+        `REASON_POLICY_INCOMPLETE: ${key} must be ${kind}, got ${
+          value === null ? "null" : typeof value
+        }`,
+      );
+    }
+  }
+
+  return parsed;
+}
+
+const reasonPolicy = loadReasonPolicy();
 export const AGENT_REASON_CODES = Object.freeze(reasonPolicy.agent_claims);
 export const RUNTIME_REASON_CODES = Object.freeze(reasonPolicy.runtime_reasons);
+export const TASK_SUSPENSION_REASON_CODES = Object.freeze(
+  reasonPolicy.task_suspension_reasons,
+);
+// M12/T9 F-127: the outcome vocabulary, derived from the ONE declaration. A
+// consumer that needs "is this an outcome?" asks here instead of re-listing
+// the four values.
+export const OUTCOME_STATUSES = Object.freeze(reasonPolicy.outcome_statuses);
+export const OUTCOME_STATUS_SET = new Set(OUTCOME_STATUSES);
+// F-251: ONE membership set built from EVERY section the matrix publishes, so
+// a code the policy declares can never be invisible to the check that guards
+// durable `task.reason_code` writes.
+const DECLARED_REASON_CODES = new Set([
+  ...AGENT_REASON_CODES,
+  ...RUNTIME_REASON_CODES,
+  ...TASK_SUSPENSION_REASON_CODES,
+]);
+
+/**
+ * Membership in a vocabulary the policy file already publishes. Derived from the
+ * declared sets rather than a third list, so nothing here widens the contract.
+ */
+export function isDeclaredReasonCode(code) {
+  return typeof code === "string" && DECLARED_REASON_CODES.has(code);
+}
 
 const SECRET_PATTERN =
   /(?:api[_-]?key|token|password|secret|private[_-]?key|authorization)["']?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}]+)/giu;
@@ -39,6 +123,43 @@ export function payloadDigest(payload) {
   return canonicalHash("zink-result-payload-v1", payload);
 }
 
+/**
+ * Truncate to at most `maxBytes` UTF-8 bytes without splitting a character.
+ *
+ * This lives beside `validateAgentClaim` because it encodes the SAME rule the
+ * contract validator enforces: `maxLength` is measured in UTF-8 bytes
+ * (`schema.mjs` uses `Buffer.byteLength`), so every runtime bound that produces
+ * a value destined for a contract MUST be byte-budgeted.
+ *
+ * Proven defect (M10/T2-R15): the guard truncated `payload.output` at 16384
+ * CHARACTERS and `payload.agent_self_validation` at 4096 characters before
+ * calling `validateAgentClaim`. For Vietnamese output (2 bytes/char) the guard's
+ * own truncation produced a value its own contract then rejected — measured on
+ * the real validator:
+ *   output = 16384 "á" -> 32768 bytes -> SCHEMA_VALIDATION_FAILED
+ *   output = 12000 "á" -> 24000 bytes -> SCHEMA_VALIDATION_FAILED
+ *   agent_self_validation = 4096 "á" -> 8192 bytes -> SCHEMA_VALIDATION_FAILED
+ * while the byte-exact limits passed. A legitimate specialist report was
+ * therefore rejected with no recovery, because the same character slice runs on
+ * every retry. This function previously existed only as a private copy inside
+ * the plugin entrypoint; it is now the single shared definition so the rule
+ * cannot drift again.
+ */
+export function truncateUtf8(value, maxBytes) {
+  const text = String(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  // Walk code points so a surrogate pair is never cut in half.
+  let bytes = 0;
+  let result = "";
+  for (const character of text) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    result += character;
+  }
+  return result;
+}
+
 export function validateAgentClaim(payload) {
   validateContract("agent-result-payload", payload);
   const inspectText = (value) => {
@@ -51,7 +172,7 @@ export function validateAgentClaim(payload) {
   inspectText(payload);
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     throw new Error("SCHEMA_INVALID");
-  if (!/^(COMPLETE|PARTIAL|BLOCKED|FAILED)$/u.test(payload.outcome_claim ?? ""))
+  if (!OUTCOME_STATUS_SET.has(payload.outcome_claim ?? ""))
     throw new Error("SCHEMA_INVALID");
   if (!AGENT_REASON_CODES.includes(payload.reason_claim))
     throw new Error("SCHEMA_INVALID");
@@ -107,8 +228,12 @@ export function createTrustedResultEnvelope({
   if (runState !== "COMPLETE") throw new Error("INVALID_STATE_TRANSITION");
   if (
     !lineage?.native_run_id ||
+    // M12/T9 F-371: the delegation id has two renderings - the current
+    // version-4 UUID and the legacy 64-hex digest the operational ledger
+    // already carries - and both are identities of the same proposal.
     (lineage.delegation_id &&
-      lineage.delegation_id !== deriveDelegationId(lineage))
+      lineage.delegation_id !== deriveDelegationId(lineage) &&
+      lineage.delegation_id !== deriveLegacyDelegationId(lineage))
   )
     throw new Error("LINEAGE_MISMATCH");
   const { outcome: acceptedOutcome, reason: acceptedReason } =

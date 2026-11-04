@@ -29,11 +29,35 @@ Quy định cấu trúc mà OpenClaw phải cung cấp khi gọi bất kỳ côn
 
 Quy định cấu trúc mà công cụ Zink phải trả lời về cho OpenClaw:
 
-- `status`: `"SUCCESS"` hoặc `"ERROR"`.
+- `status`: `"success"`, `"error"`, `"timeout"` hoặc `"cancelled"` (viết thường, đúng như `tool-result.schema.json` định nghĩa bằng `const`; KHÔNG viết hoa).
 - `tool_id`: Khớp chính xác với công cụ được gọi.
 - `task_id`: Khớp chính xác với task_id yêu cầu.
-- `data`: Kết quả đầu ra (chỉ có khi `status: "SUCCESS"`).
-- `error`: Thông tin lỗi chuẩn hóa gồm `code` và `message` (chỉ có khi `status: "ERROR"`).
+- `output`: Kết quả đầu ra (chỉ có khi `status: "success"`).
+- `artifacts`: Danh sách tham chiếu artifact (chỉ khi `status: "success"`).
+- `error`: Thông tin lỗi chuẩn hóa gồm `code` và `message` (chỉ có khi `status: "error"`).
+
+> **Lưu ý về lịch sử tài liệu:** Bản tài liệu cũ mô tả `status` là `"SUCCESS"`/`"ERROR"` viết hoa và dùng `data` thay cho `output`. Đó là **sai lệch tài liệu so với hợp đồng thật**. Schema là nguồn sự thật và vốn đã dùng chữ thường; vì vậy tài liệu này được sửa cho khớp schema, và schema **không** bị đổi để chiều theo tài liệu cũ.
+
+### 2.3. Phạm vi công cụ và từ vốn `specialist` (F-274, phiên bản `1.1.0`)
+
+Hai phong bì là **một họ duy nhất**: chúng phải phủ đúng mọi công cụ mà loader đăng ký, và từ vốn `specialist` của chúng phải giống nhau.
+
+- **Phạm vi:** đúng 8 công cụ — `zink_excel`, `zink_power_bi`, `zink_sql`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_knowledge_search`, `zink_skill_propose`. Mỗi công cụ có đúng **một** nhánh trong phong bì Gọi và **một nhánh cho mỗi trạng thái** (`success` / `error` / `timeout` / `cancelled`) trong phong bì Kết quả.
+- **Từ vốn `specialist`:** phải bằng nhau giữa hai phong bì, và phải là từ vốn mà policy canonical suy ra — `getAllowedSpecialists()` cho nhóm công cụ thực thi, `canAccessMemoryTool()` cho nhóm Knowledge/Skill:
+
+  | Công cụ                 | `specialist` được phép               |
+  | ----------------------- | ------------------------------------ |
+  | `zink_sql`              | `sql`                                |
+  | `zink_excel`            | `excel`                              |
+  | `zink_power_bi`         | `power-bi`                           |
+  | `zink_python`           | `python`                             |
+  | `zink_n8n`              | `o2`, `python`                       |
+  | `zink_knowledge_search` | cả 7 tác nhân                        |
+  | `zink_skill_search`     | cả 7 tác nhân                        |
+  | `zink_skill_propose`    | `excel`, `power-bi`, `sql`, `python` |
+
+- **`provenance`:** công cụ gọi trực tiếp và chỉ đọc (`zink_sql`, `zink_knowledge_search`, `zink_skill_search`) dùng `sql_provenance` (`task_id`, `session_key`); công cụ chạy dưới ủy quyền hoặc ghi trạng thái bền vững (`zink_excel`, `zink_power_bi`, `zink_python`, `zink_n8n`, `zink_skill_propose`) dùng `delegated_provenance` (`delegation_id`, `task_id`, `session_key`).
+- **Đường đi thực tế:** `zink_knowledge_search`, `zink_skill_search` và `zink_skill_propose` được plugin xử lý trên đường native (`canAccessMemoryTool` + `evaluateToolAccess`), **không** đi qua seam phong bì của guard; các nhánh mới khai báo cái gì một lệnh được quản lý của chúng trông như, và không thay đổi hành vi runtime nào.
 
 ---
 

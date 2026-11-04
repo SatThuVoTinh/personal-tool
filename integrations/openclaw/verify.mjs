@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
@@ -12,10 +12,10 @@ import {
 } from "./topology/lib/runtime-backup.mjs";
 
 import {
-  AGENT_GOOGLE_PROFILES,
   AGENT_IDS,
   DISCORD_SURFACE_IDENTIFIERS,
   PASS_PROVIDER_ID,
+  ROUTER_PROVIDER_MODEL_IDS,
   SECRET_REFS,
   assertDirectoryOrMissing,
   assertInsideHome,
@@ -34,6 +34,8 @@ import {
   parseIdentifiers,
   passResolverContents,
   renderSystemdDropIn,
+  resolveRouterApiKey,
+  resolveRouterBaseUrl,
   stableJson,
   validateConfig,
 } from "./lib/policy.mjs";
@@ -46,6 +48,28 @@ const REPOSITORY_ROOT = path.resolve(
 );
 const LIVE_COMMAND_TIMEOUT_MS = 45_000;
 const LIVE_PROBE_CONCURRENCY = 1;
+// M12/T9 F-202: the systemd drop-in DIRECTORY is the unit the ceiling is
+// enforced against, not the one file this gate byte-compares.
+//
+// systemd reads every `*.conf` fragment in `<unit>.service.d/` in lexical
+// order and a later fragment wins every single-valued assignment, so a
+// sibling `20-override.conf` raises `MemoryMax=` above the 768M ceiling, or
+// removes it, or injects an `ExecStart=` - while a gate that only compared
+// `10-zink.conf` still printed PASS.
+const SYSTEMD_DROP_IN_DIRECTORY = "openclaw-gateway-zink.service.d";
+const SYSTEMD_DROP_IN_NAME = "10-zink.conf";
+// M12/T9 F-203: the governed state root of the live WSL host. A host that
+// cannot reach it inspected a copy of the governed tree, not the governed
+// tree, so its verdict is NOT RUN rather than PASS.
+// The governed state tree is the operator's, named by the environment — the
+// same way the operator commands read it (F-219). A machine-specific literal
+// in a runtime source is a path the repository publishes, and F-022 refused
+// exactly that. The default is the live host's path, so an operator who names
+// nothing still gets the host's own tree.
+const GOVERNED_STATE_TREE =
+  process.env.ZINK_OPERATOR_STATE_DIR ??
+  process.env.ZINK_STATE_DIR ??
+  "/home/hoang_vinh/.openclaw-zink";
 const DISCORD_FORBIDDEN_PERMISSIONS = Object.freeze([
   "Administrator",
   "ManageChannels",
@@ -128,12 +152,88 @@ function mode(filePath) {
   return statSync(filePath).mode & 0o777;
 }
 
-function requireMode(filePath, expected) {
+// NTFS reports 0o666 for files and 0o777 for directories whatever was requested, so a
+// 0o600/0o700 assertion can never be true on that host. configure.mjs already skips its
+// mode checks the same way (configure.mjs `requireFileMode`); before that skip existed
+// here, this gate could not produce evidence on the host the evidence was being produced
+// on, which is the mechanism behind the standing `NOT RUN`.
+export function hostEnforcesPosixModes(platform) {
+  return platform !== "win32";
+}
+
+export function requireMode(filePath, expected) {
+  if (!hostEnforcesPosixModes(process.platform)) {
+    return;
+  }
   if (mode(filePath) !== expected) {
     throw new Error(
       `Unexpected mode for ${filePath}: expected ${expected.toString(8)}`,
     );
   }
+}
+
+// M12/T9 F-202: the effective drop-in set is the whole directory.
+//
+// The refusal names every fragment that is not the rendered drop-in, so an
+// operator can act on it, and it keeps the established "Systemd drop-in"
+// wording the operator refusal classifier already knows.
+export function assertNoUnownedSystemdDropIns(dropInDirectory) {
+  if (!existsSync(dropInDirectory)) return [];
+  if (!statSync(dropInDirectory).isDirectory()) {
+    throw new Error(
+      `Systemd drop-in drift detected: ${dropInDirectory} is not a directory`,
+    );
+  }
+  const unowned = readdirSync(dropInDirectory)
+    .filter((name) => name !== SYSTEMD_DROP_IN_NAME)
+    .sort();
+  if (unowned.length > 0) {
+    throw new Error(
+      `Systemd drop-in drift detected: unowned fragment(s) beside ${SYSTEMD_DROP_IN_NAME} in ${dropInDirectory}: ${unowned.join(", ")}`,
+    );
+  }
+  return unowned;
+}
+
+// M12/T9 F-203: what this run inspected, and whether that inspection can be
+// recorded as deployment evidence.
+//
+// `requireMode` returns early on win32, so on that host the whole mode
+// battery is vacuous while the gate still read PASS. The record below travels
+// with every PASS, so a reader can tell a governed-tree inspection from a
+// copy of one.
+export function buildInspectionRecord(stateDir) {
+  const posixModesEnforced = hostEnforcesPosixModes(process.platform);
+  let governedStateTreeReachable;
+  try {
+    governedStateTreeReachable = statSync(GOVERNED_STATE_TREE).isDirectory();
+  } catch {
+    governedStateTreeReachable = false;
+  }
+  return {
+    stateTree: stateDir,
+    posixModesEnforced,
+    governedStateTree: GOVERNED_STATE_TREE,
+    governedStateTreeReachable,
+    deploymentEvidence:
+      posixModesEnforced && governedStateTreeReachable ? "PASS" : "NOT RUN",
+  };
+}
+
+/**
+ * The deployment verdict a verify run may publish (M12/T9 F-467 / `R9-L05-5`).
+ *
+ * A static inspection of a host is not deployment evidence. PASS requires all
+ * of these facts: the live battery was requested, it produced at least one
+ * entry, every entry is non-FAIL, and the host inspection itself passed. A live
+ * FAIL is FAIL; every other absence of evidence is NOT RUN.
+ */
+export function deploymentEvidenceFor({ liveRequested, live, inspection }) {
+  const entries = Array.isArray(live) ? live : [];
+  if (entries.some((entry) => entry.status === "FAIL")) return "FAIL";
+  if (!liveRequested || entries.length === 0) return "NOT RUN";
+  if (inspection?.deploymentEvidence !== "PASS") return "NOT RUN";
+  return "PASS";
 }
 
 function displayCommand(command, args) {
@@ -258,7 +358,7 @@ export function execFileBounded(command, args, options = {}) {
   });
 }
 
-async function runLiveAsync(command, args, environment) {
+export async function runLiveAsync(command, args, environment) {
   try {
     await execFileBounded(command, args, { env: environment });
     return { command: displayCommand(command, args), status: "PASS" };
@@ -282,7 +382,64 @@ async function runLiveJsonCheckAsync(command, args, environment, isExpected) {
   }
 }
 
-async function runInBatches(items, batchSize, operation) {
+// M10/T2-R9: live reachability probe for the baked router endpoint.
+//
+// This deliberately reports a FAIL, with a reason, instead of a bare failure,
+// because the failure mode it exists to catch (a stale WSL host address after a
+// WSL restart) otherwise looks identical to "the agent has no model". The probe
+// performs no model call and never prints the credential: it asserts reachability
+// and that every allowlisted wire model id is still served.
+async function runLiveRouterReachabilityAsync() {
+  const label = `router endpoint reachability (${ROUTER_PROVIDER_MODEL_IDS.length} model ids)`;
+  let baseUrl;
+  let apiKey;
+  try {
+    baseUrl = resolveRouterBaseUrl();
+    apiKey = resolveRouterApiKey();
+  } catch {
+    return {
+      command: label,
+      status: "FAIL",
+      detail: "ROUTER_CONFIG_UNAVAILABLE",
+    };
+  }
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return {
+        command: label,
+        status: "FAIL",
+        detail: `ROUTER_HTTP_${response.status}`,
+      };
+    }
+    const payload = await response.json();
+    const served = new Set((payload?.data ?? []).map((model) => model?.id));
+    const missing = ROUTER_PROVIDER_MODEL_IDS.filter((id) => !served.has(id));
+    if (missing.length > 0) {
+      return {
+        command: label,
+        status: "FAIL",
+        detail: `ROUTER_MODEL_ID_MISSING:${missing.join(",")}`,
+      };
+    }
+    return { command: label, status: "PASS" };
+  } catch (error) {
+    return {
+      command: label,
+      status: "FAIL",
+      detail: `ROUTER_UNREACHABLE:${error?.name ?? "Error"}`,
+    };
+  }
+}
+
+// Exported for `tests/m12-t2.2-b4-live-probe-invariants.test.mjs`. Printing
+// `{"static":"PASS","live":[]}` under `--live` has to be impossible, and that is a property of
+// this batching rule plus the verdict rule in `runLiveAsync` — not of a guard `main()` could
+// ever reach, which is why there is no guard there.
+export async function runInBatches(items, batchSize, operation) {
   const results = [];
   for (let index = 0; index < items.length; index += batchSize) {
     results.push(
@@ -337,11 +494,8 @@ async function main() {
   const agentDirs = AGENT_IDS.map((agentId) =>
     path.join(stateDir, "agents", agentId, "agent"),
   );
-  const dropInPath = path.join(
-    systemdUserDir,
-    "openclaw-gateway-zink.service.d",
-    "10-zink.conf",
-  );
+  const dropInDirectory = path.join(systemdUserDir, SYSTEMD_DROP_IN_DIRECTORY);
+  const dropInPath = path.join(dropInDirectory, SYSTEMD_DROP_IN_NAME);
   const pluginDirectory = path.join(
     stateDir,
     "extensions",
@@ -457,6 +611,10 @@ async function main() {
   if (readFileSync(dropInPath, "utf8") !== renderSystemdDropIn(stateDir)) {
     throw new Error("Systemd drop-in drift detected");
   }
+  // M12/T9 F-202: the ceiling is enforced against the EFFECTIVE drop-in set,
+  // so a sibling fragment that raises or removes `MemoryMax=` or injects an
+  // `ExecStart=` cannot survive a green verify.
+  assertNoUnownedSystemdDropIns(dropInDirectory);
   const pluginFiles = governancePluginFiles();
   for (const [relative, contents] of Object.entries(pluginFiles.assets)) {
     const target = path.join(pluginDirectory, relative);
@@ -487,7 +645,22 @@ async function main() {
       true,
     );
   }
-  const result = { static: "PASS", live: [] };
+  // M12/T9 F-203: every PASS records the tree it inspected and whether the
+  // host enforces POSIX modes. `static` is the gate's own verdict - every
+  // check it made passed - and `deploymentEvidence` is the verdict a reader
+  // may record as deployment evidence: NOT RUN on a host that cannot reach
+  // the governed tree or does not enforce POSIX modes, so a green Windows
+  // run against the homedir copy can no longer be filed as a deployment.
+  const inspection = buildInspectionRecord(stateDir);
+  const result = {
+    static: "PASS",
+    live: [],
+    // F-467 (legacy `R9-L05-5`): the deployment verdict is derived AFTER
+    // the live battery, from the live outcome. The inspection record alone is
+    // a host-capability check, not deployment evidence.
+    deploymentEvidence: "NOT RUN",
+    inspection,
+  };
   if (options.live) {
     const command = options["openclaw-bin"] ?? "openclaw";
     const environment = {
@@ -567,34 +740,24 @@ async function main() {
           ),
       )),
     );
-    result.live.push(
-      ...(await runInBatches(AGENT_IDS, LIVE_PROBE_CONCURRENCY, (agentId) => {
-        const expectedOrder = AGENT_GOOGLE_PROFILES[agentId];
-        return runLiveJsonCheckAsync(
-          command,
-          [
-            "models",
-            "auth",
-            "order",
-            "get",
-            "--agent",
-            agentId,
-            "--provider",
-            "google",
-            "--json",
-          ],
-          environment,
-          (value) =>
-            value.agentId === agentId &&
-            value.provider === "google" &&
-            JSON.stringify(value.order) === JSON.stringify(expectedOrder),
-        );
-      })),
-    );
+    // M10/T2-R9: the per-agent `models auth order get --provider google` check
+    // is gone because auth profiles and auth order no longer exist. It is
+    // replaced by a check on the thing that can actually break: the baked
+    // router endpoint. OpenClaw has no config templating (proven against the
+    // installed runtime), so a stale WSL host address is undetectable from the
+    // config alone and would otherwise present as "the agent has no model".
+    // This probe fails loudly when the endpoint is unreachable or when the
+    // router stops serving an allowlisted model id.
+    result.live.push(await runLiveRouterReachabilityAsync());
     if (result.live.some((entry) => entry.status === "FAIL")) {
       process.exitCode = 1;
     }
   }
+  result.deploymentEvidence = deploymentEvidenceFor({
+    liveRequested: Boolean(options.live),
+    live: result.live,
+    inspection,
+  });
   process.stdout.write(`${stableJson(result)}`);
 }
 

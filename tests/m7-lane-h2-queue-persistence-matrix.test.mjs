@@ -18,7 +18,10 @@ import {
   readSnapshot,
   recordWorkflowEvent,
 } from "../integrations/openclaw/topology/lib/ledger.mjs";
-import { deriveTaskId } from "../integrations/openclaw/topology/lib/canonical.mjs";
+import {
+  deriveTaskId,
+  derivePrincipalRef,
+} from "../integrations/openclaw/topology/lib/canonical.mjs";
 import { handleExecutionFinished } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 
 function fixture() {
@@ -29,7 +32,16 @@ function makeQueue(dir, name = "queue.json") {
   return new QueueManager({ storagePath: path.join(dir, name) });
 }
 
-const OWNER_PRINCIPAL = "123456789012345678";
+// M12/T9 F-026: the authoritative owner is a ledger PRINCIPAL REF - the HMAC
+// the ledger derives from the identity key and the Discord snowflake
+// (`derivePrincipalRef`). A bare snowflake is not a principal: it is the
+// public identity the ref exists to hide. The queue compares the projected
+// owner against the presented principal, so every task in this lane is
+// enqueued WITH the owner and completed by presenting the SAME value.
+const OWNER_PRINCIPAL = derivePrincipalRef(
+  "d".repeat(64),
+  "123456789012345678",
+);
 const REF = "f".repeat(64);
 
 function governedTask(root) {
@@ -71,7 +83,14 @@ describe("Lane H2 — queue lifecycle matrix", () => {
     const dir = fixture();
     try {
       const qm = makeQueue(dir);
-      qm.enqueueTask({ taskId: "life-1", primaryCoordinator: "o1" });
+      // F-026: the task carries the authoritative owner, so the completion
+      // below is verified against it instead of accepted from whoever presents
+      // a non-empty string.
+      qm.enqueueTask({
+        taskId: "life-1",
+        primaryCoordinator: "o1",
+        ownerPrincipalRef: OWNER_PRINCIPAL,
+      });
       assert.equal(qm.getTask("life-1").status, TASK_STATES.QUEUED);
       const { leaseId, task } = qm.claimTaskById({
         taskId: "life-1",
@@ -155,7 +174,11 @@ describe("Lane H2 — queue lifecycle matrix", () => {
         {
           label: "result-pending without a user decision",
           run: () => {
-            qm.enqueueTask({ taskId: "short-2", primaryCoordinator: "o1" });
+            qm.enqueueTask({
+              taskId: "short-2",
+              primaryCoordinator: "o1",
+              ownerPrincipalRef: OWNER_PRINCIPAL,
+            });
             const { leaseId, task } = qm.claimTaskById({
               taskId: "short-2",
               agentId: "o1",
@@ -181,7 +204,11 @@ describe("Lane H2 — queue lifecycle matrix", () => {
         {
           label: "resurrect a terminal task",
           run: () => {
-            qm.enqueueTask({ taskId: "short-3", primaryCoordinator: "o1" });
+            qm.enqueueTask({
+              taskId: "short-3",
+              primaryCoordinator: "o1",
+              ownerPrincipalRef: OWNER_PRINCIPAL,
+            });
             const { leaseId, task } = qm.claimTaskById({
               taskId: "short-3",
               agentId: "o1",
@@ -630,6 +657,151 @@ describe("Lane H2 — persistence-failure matrix", () => {
         null,
         "a new store has no prior decision",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Lane H2 — F-504 result generation is replaced, never carried", () => {
+  it("a ledger re-queue invalidates the prior result record and an empty finish clears it", () => {
+    const dir = fixture();
+    try {
+      // A COORDINATOR-rooted ledger task, so the ledger's EXECUTING projects as
+      // EXECUTING rather than being demoted to APPROVAL_PENDING: generation 2
+      // really does start new executable work on the same queue entry.
+      const paths = ledgerPaths(dir);
+      ensureLedger(paths);
+      const origin = {
+        origin: "discord",
+        origin_principal_ref: "b".repeat(64),
+        origin_message_id: "94000000000000009",
+      };
+      const taskId = deriveTaskId(origin);
+      recordWorkflowEvent(paths, "WORKFLOW_OPENED", {
+        ...origin,
+        task_id: taskId,
+        root_agent_id: "o1",
+        root_session_key: "agent:o1:sess",
+        root_run_id: "run-gen2",
+      });
+      recordWorkflowEvent(paths, "WORKFLOW_USER_APPROVAL_DECIDED", {
+        task_id: taskId,
+        actor: "user",
+        channel: "approvals",
+        decision: "APPROVE",
+      });
+      recordWorkflowEvent(paths, "WORKFLOW_TASK_CLAIMED", {
+        task_id: taskId,
+        agent_id: "o1",
+      });
+      assert.equal(
+        readSnapshot(paths).tasks[taskId].workflow_status,
+        TASK_STATES.EXECUTING,
+      );
+      const qm = makeQueue(dir);
+      qm.enqueueTask({ taskId, primaryCoordinator: "o1" });
+      const claim = qm.claimTaskById({ taskId, agentId: "o1" });
+      qm.finishExecution({
+        taskId,
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: ["gen1.csv"],
+        artifactSet: [{ logical_path: "gen1.csv", sha256: "a".repeat(64) }],
+        artifactSetDigest: "b".repeat(64),
+        resultDigest: REF,
+        resultSummary: "generation 1",
+      });
+      let stored = qm.getTask(taskId);
+      assert.equal(stored.status, TASK_STATES.RESULT_PENDING_REVIEW);
+      assert.equal(
+        stored.resultArtifacts.length,
+        1,
+        "generation 1 is recorded",
+      );
+      assert.equal(stored.artifactSetDigest, "b".repeat(64));
+
+      // Generation 2 begins: the ledger is authority and still says EXECUTING,
+      // so the projection overrides the queue entry back to EXECUTING.
+      const rebuilt = qm.rebuildFromLedger(readSnapshot(paths));
+      assert.ok(rebuilt.updated >= 1, "the diverging entry is overridden");
+      stored = qm.getTask(taskId);
+      assert.equal(stored.status, TASK_STATES.EXECUTING);
+      // F-504: the override must not leave generation 1's result record readable
+      // as the current one.
+      assert.deepEqual(
+        stored.resultArtifacts ?? [],
+        [],
+        "a ledger re-queue must invalidate the superseded artifact set",
+      );
+      assert.equal(
+        stored.artifactSetDigest ?? null,
+        null,
+        "a ledger re-queue must invalidate the superseded set digest",
+      );
+      assert.equal(
+        stored.resultDigest ?? null,
+        null,
+        "a superseded digest must not stay acceptable to completeTask",
+      );
+      // Convergence still holds: the override is one-shot, not a loop.
+      assert.equal(qm.rebuildFromLedger(readSnapshot(paths)).updated, 0);
+
+      // The new generation finishes with NO artifact set at all.
+      qm.finishExecution({
+        taskId,
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: [],
+        resultDigest: "9".repeat(64),
+        resultSummary: "generation 2",
+      });
+      stored = qm.getTask(taskId);
+      assert.equal(stored.status, TASK_STATES.RESULT_PENDING_REVIEW);
+      assert.deepEqual(
+        stored.resultArtifacts,
+        [],
+        "an empty result set must clear the prior generation's artifacts",
+      );
+      assert.equal(
+        stored.artifactSetDigest,
+        null,
+        "an empty result set must clear the prior generation's set digest",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a finish with no artifact set declares an empty result record instead of leaving one unwritten", () => {
+    // F-504 half 2: the write used to sit inside `artifactSet.length > 0`, so an
+    // empty or omitted set wrote NOTHING and whatever the previous generation
+    // left behind stayed on the record. The record must always be replaced.
+    const dir = fixture();
+    try {
+      const qm = makeQueue(dir);
+      qm.enqueueTask({ taskId: "f504-empty", primaryCoordinator: "o1" });
+      const claim = qm.claimTaskById({
+        taskId: "f504-empty",
+        agentId: "o1",
+      });
+      qm.finishExecution({
+        taskId: "f504-empty",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        resultDigest: REF,
+        resultSummary: "no artifacts",
+      });
+      const stored = qm.getTask("f504-empty");
+      assert.deepEqual(
+        stored.resultArtifacts,
+        [],
+        "the result record is present and empty, not absent",
+      );
+      assert.equal(stored.artifactSetDigest, null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

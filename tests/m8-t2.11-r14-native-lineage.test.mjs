@@ -1,3 +1,11 @@
+//
+// SKIP-FAMILY: live-backup
+//
+// M12/T9 F-197 (R5-E09-03) / H3: this lane may skip, and it declares WHICH
+// family it belongs to, so the skip-expectation gate can tell an explained
+// skip from an unexplained one. The family-to-lane map is derived from the
+// repository's own lane list; the expectation lives in
+// `docs/contracts/ci-skip-expectations.json`.
 // M8/T2.2-R14 — native patch LINEAGE compatibility.
 //
 // R7 changed the selection injection, so the live host carries the R7 patch. The
@@ -52,6 +60,9 @@ const R10_ANNOUNCE =
   "e3b110f77cbd52ec86e935ff9ee3926b2730802a1cd4d42e65c56624dc19dc87";
 const R7_BRIDGE =
   "33b3feefdfd473dc0d6d09b0ae7b8e39b394fa93a1247fe117bc58757f075412";
+/** The pinned upstream baseline of the EXECUTING Discord preflight. */
+const BASELINE_CHANNEL =
+  "386ba4b7c89a5aedaa29756e0ac320709b049c5abf4a4f77a918c309d2028edf";
 const CURRENT_BRIDGE =
   "d88bff80aeb3d7531e5a0dceba4e7ba856d085e64a87cbb414c9f295284d81e3";
 
@@ -72,7 +83,7 @@ const selectionPatchR7 = `\t\t\tconst activeSession = session;
  * drive `applyNativePatch` end to end. Nothing is stubbed: the release pin
  * governs these exact bytes, so a synthetic body could not be recognised.
  */
-function runtime({ selection, announce, bridge, version = VERSION }) {
+function runtime({ selection, announce, bridge, channel, version = VERSION }) {
   const root = mkdtempSync(path.join(os.tmpdir(), "zink-r14-"));
   mkdirSync(path.join(root, "dist"), { recursive: true });
   writeFileSync(
@@ -90,8 +101,16 @@ function runtime({ selection, announce, bridge, version = VERSION }) {
       path.join(root, "dist", "zink-governance-boundary.mjs"),
       bridge,
     );
+  // M10/T2-R8: the Discord preflight is pinned in the installed channel
+  // package, so the fixture materializes that root too and hands the whole
+  // governed root set to the patch.
+  const channelRoot = path.join(root, "channel");
+  mkdirSync(path.join(channelRoot, "dist"), { recursive: true });
+  writeFileSync(path.join(channelRoot, "dist", CHANNEL_FILE), channel);
   return {
     root,
+    channelRoot,
+    roots: { runtimeRoot: root, discordChannelRoot: channelRoot },
     backup: `${root}-backup`,
     dist: path.join(root, "dist"),
     dispose: () => {
@@ -107,17 +126,23 @@ function runtime({ selection, announce, bridge, version = VERSION }) {
 
 const NATIVE_R12 = "/home/hoang_vinh/.openclaw-zink/operator/m7-t2/native-r12";
 const DIST = "/home/hoang_vinh/.local/lib/node_modules/openclaw/dist";
+// M10/T2-R8: the executing Discord preflight, in the installed channel package.
+const CHANNEL_FILE = "message-handler.preflight-CbD0u7U7.js";
+const CHANNEL_DIST =
+  "/home/hoang_vinh/.openclaw-zink/npm/projects/openclaw-discord-c0892df945/node_modules/@openclaw/discord/dist";
 
 function realBaseline() {
   const selection = readFileSync(path.join(NATIVE_R12, SELECTION), "utf8");
   const announce = readFileSync(path.join(NATIVE_R12, ANNOUNCE), "utf8");
-  return { selection, announce };
+  const channel = readFileSync(path.join(CHANNEL_DIST, CHANNEL_FILE), "utf8");
+  return { selection, announce, channel };
 }
 
 function realR7() {
   return {
     selection: readFileSync(path.join(DIST, SELECTION), "utf8"),
     announce: readFileSync(path.join(DIST, ANNOUNCE), "utf8"),
+    channel: readFileSync(path.join(CHANNEL_DIST, CHANNEL_FILE), "utf8"),
     bridge: readFileSync(
       path.join(DIST, "zink-governance-boundary.mjs"),
       "utf8",
@@ -127,9 +152,12 @@ function realR7() {
 
 const REACHABLE = (() => {
   try {
-    const { selection, announce } = realBaseline();
+    const { selection, announce, channel } = realBaseline();
     if (sha256(selection) !== BASELINE_SELECTION) return false;
     if (sha256(announce) !== BASELINE_ANNOUNCE) return false;
+    // The channel preflight must be readable too: it is a pinned source now, so
+    // a host whose executing preflight is unreachable cannot drive the patch.
+    if (sha256(channel) !== BASELINE_CHANNEL) return false;
     return true;
   } catch {
     return false;
@@ -206,10 +234,10 @@ test(
   "R14 B2: a BASELINE host applies cleanly and leaves the baseline only in memory",
   { skip: skip("operator backup not reachable") },
   () => {
-    const { selection, announce } = realBaseline();
-    const rt = runtime({ selection, announce, bridge: null });
+    const { selection, announce, channel } = realBaseline();
+    const rt = runtime({ selection, announce, channel, bridge: null });
     try {
-      applyNativePatch(rt.root, rt.backup);
+      applyNativePatch(rt.roots, rt.backup);
       assert.equal(
         sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8")),
         R10_SELECTION,
@@ -218,7 +246,7 @@ test(
         sha256(readFileSync(path.join(rt.dist, ANNOUNCE), "utf8")),
         R10_ANNOUNCE,
       );
-      assert.equal(checkNativePatch(rt.root).status, "PATCHED");
+      assert.equal(checkNativePatch(rt.roots).status, "PATCHED");
     } finally {
       rt.dispose();
     }
@@ -292,12 +320,13 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
       const before = readFileSync(path.join(rt.dist, SELECTION), "utf8");
       assert.equal(sha256(before), R7_SELECTION);
-      applyNativePatch(rt.root, rt.backup);
+      applyNativePatch(rt.roots, rt.backup);
       assert.equal(
         sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8")),
         R10_SELECTION,
@@ -316,7 +345,7 @@ test(
         ),
         CURRENT_BRIDGE,
       );
-      assert.equal(checkNativePatch(rt.root).status, "PATCHED");
+      assert.equal(checkNativePatch(rt.roots).status, "PATCHED");
     } finally {
       rt.dispose();
     }
@@ -335,10 +364,11 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
-      const inspection = inspectNativePatch(rt.root);
+      const inspection = inspectNativePatch(rt.roots);
       assert.equal(inspection[SELECTION].state, "PREDECESSOR");
       assert.equal(inspection[ANNOUNCE].state, "PATCHED");
       // No planned write is ever the baseline: the only outputs are the patched
@@ -373,11 +403,12 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
-      applyNativePatch(rt.root, rt.backup);
-      const after = inspectNativePatch(rt.root);
+      applyNativePatch(rt.roots, rt.backup);
+      const after = inspectNativePatch(rt.roots);
       assert.equal(after[SELECTION].state, "PATCHED");
       assert.equal(after[ANNOUNCE].state, "PATCHED");
     } finally {
@@ -394,12 +425,13 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
-      applyNativePatch(rt.root, rt.backup);
+      applyNativePatch(rt.roots, rt.backup);
       const once = sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8"));
-      applyNativePatch(rt.root, rt.backup);
+      applyNativePatch(rt.roots, rt.backup);
       const twice = sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8"));
       assert.equal(once, R10_SELECTION);
       assert.equal(twice, R10_SELECTION, "reapplication must change nothing");
@@ -422,12 +454,13 @@ const drifts = (label, mutate) =>
       const rt = runtime({
         selection: r7.selection,
         announce: r7.announce,
+        channel: r7.channel,
         bridge: r7.bridge,
       });
       try {
         mutate(rt);
         assert.throws(
-          () => applyNativePatch(rt.root, rt.backup),
+          () => applyNativePatch(rt.roots, rt.backup),
           /NATIVE_SOURCE_DRIFT|NATIVE_PATCH_PARTIAL_STATE/u,
         );
       } finally {
@@ -451,7 +484,7 @@ drifts("a one-byte mutation of BASELINE", (rt) => {
 
 drifts("a one-byte mutation of R10", (rt) => {
   const rt2 = rt;
-  applyNativePatch(rt2.root, rt2.backup);
+  applyNativePatch(rt2.roots, rt2.backup);
   writeFileSync(
     path.join(rt.dist, SELECTION),
     `${readFileSync(path.join(rt.dist, SELECTION), "utf8")}// x\n`,
@@ -535,15 +568,16 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
-      const inspection = inspectNativePatch(rt.root);
+      const inspection = inspectNativePatch(rt.roots);
       assert.equal(inspection[ANNOUNCE].state, "PATCHED");
       // The R7 selection digest must not make the announce a predecessor.
       writeFileSync(path.join(rt.dist, ANNOUNCE), r7.selection);
       assert.throws(
-        () => applyNativePatch(rt.root, rt.backup),
+        () => applyNativePatch(rt.roots, rt.backup),
         /NATIVE_SOURCE_DRIFT/u,
         "the selection digest must not authorize the announce artifact",
       );
@@ -608,12 +642,13 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: r7.announce,
+      channel: r7.channel,
       bridge: "// unrelated bridge\n",
     });
     try {
       // The bridge is replaced as part of the lineage upgrade, so this succeeds;
       // what must NOT happen is the sources being reverted to baseline first.
-      applyNativePatch(rt.root, rt.backup);
+      applyNativePatch(rt.roots, rt.backup);
       assert.equal(
         sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8")),
         R10_SELECTION,
@@ -643,11 +678,12 @@ test(
     const rt = runtime({
       selection: r7.selection,
       announce: `${r7.announce}// x\n`,
+      channel: r7.channel,
       bridge: r7.bridge,
     });
     try {
       assert.throws(
-        () => applyNativePatch(rt.root, rt.backup),
+        () => applyNativePatch(rt.roots, rt.backup),
         /NATIVE_SOURCE_DRIFT/u,
       );
       assert.equal(
@@ -671,10 +707,11 @@ test(
       const rt = runtime({
         selection: r7.selection,
         announce: r7.announce,
+        channel: r7.channel,
         bridge: r7.bridge,
       });
       try {
-        applyNativePatch(rt.root, rt.backup);
+        applyNativePatch(rt.roots, rt.backup);
         digests.add(
           sha256(readFileSync(path.join(rt.dist, SELECTION), "utf8")),
         );

@@ -80,6 +80,13 @@ export const KEYWORDS = Object.freeze(
     "format",
     "minimum",
     "maximum",
+    // F-536 (R10-T03-1): `default` is a JSON Schema ANNOTATION, not an
+    // assertion. The host engine accepts it and two published tool contracts
+    // use it to document optional inputs; refusing it here made
+    // `zink_sql.max_rows` and `zink_knowledge.top_k` unsatisfiable the moment
+    // a caller sent them. Admission is deliberately non-validating: the
+    // interpreter records no default and applies no value.
+    "default",
     "allOf",
     "anyOf",
     "oneOf",
@@ -103,11 +110,39 @@ export const invalid = (reason = "") => {
 };
 
 // C04: Key-order-independent JSON stringification for const and enum comparison
+//
+// M12/T9 F-157: the canonical COMPARISON serializer.
+//
+// ROLE: it answers "are these two JSON values the same?" — key-sorted and
+// compact, so a comparison never depends on the order the keys were written
+// in. It is deliberately NOT the hash preimage serializer
+// (`canonical.mjs`'s `canonicalJson`, which normalizes unicode and rejects
+// anything JSON cannot represent) and NOT the config writer
+// (`lib/policy.mjs`'s `stableJson`, whose pretty bytes are pinned by the
+// admission digests). Three serializers, three roles, each stated where it
+// lives.
 export function stableJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   const keys = Object.keys(value).sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(",")}}`;
+}
+
+/**
+ * M12/T9 F-303: contract resolution is repository-relative ONLY — the working
+ * directory is not a candidate, so a run whose cwd held another `zink-tools/`
+ * tree can no longer validate against files outside the repository.
+ *
+ * A caller that legitimately holds contracts somewhere else (a materialised
+ * pointer tree, a packaged install) declares that location HERE, explicitly,
+ * instead of relying on where the process happens to be started.
+ */
+let extraContractRoots = [];
+
+export function setContractResolutionRoots(roots = []) {
+  extraContractRoots = (Array.isArray(roots) ? roots : []).filter(
+    (root) => typeof root === "string" && root.length > 0,
+  );
 }
 
 export function resolveContractFilePath(name) {
@@ -116,6 +151,17 @@ export function resolveContractFilePath(name) {
   if (cleanName.endsWith(".schema.json")) cleanName = cleanName.slice(0, -12);
 
   const candidatePaths = [
+    // 0. Declared roots (M12/T9 F-303): an explicit location, never the cwd.
+    ...extraContractRoots.flatMap((root) => [
+      path.resolve(
+        root,
+        "zink-tools/contracts/tools",
+        `${cleanName}.schema.json`,
+      ),
+      path.resolve(root, "zink-tools/contracts", `${cleanName}.schema.json`),
+      path.resolve(root, "contracts/tools", `${cleanName}.schema.json`),
+      path.resolve(root, "contracts", `${cleanName}.schema.json`),
+    ]),
     // 1. Local contracts directory (in plugin or topology)
     path.resolve(__dirname, "../contracts", `${cleanName}.schema.json`),
     path.resolve(__dirname, "../contracts/tools", `${cleanName}.schema.json`),
@@ -135,17 +181,11 @@ export function resolveContractFilePath(name) {
       "../../../../zink-tools/contracts",
       `${cleanName}.schema.json`,
     ),
-    // 3. Current working directory zink-tools
-    path.resolve(
-      process.cwd(),
-      "zink-tools/contracts/tools",
-      `${cleanName}.schema.json`,
-    ),
-    path.resolve(
-      process.cwd(),
-      "zink-tools/contracts",
-      `${cleanName}.schema.json`,
-    ),
+    // M12/T9 F-303: the working directory is NOT a candidate. A run whose cwd
+    // held another `zink-tools/` tree silently validated against files
+    // outside the repository, so the same contract name could resolve to
+    // different bytes depending on where the process was started. Resolution
+    // is repository-relative only.
   ];
 
   for (const candidate of candidatePaths) {
@@ -177,6 +217,33 @@ export function loadContractSchema(name) {
 
 export function schemaFile(name) {
   return loadContractSchema(name);
+}
+
+/**
+ * M12/T9 F-127: the enum a CONTRACT declares for one payload property of one
+ * event type, read from the contract itself.
+ *
+ * The ledger-event contract states each event's payload in an `allOf` branch
+ * guarded by `if: { properties: { type: { const: <event> } } }`. A consumer
+ * that must know what a published event can carry reads it here instead of
+ * re-listing the values in code — so a contract change cannot leave a
+ * hand-maintained copy behind, and the reducer cannot accept a value the
+ * contract would refuse at append time.
+ *
+ * Returns null when the contract declares no such property, which is the
+ * fail-closed answer: a caller must treat "no declaration" as "nothing is
+ * allowed", never as "anything is allowed".
+ */
+export function eventPayloadEnum(contractName, eventType, property) {
+  const schema = schemaFile(contractName);
+  const blocks = Array.isArray(schema?.allOf) ? schema.allOf : [];
+  for (const block of blocks) {
+    if (block?.if?.properties?.type?.const !== eventType) continue;
+    const declared =
+      block?.then?.properties?.payload?.properties?.[property]?.enum;
+    if (Array.isArray(declared)) return Object.freeze([...declared]);
+  }
+  return null;
 }
 function typeMatches(type, value) {
   if (type === "null") return value === null;
@@ -349,7 +416,28 @@ export function validateContract(name, value, maxBytes = 65536) {
   }
 }
 
-export function validateContractSchema(schemaName, value, maxBytes = 65536) {
+/**
+ * M12/T9 F-272: the envelope budgets, expressed ONCE.
+ *
+ * The validator used to carry a 64 KiB DEFAULT, and the only production call
+ * site used the default — while the published per-tool `$defs.output`
+ * contracts allow far more (zink-python alone allows 1 MiB of stdout and 1 MiB
+ * of stderr, and the n8n output bounds its synced-table list at about 131 KB).
+ * Two independently authored budgets therefore disagreed, and the SMALLER one
+ * was enforced at the seam that runs after the work has already happened: the
+ * tool succeeded, its side effect was committed, and the governed caller
+ * reported a schema failure.
+ *
+ * The budgets live here, in the module that enforces them, and every call
+ * site states which one it uses.
+ */
+export const TOOL_CALL_ENVELOPE_MAX_BYTES = 65536;
+export const TOOL_RESULT_ENVELOPE_MAX_BYTES = 4 * 1024 * 1024;
+
+export function validateContractSchema(schemaName, value, maxBytes) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    invalid("A byte budget is required");
+  }
   const rootSchema = loadContractSchema(schemaName);
   if (value !== undefined) {
     const encoded = JSON.stringify(value);
@@ -361,6 +449,23 @@ export function validateContractSchema(schemaName, value, maxBytes = 65536) {
   return true;
 }
 
+/**
+ * M12/T9 F-128: the version a contract PUBLISHES, derived the same way for
+ * every contract.
+ *
+ * The manifest used to print the literal "1.0.0" for every contract that
+ * carried no version marker, so a contract edited without its marker still
+ * reported the same version and only the hash moved. A contract that declares
+ * no version now reports "unknown" — never a fabricated one.
+ */
+function readContractVersion(parsed) {
+  const declared = parsed?.["x-zink-contract-version"] ?? parsed?.version;
+  if (typeof declared !== "string" || declared.trim().length === 0) {
+    return "unknown";
+  }
+  return declared.trim();
+}
+
 export function generateSchemaManifest() {
   const manifest = {
     version: "1.0.0",
@@ -370,7 +475,11 @@ export function generateSchemaManifest() {
   };
   for (const name of CANONICAL_CONTRACTS) {
     const filePath = resolveContractFilePath(name);
-    if (!filePath || !existsSync(filePath)) continue;
+    if (!filePath || !existsSync(filePath)) {
+      throw new Error(
+        `SCHEMA_MANIFEST_INCOMPLETE: contract ${name} is canonical but no schema file resolves`,
+      );
+    }
     const raw = readFileSync(filePath, "utf8");
     const hash = createHash("sha256").update(raw).digest("hex");
     const parsed = JSON.parse(raw);
@@ -378,12 +487,16 @@ export function generateSchemaManifest() {
       file: `${name}.schema.json`,
       hash,
       title: parsed.title || name,
-      version: parsed["x-zink-contract-version"] || parsed.version || "1.0.0",
+      version: readContractVersion(parsed),
     };
   }
   for (const name of CANONICAL_TOOL_CONTRACTS) {
     const filePath = resolveContractFilePath(name);
-    if (!filePath || !existsSync(filePath)) continue;
+    if (!filePath || !existsSync(filePath)) {
+      throw new Error(
+        `SCHEMA_MANIFEST_INCOMPLETE: tool contract ${name} is canonical but no schema file resolves`,
+      );
+    }
     const raw = readFileSync(filePath, "utf8");
     const hash = createHash("sha256").update(raw).digest("hex");
     const parsed = JSON.parse(raw);
@@ -391,7 +504,7 @@ export function generateSchemaManifest() {
       file: path.basename(filePath),
       hash,
       title: parsed.title || name,
-      version: parsed["x-zink-contract-version"] || "1.0.0",
+      version: readContractVersion(parsed),
     };
   }
   const manifestStr = JSON.stringify({
@@ -404,8 +517,125 @@ export function generateSchemaManifest() {
   return Object.freeze(manifest);
 }
 
+/**
+ * M12/T9 F-322: the COMMITTED expectation for the contract manifest.
+ *
+ * The verifier used to regenerate the manifest it was comparing against, so
+ * every hash comparison was disk-versus-disk inside one process and the only
+ * property it demonstrated was that hashing is deterministic. Nothing
+ * compared the repository's contracts against a committed expectation, so
+ * editing a numeric ceiling in any tool contract left every lane green.
+ *
+ * UPDATE PROCEDURE (owner-visible, one step, same commit as the contract
+ * change): run
+ *   node -e "import('./integrations/openclaw/topology/lib/schema.mjs').then(m => console.log(m.generateSchemaManifest().manifestChecksum))"
+ * and put the printed value below.
+ *
+ * M12/T9 F-252: the twelve topology contracts now each carry their own
+ * `x-zink-contract-version`, so the manifest reports the version each contract
+ * publishes instead of "unknown" for all of them, and F-030's pinning of the
+ * WORKFLOW_CANCELLED payload moved the ledger-event bytes. The value below is
+ * the checksum of THAT state.
+ *
+ * M12/T9 F-371: the delegation id changed its FORM - the same digest, now
+ * rendered as a version-4 UUID - so `ledger-event.schema.json`,
+ * `ledger-snapshot.schema.json`, `delegation-envelope.schema.json` and
+ * `trusted-result-envelope.schema.json` accept BOTH renderings and publish
+ * version 1.1.0. The value below is the checksum of THAT state.
+ *
+ * M12/T9 F-247: the unwritten task reference-digest slot was removed from
+ * `ledger-snapshot.schema.json`, so the contract bytes changed. The value
+ * below is the checksum of THAT state.
+ *
+ * M12/T9 F-249: `result_id` was withdrawn from the four verdict payload
+ * branches of `ledger-event.schema.json`, so the contract bytes changed again.
+ * The value below is the checksum of THAT state.
+ *
+ * M12/T9 F-376: `result_id` was admitted AGAIN in those four branches as an
+ * optional LEGACY member - the live journal holds two verdicts that carry it,
+ * and a contract that refuses its own record makes the ledger unreadable - so
+ * the contract bytes changed once more. The value below is the checksum of THAT
+ * state.
+ *
+ * M12/T9 F-376 (completion): the BLOCKED branch admitted the legacy member
+ * too, so the contract bytes changed once more and the pin follows.
+ *
+ * M12/T9-R4 F-450/F-455: `$defs.parameter` in
+ * `zink-tools/contracts/tools/zink-sql.schema.json` gained `type` and `value`
+ * in `properties` and in `required`, because the definition demanded both in
+ * its five `oneOf` branches while `additionalProperties: false` refused them —
+ * an unsatisfiable shape that made every governed parameterized SQL call
+ * impossible to express. The contract bytes changed, so the pin follows.
+ *
+ * M12/T9-R4 F-570: `zink-tools/contracts/tools/zink-knowledge.schema.json`
+ * declares the provenance identity the Knowledgebase publishes — `source_id`,
+ * `source_sha256`, `line_start`, `line_end` — inside the closed metadata object,
+ * so an agent can re-verify a citation it was given. The contract bytes changed,
+ * so the pin follows. The roll landed apart from `fc7a399` because that commit
+ * shipped without it, which is the state the three lanes that read this constant
+ * (`agent-topo-F-371`, `agent-topo-F-322`, `m12-t2.2-b9-manifest-completeness`)
+ * were left to report as red. `zink-knowledge.schema.json` packages into no
+ * deployed asset set — no entry for either its old or its new digest exists in
+ * `ALLOWED_GOVERNANCE_ASSET_SHA256` — so this roll owes no per-mode admission.
+ *
+ * M12/T9-R4 F-571: the same `zink-knowledge.schema.json` gained
+ * `returned_count`, `candidate_pool_count`, `has_more` and `truncated` in the
+ * closed result object, because the adapter was reporting the page length as
+ * the total and had nowhere to declare either signal. The contract bytes
+ * changed, so the pin follows. Attribution was measured, not assumed: restoring
+ * only the pre-row bytes of that one file reproduced the previous value
+ * (`fe12b29f…`) exactly. The file still packages into no deployed asset set, so
+ * this roll owes no per-mode admission either.
+ *
+ * M12/T9-R5 F-KB-004: `zink-tools/contracts/tools/zink-knowledge.schema.json`
+ * gained `index_id`, `indexed_by_run_id`, `index_status` and `chunk_ordinal`
+ * in the closed metadata object (index liveness and stable chunk ordinal so a
+ * superseded citation can be recognised and re-derived). The contract bytes
+ * changed, so the pin follows. Attribution was measured, not assumed: restoring
+ * only the previous bytes of that one file reproduced the previous value
+ * (`014c8f89…`) exactly. The file still packages into no deployed asset set, so
+ * this roll owes no per-mode admission either.
+ *
+ * M12/T9-R5 F-OC-012: `zink-tools/contracts/tools/zink-skill.schema.json` and
+ * `integrations/openclaw/topology/contracts/approval-request.schema.json` now
+ * declare the provenance `source_type` the proposal carries and the owner
+ * approves (option A+B, owner decision 2026-11-04). The contract bytes changed,
+ * so the pin follows. Attribution was measured, not assumed: restoring only the
+ * previous bytes of those two files reproduced the previous value
+ * (`73882525…`) exactly.
+ */
+export const PINNED_SCHEMA_MANIFEST_CHECKSUM =
+  "c0a137b2296dbdefe253f650e57aafca7d27cda33b0abe115bf25198b7d784ee";
+
 export function verifySchemaManifestChecksums(manifest = null) {
-  const target = manifest || generateSchemaManifest();
+  if (manifest === null) {
+    // M12/T9 F-322: the generated manifest is compared against the COMMITTED
+    // expectation, not against itself.
+    const generated = generateSchemaManifest();
+    if (generated.manifestChecksum !== PINNED_SCHEMA_MANIFEST_CHECKSUM) {
+      return {
+        valid: false,
+        mismatch: "manifest",
+        expected: PINNED_SCHEMA_MANIFEST_CHECKSUM,
+        actual: generated.manifestChecksum,
+      };
+    }
+    manifest = generated;
+  }
+  const target = manifest;
+  // Iterating only whatever the manifest happens to contain cannot notice a member that
+  // was dropped on the way in, so completeness is checked against the canonical lists.
+  const incomplete = [
+    ...CANONICAL_CONTRACTS.filter(
+      (name) => !(name in (target.contracts ?? {})),
+    ),
+    ...CANONICAL_TOOL_CONTRACTS.filter(
+      (name) => !(name in (target.tools ?? {})),
+    ),
+  ];
+  if (incomplete.length > 0) {
+    return { valid: false, incomplete };
+  }
   for (const [name, info] of Object.entries(target.contracts || {})) {
     const filePath = resolveContractFilePath(info.file || name);
     if (!filePath || !existsSync(filePath))

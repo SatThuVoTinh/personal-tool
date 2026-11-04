@@ -6,6 +6,19 @@ import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import { consumeApprovalAtomically } from "../integrations/openclaw/topology/lib/guard.mjs";
+import { derivePrincipalRef } from "../integrations/openclaw/topology/lib/canonical.mjs";
+
+// M12/T9 F-026: completion is bound to the AUTHORITATIVE owner, and the owner
+// is a ledger PRINCIPAL REF - the HMAC the ledger derives from the identity key
+// and the Discord snowflake (`derivePrincipalRef`). A bare snowflake is not a
+// principal: it is the public identity the ref exists to hide, so a lane that
+// enqueues one would be pinning the wrong vocabulary. The queue compares the
+// projected owner against the presented principal, so the lane presents the
+// SAME value it enqueued.
+const IDENTITY_KEY = "c".repeat(64);
+const OWNER_SNOWFLAKE = "32345678901234567";
+const OWNER_PRINCIPAL = derivePrincipalRef(IDENTITY_KEY, OWNER_SNOWFLAKE);
+const OTHER_PRINCIPAL = derivePrincipalRef(IDENTITY_KEY, "22345678901234567");
 
 function freshQueue() {
   const dir = mkdtempSync(path.join(tmpdir(), "lane-c-"));
@@ -18,6 +31,10 @@ function enqueue(qm, taskId, overrides = {}) {
     primaryCoordinator: "o1",
     requiredCapabilities: [],
     payload: {},
+    // F-026: every enqueued task carries the authoritative owner, so a
+    // completion can be VERIFIED against it instead of accepted from whoever
+    // presents a non-empty string.
+    ownerPrincipalRef: OWNER_PRINCIPAL,
     ...overrides,
   });
 }
@@ -143,15 +160,34 @@ describe("Lane C — queue projection & lease authority", () => {
         qm.completeTask({
           taskId: "t1",
           userConfirmationRef: "x",
-          userPrincipalRef: "user-1",
+          userPrincipalRef: OWNER_PRINCIPAL,
           resultDigest: "e".repeat(64),
         }),
       { message: /RESULT_MISMATCH/ },
     );
+    // M12/T9 F-026: the AUTHORITATIVE owner is the only principal that closes
+    // the task. A different - equally well-formed, equally non-empty -
+    // principal is refused, because the queue verifies the owner instead of
+    // recording whoever spoke.
+    assert.throws(
+      () =>
+        qm.completeTask({
+          taskId: "t1",
+          userConfirmationRef: "x",
+          userPrincipalRef: OTHER_PRINCIPAL,
+          resultDigest: "d".repeat(64),
+        }),
+      { message: /USER_PRINCIPAL_MISMATCH/ },
+    );
+    assert.equal(
+      qm.getTask("t1").status,
+      "RESULT_PENDING_REVIEW",
+      "a refused completion must leave the task pending review",
+    );
     const done = qm.completeTask({
       taskId: "t1",
       userConfirmationRef: "user-button-accept",
-      userPrincipalRef: "user-1",
+      userPrincipalRef: OWNER_PRINCIPAL,
       resultDigest: "d".repeat(64),
     });
     assert.equal(done.status, "COMPLETE");
@@ -297,7 +333,7 @@ describe("Lane C — queue projection & lease authority", () => {
     qm.completeTask({
       taskId: "a-done",
       userConfirmationRef: "ref",
-      userPrincipalRef: "user-1",
+      userPrincipalRef: OWNER_PRINCIPAL,
       resultDigest: df.resultDigest,
     });
     enqueue(qm, "a-rej");
@@ -339,5 +375,172 @@ describe("Lane C — queue projection & lease authority", () => {
     assert.equal(qm._projectionVersion, 1);
     const qm2 = new QueueManager({ storagePath: qm.storagePath });
     assert.equal(qm2._projectionVersion, 0);
+  });
+
+  // F-056 (legacy id R1-A06-01): the queue lease lifecycle had no runtime
+  // driver. The lease clock moved only through `heartbeat()`, and `heartbeat()`
+  // had no production caller, so `lastHeartbeatAt` stood at `claimedAt` for the
+  // whole life of every EXECUTING item. Two consequences, both measured here:
+  //   1. the lease expired DEFAULT_LEASE_SECONDS after the CLAIM rather than
+  //      after the owner's last activity, so a live execution was fenced out
+  //      with EXECUTION_FENCE_EXPIRED while it was still working;
+  //   2. the stale detector keys on heartbeat age, so it could not tell a live
+  //      execution from a dead one and would reap the live one.
+  // Committing a governed mutation under the current-execution fence IS the
+  // owner's proof of liveness - it presents the current leaseId, attempt and
+  // claimant, and the queue verifies all three against durable state inside
+  // the queue's own critical section - so the fence renews the lease it just
+  // verified. The window is the one the claim already chose, so the lease
+  // keeps its duration and only its start moves.
+  const F056_EPOCH = Date.parse("2026-01-01T00:00:00.000Z");
+
+  function fenceFor(qm, taskId, leaseId) {
+    return {
+      taskId,
+      claimedBy: "o1",
+      leaseId,
+      attempt: qm.getTask(taskId).attempt,
+    };
+  }
+
+  it("F-056: a governed mutation under the fence renews the lease it verified", (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: F056_EPOCH });
+    try {
+      const qm = freshQueue();
+      enqueue(qm, "f056-live");
+      const claim = claimAs(qm, "f056-live", "o1");
+      const claimed = qm.getTask("f056-live");
+      assert.equal(
+        claimed.lastHeartbeatAt,
+        claimed.claimedAt,
+        "the claim sets the heartbeat clock; only a later renewal may move it",
+      );
+      const fence = fenceFor(qm, "f056-live", claim.leaseId);
+
+      // 200 s in: the owner is still working and its lease is still alive.
+      t.mock.timers.tick(200_000);
+      assert.equal(
+        qm.withExecutionFence(fence, () => "committed"),
+        "committed",
+      );
+      const renewed = qm.getTask("f056-live");
+      assert.equal(
+        renewed.lastHeartbeatAt,
+        new Date(F056_EPOCH + 200_000).toISOString(),
+        "the lease clock must advance when the owner acts",
+      );
+      assert.equal(
+        renewed.leaseExpiresAt,
+        new Date(F056_EPOCH + 200_000 + 300_000).toISOString(),
+        "the renewal must keep the window the claim chose (300 s), only move its start",
+      );
+      assert.equal(
+        renewed.leaseId,
+        claim.leaseId,
+        "a renewal never mints a new lease",
+      );
+      assert.equal(
+        renewed.attempt,
+        claimed.attempt,
+        "a renewal never moves the attempt generation",
+      );
+
+      // The renewal must be durable, not process-local: the lease is the
+      // execution authority, and the stale detector reads it from the same
+      // durable file.
+      const persisted = new QueueManager({ storagePath: qm.storagePath });
+      const durable = persisted.getTask("f056-live");
+      assert.equal(
+        durable.lastHeartbeatAt,
+        renewed.lastHeartbeatAt,
+        "the renewed heartbeat must be durable",
+      );
+      assert.equal(
+        durable.leaseExpiresAt,
+        renewed.leaseExpiresAt,
+        "the renewed lease must be durable",
+      );
+
+      // 200 s more. Without the renewal the lease died at +300 s and this live
+      // owner was fenced out; with it the owner is still inside its window.
+      t.mock.timers.tick(200_000);
+      assert.equal(
+        qm.withExecutionFence(fence, () => "committed"),
+        "committed",
+        "a live execution must not be fenced out at the lease cliff",
+      );
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  it("F-056: the renewal never revives an expired or a revoked lease", (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: F056_EPOCH });
+    try {
+      const qm = freshQueue();
+      enqueue(qm, "f056-expired");
+      const claim = claimAs(qm, "f056-expired", "o1");
+      const fence = fenceFor(qm, "f056-expired", claim.leaseId);
+      // Silent for longer than the lease: the lease is dead, and the fence must
+      // refuse it exactly as it did before the renewal existed.
+      t.mock.timers.tick(300_001);
+      assert.throws(
+        () => qm.withExecutionFence(fence, () => "committed"),
+        { message: /EXECUTION_FENCE_EXPIRED/ },
+        "an expired lease must never be renewed into a live one",
+      );
+
+      // A recovered lease is revoked, not expired: still refused.
+      const qm2 = freshQueue();
+      enqueue(qm2, "f056-revoked");
+      const claim2 = claimAs(qm2, "f056-revoked", "o1");
+      const fence2 = fenceFor(qm2, "f056-revoked", claim2.leaseId);
+      t.mock.timers.tick(1);
+      qm2.detectAndRecoverStaleTasks({ staleThresholdSeconds: 0 });
+      assert.equal(qm2.getTask("f056-revoked").status, "QUEUED");
+      assert.throws(
+        () => qm2.withExecutionFence(fence2, () => "committed"),
+        { message: /EXECUTION_FENCE_(REVOKED|SUPERSEDED)/ },
+        "a revoked lease must never be renewed into a live one",
+      );
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  it("F-056: an execution that keeps acting is not reaped by the stale detector", (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: F056_EPOCH });
+    try {
+      const qm = freshQueue();
+      enqueue(qm, "f056-active");
+      enqueue(qm, "f056-silent");
+      const claimActive = claimAs(qm, "f056-active", "o1");
+      claimAs(qm, "f056-silent", "o1");
+      const fence = fenceFor(qm, "f056-active", claimActive.leaseId);
+
+      // The active owner acts every 200 s; the silent one never acts at all.
+      for (const step of [200_000, 200_000, 250_000]) {
+        t.mock.timers.tick(step);
+        assert.equal(
+          qm.withExecutionFence(fence, () => "committed"),
+          "committed",
+        );
+      }
+      const recovered = qm.detectAndRecoverStaleTasks({
+        staleThresholdSeconds: 600,
+      });
+      assert.deepEqual(
+        recovered.map((entry) => entry.taskId),
+        ["f056-silent"],
+        "only the silent execution may be reaped",
+      );
+      assert.equal(
+        qm.getTask("f056-active").status,
+        "EXECUTING",
+        "a live execution must not be requeued by the stale detector",
+      );
+    } finally {
+      t.mock.timers.reset();
+    }
   });
 });

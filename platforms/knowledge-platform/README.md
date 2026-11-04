@@ -54,7 +54,7 @@ platforms/knowledge-platform/
 Để tiến trình lập chỉ mục hoạt động chính xác, thư mục gốc của Vault (`KNOWLEDGE_VAULT_ROOT`) phải tuân thủ quy tắc tổ chức:
 
 - **`01. Knowledge/`:** Chứa các ghi chú cá nhân định dạng Markdown UTF-8 (`.md`).
-  - Mỗi ghi chú cần có ít nhất một thẻ phân loại dạng chữ thường (vd: `#inventory`, `#supply-chain`, `#forecast`).
+  - Mỗi ghi chú cần có ít nhất một thẻ phân loại dạng chữ thường (vd: `#supplychain`, `#logistics`, `#ai`. Tập thẻ hợp lệ được khai báo trong `apps/knowledge/app/markdown_adapter.py` (`TOPIC_TAGS` cho các chủ đề gốc, `CANONICAL_SLUG_TO_TOPIC` cho các bí danh); ghi chú không mang thẻ hợp lệ sẽ bị từ chối với mã `REQUIRED_TOPIC_TAG_MISSING`.).
 - **`02. Books/`:** Chứa sách chuyên khảo dạng PDF kèm theo một tệp Markdown "sidecar" cùng tên hoặc chứa cú pháp nhúng Obsidian: `![[Ten_Sach.pdf]]`.
 - **`03. Papers/`:** Chứa các bài báo khoa học dạng PDF kèm tệp sidecar ghi rõ tác giả, năm xuất bản và tóm tắt (abstract).
 
@@ -72,7 +72,7 @@ Trước khi lập chỉ mục hoặc tìm kiếm, đảm bảo container Postgr
 Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/readyz"
 ```
 
-- **Đầu ra mong đợi:** HTTP 200 kèm trạng thái cơ sở dữ liệu `connected` và model `bge-m3:latest` đã tải vào bộ nhớ.
+- **Đầu ra mong đợi:** HTTP 200 với `status` = `ready`, kèm `active_index_id` và `embedding_model` (`name`, `digest`, `dimensions`) của model đã tải vào bộ nhớ.
 
 ---
 
@@ -94,6 +94,8 @@ Write-Host "Bắt đầu lập chỉ mục với Run ID: $runId"
 ```powershell
 $body = @{ kind = "FULL_REBUILD" } | ConvertTo-Json -Compress
 $run = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs" -ContentType "application/json" -Body $body
+$runId = $run.index_run_id
+Write-Host "Bắt đầu xây dựng lại toàn bộ với Run ID: $runId"
 ```
 
 ---
@@ -104,10 +106,10 @@ Sử dụng `run_id` để kiểm tra tiến trình xử lý tài liệu cho đ�
 
 ```powershell
 $status = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/knowledge/v1/index-runs/$runId"
-Write-Host "Trạng thái: $($status.state) | Đã xử lý: $($status.processed_files)/$($status.total_files) tệp"
+Write-Host "Trạng thái: $($status.status) | Đã xử lý: $($status.sources_indexed)/$($status.sources_discovered) nguồn"
 ```
 
-- Trạng thái hoàn thành thành công: `COMPLETED`.
+- Trạng thái hoàn thành thành công: `SUCCEEDED`.
 - Nếu có sự cố trong quá trình đọc tài liệu: `FAILED` kèm thông báo lỗi chi tiết.
 
 ---
@@ -124,11 +126,11 @@ $queryBody = @{
 
 $response = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/knowledge/v1/search" -ContentType "application/json" -Body $queryBody
 
-foreach ($hit in $response.hits) {
+foreach ($hit in $response.results) {
     Write-Host "--------------------------------------------------"
-    Write-Host "Tài liệu : $($hit.document_title)"
-    Write-Host "Trích dẫn: $($hit.citation)"
-    Write-Host "Điểm RRF : $($hit.score)"
+    Write-Host "Tài liệu : $($hit.title)"
+    Write-Host "Trích dẫn: $($hit.citation.markdown)"
+    Write-Host "Điểm RRF : $($hit.rrf_score)"
     Write-Host "Nội dung : $($hit.text)"
 }
 ```
@@ -151,5 +153,5 @@ Agent `o1` (Knowledge Specialist) là tác nhân duy nhất được giao tiếp
 | Lỗi HTTP 503 tại `/readyz`            | Dịch vụ Ollama chưa bật hoặc chưa kéo mô hình `bge-m3:latest`             | Kiểm tra terminal Ollama: chạy `ollama serve` và `ollama pull bge-m3:latest`.                                               |
 | Lỗi HTTP 409 khi gọi `/v1/index-runs` | Đang có một tiến trình lập chỉ mục khác đang chạy dở dang                 | Đợi tiến trình hiện tại hoàn tất hoặc kiểm tra log tại cổng Dozzle `http://127.0.0.1:9999`.                                 |
 | Không tìm thấy tệp trong Vault        | Đường dẫn `KNOWLEDGE_VAULT_ROOT` trong `.env` bị sai                      | Kiểm tra tệp `infrastructure/docker/env/.env` và cập nhật đúng đường dẫn tuyệt đối của Obsidian Vault trên máy chủ Windows. |
-| Kết quả tìm kiếm trả về rỗng          | Chưa thực hiện lập chỉ mục hoặc Vault chưa có tệp Markdown nào có thẻ tag | Thêm ít nhất 1 ghi chú có thẻ `#tag` vào thư mục `01. Knowledge/` và chạy lại lệnh ở Bước 2.                                |
+| Kết quả tìm kiếm trả về rỗng          | Chưa thực hiện lập chỉ mục hoặc Vault chưa có tệp Markdown nào có thẻ tag | Thêm ít nhất 1 ghi chú có thẻ `#supplychain` vào thư mục `01. Knowledge/` và chạy lại lệnh ở Bước 2.                                |
 | Không kết nối được tới cổng `8080`    | Container Nginx chưa được khởi động                                       | Chạy lệnh khởi động hệ thống: `powershell ./infrastructure/docker/scripts/start.ps1 -Profile knowledge`.                    |

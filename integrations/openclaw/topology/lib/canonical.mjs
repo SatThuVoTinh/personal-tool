@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash, createHmac } from "node:crypto";
 
 // The governance version doubles as the WRITER-SEMANTICS discriminator, so it
@@ -12,6 +13,181 @@ export const GOVERNANCE_VERSION = "m8-t2.3-r5";
 export const SCHEMA_VERSION = "1.0.0";
 
 const SET_KEYS = new Set(["allowed_tools", "allowAgents", "allowed_stacks"]);
+
+// M10/T2-R12: the human-facing task code (owner decision 2026-10-08).
+//
+// The owner reads and types this code to approve work by text, so the alphabet
+// deliberately omits every character that is confusable when transcribed or read
+// aloud: no `0`/`O`, no `1`/`I`/`L`, no `5`/`S`, no `2`/`Z`, no `8`/`B`, no
+// `6`/`G`, no `4`/`A`. That leaves 18 letters (C D E F H J K M N P Q R T U V W
+// X Y) and 3 digits (3 7 9) = 21 symbols.
+//
+// Format: 8 date characters (YYYYMMDD) + 4 random characters = 12.
+//
+// The code is a DISPLAY ALIAS, never an identity. The canonical 64-hex
+// `task_id` stays the ledger key and stays inside the button `custom_id`, because
+// a 4-character code over 21 symbols has far too little entropy to be an
+// authority token: 21^4 is under 195k, so it must never be trusted to prove
+// which task is being approved. That is why uniqueness is enforced at generation.
+export const TASK_CODE_ALPHABET = "CDEFHJKMNPQRTUVWXY379";
+export const TASK_CODE_LENGTH = 12;
+export const TASK_CODE_DATE_LENGTH = 8;
+export const TASK_CODE_SUFFIX_LENGTH = 4;
+export const TASK_CODE_PATTERN = "^[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4}$";
+
+/**
+ * Build one task code. `random` is an injected byte source so the generator is
+ * testable and never depends on ambient randomness in a governance path.
+ */
+export function buildTaskCode({ date, random }) {
+  const datePart = normalizeTaskCodeDate(date);
+  let suffix = "";
+  for (let index = 0; index < TASK_CODE_SUFFIX_LENGTH; index++) {
+    if (typeof random !== "function") {
+      throw new TypeError("TASK_CODE_RANDOM_REQUIRED");
+    }
+    const pick = random(index);
+    if (
+      typeof pick !== "number" ||
+      !Number.isInteger(pick) ||
+      pick < 0 ||
+      pick >= TASK_CODE_ALPHABET.length
+    ) {
+      throw new RangeError(`TASK_CODE_RANDOM_OUT_OF_RANGE:${pick}`);
+    }
+    suffix += TASK_CODE_ALPHABET[pick];
+  }
+  const code = datePart + suffix;
+  if (code.length !== TASK_CODE_LENGTH) {
+    throw new Error(`TASK_CODE_LENGTH:${code.length}`);
+  }
+  return code;
+}
+
+/**
+ * M12/T9 F-043: the CANONICAL form of a Discord thread id.
+ *
+ * A thread id travels with a transport prefix (`channel:<id>`) when it comes
+ * from a button interaction, and bare when it comes from the thread the card
+ * was created in. Both name the SAME thread, so the durable comparison of a
+ * decision against the thread the card was surfaced in must compare the
+ * canonical forms - otherwise a decision from the RIGHT thread is refused as a
+ * foreign one.
+ *
+ * The rule lives here, once, because the plugin and the reducer must not hold
+ * two copies of it: two copies of one rule are two rules.
+ *
+ * Returns null for anything that is not a non-empty thread id, so an ABSENT
+ * thread id can never satisfy a comparison by being absent.
+ */
+export function normalizeGovernanceThreadId(value) {
+  if (typeof value !== "string") return null;
+  const canonical = value
+    .trim()
+    .replace(/^channel:/u, "")
+    .trim();
+  return canonical.length > 0 ? canonical : null;
+}
+
+export function normalizeTaskCodeDate(date) {
+  if (date instanceof Date) {
+    if (Number.isNaN(date.getTime()))
+      throw new RangeError("TASK_CODE_DATE_INVALID");
+    const year = String(date.getUTCFullYear()).padStart(4, "0");
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}${month}${day}`;
+  }
+  if (typeof date === "string" && /^[0-9]{8}$/u.test(date)) return date;
+  throw new RangeError("TASK_CODE_DATE_INVALID");
+}
+
+/**
+ * Generate a code that is not already taken. `isTaken` is consulted for every
+ * candidate so a collision can never produce two tasks sharing one code, and the
+ * attempt count is bounded so a caller cannot spin forever on a hostile
+ * predicate.
+ */
+export function buildUniqueTaskCode({
+  date,
+  random,
+  isTaken,
+  maxAttempts = 32,
+}) {
+  if (typeof isTaken !== "function") {
+    throw new TypeError("TASK_CODE_IS_TAKEN_REQUIRED");
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new RangeError("TASK_CODE_MAX_ATTEMPTS_INVALID");
+  }
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = buildTaskCode({
+      date,
+      random: (index) => random(index, attempt),
+    });
+    if (!isTaken(code)) return code;
+  }
+  throw new Error("TASK_CODE_COLLISION_EXHAUSTED");
+}
+
+/**
+ * M12/T1-R1 — the owner's instruction made this 12-character form the task
+ * IDENTITY, not a display alias: "task ID anh muốn identity vẫn là 12 kí tự thay vì
+ * 64 hex, để vậy cho đồng bộ." Two consequences are pinned by tests rather than by
+ * comment: the identity is no longer a function of the origin message, so replay
+ * detection reads the recorded binding (`findTaskByOriginBinding`); and every
+ * pre-existing 64-hex record must keep loading, so readers accept both shapes
+ * through TASK_ID_PATTERN while only this shape is ever minted.
+ *
+ * The date part is ordered ddmmyyyy as the owner described. Codes minted before this
+ * task by the display-alias generator read yyyymmdd; both are eight digits, both are
+ * accepted on read, and neither is authority on its own — the snapshot key is.
+ */
+export const TASK_ID_PATTERN =
+  "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$";
+
+export function isTaskCodeForm(value) {
+  return (
+    typeof value === "string" &&
+    new RegExp(TASK_CODE_PATTERN, "u").test(value) === true
+  );
+}
+
+export function formatTaskIdentityDate(date) {
+  if (date instanceof Date) {
+    if (Number.isNaN(date.getTime()))
+      throw new RangeError("TASK_CODE_DATE_INVALID");
+    const year = String(date.getUTCFullYear()).padStart(4, "0");
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${day}${month}${year}`;
+  }
+  if (typeof date === "string" && /^[0-9]{8}$/u.test(date)) return date;
+  throw new RangeError("TASK_CODE_DATE_INVALID");
+}
+
+/**
+ * Mint a governed task identity. `isTaken` is mandatory: uniqueness is now a
+ * property of the identity itself, so it is checked against every live task id and
+ * every recorded code before the id leaves this function, and exhaustion fails
+ * closed instead of issuing a second task under a shared identity.
+ */
+export function mintTaskId({
+  date = new Date(),
+  random,
+  isTaken,
+  maxAttempts = 32,
+}) {
+  if (typeof isTaken !== "function") {
+    throw new TypeError("TASK_ID_IS_TAKEN_REQUIRED");
+  }
+  return buildUniqueTaskCode({
+    date: formatTaskIdentityDate(date),
+    random,
+    isTaken,
+    maxAttempts,
+  });
+}
 
 function normalize(value, key = "") {
   if (typeof value === "string") return value.normalize("NFC");
@@ -63,6 +239,29 @@ function requireSnowflake(value) {
   return value;
 }
 
+/**
+ * M12/T9 F-157: the canonical HASH PREIMAGE serializer.
+ *
+ * ROLE: it produces the preimage of every governance digest. It normalizes
+ * unicode (NFC), drops undefined fields, sorts object keys and rejects
+ * anything JSON cannot represent faithfully (a non-integer number, a
+ * non-plain object), so the preimage is a function of WHAT was hashed and
+ * never of the order the caller happened to write the keys in.
+ *
+ * It is deliberately NOT interchangeable with the other two serializers, and
+ * each of them says the same about itself:
+ *
+ *   - `schema.mjs`'s `stableJson` is the COMPARISON serializer (key-sorted,
+ *     compact, no normalization): it answers "are these two JSON values the
+ *     same?".
+ *   - `lib/policy.mjs`'s `stableJson` is the CONFIG WRITER (pretty, key order
+ *     preserved): it answers "which bytes go into the operator's config
+ *     file?", and those bytes are pinned by the admission digests.
+ *
+ * Unifying them would change the bytes of every digest and of every written
+ * config, so each keeps its one role. What this band removes is the
+ * DUPLICATED DERIVATION (see `deriveReferenceId`), not the distinct roles.
+ */
 export function canonicalJson(value) {
   return JSON.stringify(normalize(value));
 }
@@ -73,6 +272,36 @@ export function canonicalHash(domain, value) {
     .digest("hex");
 }
 
+/**
+ * F-023: the ONE digest of the plan an owner approved.
+ *
+ * The owner's APPROVE used to be bound to a task id only: nothing in the
+ * ledger tied the consent to the work that then ran, so a re-brief between the
+ * card and the click executed the new plan under the old consent. This digest
+ * is derived from the task's OWN recorded brief — its revision and its whole
+ * node graph, every node's input/constraints/validation digests included — so
+ * it changes exactly when the plan changes, and it can be recomputed by any
+ * reader from the snapshot alone.
+ *
+ * It is deliberately derived from the recorded plan and not from a caller
+ * supplied summary, so a model-authored card body can never decide what the
+ * owner "approved".
+ */
+export function deriveApprovalPlanDigest({ brief_revision, nodes } = {}) {
+  return canonicalHash("zink-approval-plan-v1", {
+    brief_revision: Number.isSafeInteger(brief_revision)
+      ? brief_revision
+      : null,
+    nodes: Array.isArray(nodes) ? nodes : [],
+  });
+}
+
+/**
+ * M12/T1-R1: this is no longer the identity mint. It stays exported and stays the
+ * authoritative derivation for the 64-hex ids already written into the live ledger
+ * (the reducer re-derives those to prove a legacy record was not tampered with), and
+ * it remains the origin-binding digest a new task can be traced back through.
+ */
 export function deriveTaskId({
   task_schema_version,
   origin,
@@ -115,7 +344,29 @@ export function deriveTaskId({
   });
 }
 
-export function deriveDelegationId({
+/**
+ * M12/T9 F-371: the delegation id is a UUIDv4-SHAPED string.
+ *
+ * The id was a bare 64-hex sha256 digest, while the published tool-call
+ * envelope (`zink-tools/contracts/tool-call.schema.json`,
+ * `$defs/delegated_provenance.delegation_id`) requires a uuid v4 and the guard
+ * asserts one before it resolves a delegation
+ * (`guard.mjs`, `isUuidV4(delId)`). A 64-hex string satisfies neither, so
+ * EVERY delegated tool call was refused with AUTH_DELEGATION_NOT_FOUND before
+ * it could reach a specialist, while the ledger keyed the delegation under the
+ * very same 64-hex value: the ledger and the guard disagreed about one id.
+ *
+ * The derivation is UNCHANGED - the same domain tag over the same inputs -
+ * and only the RENDERING changed: the digest is formatted as a version-4
+ * UUID. The id therefore stays reproducible from the spawn proposal, and it
+ * now satisfies the published contract and the guard at the same time.
+ *
+ * The legacy 64-hex rendering is kept as `deriveLegacyDelegationId` so the
+ * reducer can still re-derive the ids the operational ledger already
+ * recorded: the identity derivation changed its FORM, and history written
+ * under the old form must keep replaying.
+ */
+export function deriveLegacyDelegationId({
   task_id,
   brief_revision,
   node_id,
@@ -129,6 +380,30 @@ export function deriveDelegationId({
     agent_id,
     attempt,
   });
+}
+
+/**
+ * Format a hex digest as a version-4 UUID: the version nibble and the
+ * RFC 4122 variant bits are set on the digest's own bytes, so the result is
+ * a function of the digest alone and never of ambient randomness.
+ */
+function formatUuidV4(digestHex) {
+  const bytes = Buffer.from(digestHex.slice(0, 32), "hex");
+  if (bytes.length !== 16) throw new TypeError("DELEGATION_ID_DIGEST_INVALID");
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+export function deriveDelegationId(fields) {
+  return formatUuidV4(deriveLegacyDelegationId(fields));
 }
 
 export const SPAWN_PROPOSAL_KEYS = Object.freeze([
@@ -184,12 +459,15 @@ export function buildSpawnProposal(fields) {
   };
 }
 
+/**
+ * M12/T9 F-157: the ONE derivation of a reference id.
+ *
+ * The guard used to re-inline `canonicalHash("zink-reference-v1", ref)` at its
+ * check site, so the domain tag lived in two places and the two could
+ * disagree. It calls this instead.
+ */
 export function deriveReferenceId(value) {
   return canonicalHash("zink-reference-v1", value);
-}
-
-export function deriveApprovalScopeDigest(value) {
-  return canonicalHash("zink-approval-scope-v1", value);
 }
 
 export function derivePrincipalRef(identityKey, rawDiscordId) {

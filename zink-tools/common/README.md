@@ -43,6 +43,8 @@ import { validateArtifactLogicalPath } from "./zink-tools/common/path-safety.mjs
 
 ```javascript
 // Ví dụ 1: Đường dẫn hợp lệ -> Trả về đường dẫn đã chuẩn hóa
+// (M12/T2.2-R3: chuẩn hóa nghĩa là phân cách bằng dấu gạch chéo thuận.
+//  "data\sub\f.csv" được chấp nhận và trả về "data/sub/f.csv".)
 const safePath = validateArtifactLogicalPath(
   "reports/q3/inventory_summary.xlsx",
 );
@@ -60,12 +62,19 @@ try {
 
 ## 4. Bảng Tra cứu Kiểm tra Hợp lệ / Bất hợp lệ
 
-| Đường dẫn kiểm tra        | Kết quả               | Lý do                                              |
-| ------------------------- | --------------------- | -------------------------------------------------- |
-| `data/sales.csv`          | **HỢP LỆ (PASS)**     | Đường dẫn tương đối chuẩn                          |
-| `reports/v1.0/kpi.xlsx`   | **HỢP LỆ (PASS)**     | Chứa ký tự số, chữ, dấu chấm                       |
-| `/root/data.csv`          | **BỊ TỪ CHỐI (DENY)** | Bắt đầu bằng dấu gạch chéo tuyệt đối               |
-| `C:\data\file.txt`        | **BỊ TỪ CHỐI (DENY)** | Chứa ổ đĩa Windows tuyệt đối                       |
-| `data/../secret.db`       | **BỊ TỪ CHỐI (DENY)** | Chứa ký hiệu duyệt thư mục cha `..`                |
-| `reports/CON.txt`         | **BỊ TỪ CHỐI (DENY)** | Chứa tên thiết bị dành riêng của Windows           |
-| `data/tệp_tiếng_việt.csv` | **BỊ TỪ CHỐI (DENY)** | Ký tự ngoài bảng mã ASCII an toàn `[a-zA-Z0-9_.-]` |
+| Đường dẫn kiểm tra        | Kết quả               | Lý do                                                        |
+| ------------------------- | --------------------- | ------------------------------------------------------------ |
+| `data/sales.csv`          | **HỢP LỆ (PASS)**     | Đường dẫn tương đối chuẩn                                    |
+| `reports/v1.0/kpi.xlsx`   | **HỢP LỆ (PASS)**     | Chứa ký tự số, chữ, dấu chấm                                 |
+| `/root/data.csv`          | **BỊ TỪ CHỐI (DENY)** | Bắt đầu bằng dấu gạch chéo tuyệt đối                         |
+| `C:\data\file.txt`        | **BỊ TỪ CHỐI (DENY)** | Chứa ổ đĩa Windows tuyệt đối                                 |
+| `data/../secret.db`       | **BỊ TỪ CHỐI (DENY)** | Chứa ký hiệu duyệt thư mục cha `..`                          |
+| `reports/CON.txt`         | **BỊ TỪ CHỐI (DENY)** | Chứa tên thiết bị dành riêng của Windows                     |
+| `data/tệp_tiếng_việt.csv` | **BỊ TỪ CHỐI (DENY)** | Ký tự ngoài bảng mã ASCII an toàn `[a-zA-Z0-9_.-]`           |
+| `data\sub\f.csv`          | **HỢP LỆ (PASS)**     | Gạch chéo ngược là phân cách hợp lệ; trả về `data/sub/f.csv` |
+| `mixed\slash/sub.csv`     | **HỢP LỆ (PASS)**     | Trộn hai kiểu phân cách; trả về `mixed/slash/sub.csv`        |
+| `a\..\escape.xlsx`        | **BỊ TỪ CHỐI (DENY)** | Duyệt thư mục cha `..`, kể cả khi viết bằng gạch chéo ngược  |
+| `\\server\share`          | **BỊ TỪ CHỐI (DENY)** | Đường dẫn UNC, segment đầu rỗng                              |
+| `trailing\`               | **BỊ TỪ CHỐI (DENY)** | Kết thúc bằng phân cách tạo ra segment rỗng                  |
+
+Bảng trên đo trực tiếp trên hàm (`M12/T2.2-R3`), không mô tả theo tài liệu cũ.

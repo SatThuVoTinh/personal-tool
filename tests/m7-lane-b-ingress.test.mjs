@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   registerTools,
   loadToolContractSchemas,
@@ -378,5 +381,223 @@ describe("Lane B — tool ingress & contract authority", () => {
       ).content[0].text,
     );
     assert.notEqual(wrappedAllow.status, "DENIED");
+  });
+
+  it("F-144: a successful zink_excel run satisfies its own output contract", async () => {
+    // Measured pre-fix: the excel writer's own success envelope was rejected
+    // by the excel contract ? `status`/`tool`/`preview_*` are not declared
+    // there and `success` was never emitted ? so every successful workbook
+    // came back to the agent as INVALID_OUTPUT_SCHEMA while a failed tool
+    // passed the same gate.
+    const contracts = loadToolContractSchemas();
+    const excelContract = contracts.zink_excel;
+    assert.ok(excelContract?.rawSchema?.$defs?.output);
+    const { executeExcelOperation } =
+      await import("../integrations/openclaw/lib/excel-writer.mjs");
+    const dir = mkdtempSync(path.join(tmpdir(), "zink-f144-"));
+    try {
+      const result = executeExcelOperation(
+        {
+          operation: "generate",
+          file_path: "report.xlsx",
+          specification: {
+            sheets: [{ name: "S", columns: ["a"], rows: [["x"]] }],
+          },
+        },
+        dir,
+      );
+      assert.equal(result.status, "success");
+      const check = validateToolOutputEnvelope(
+        "zink_excel",
+        { content: [{ type: "text", text: JSON.stringify(result) }] },
+        excelContract,
+      );
+      assert.equal(
+        check.ok,
+        true,
+        `a successful excel run must not be INVALID_OUTPUT_SCHEMA: ${JSON.stringify(check.response ?? {})}`,
+      );
+
+      // The gate is not weakened: an output that really violates the contract
+      // is still blocked.
+      const blocked = validateToolOutputEnvelope(
+        "zink_excel",
+        {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ operation: "generate", bogus: true }),
+            },
+          ],
+        },
+        excelContract,
+      );
+      assert.equal(blocked.ok, false);
+      assert.equal(
+        JSON.parse(blocked.response.content[0].text).code,
+        "INVALID_OUTPUT_SCHEMA",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// F-470 / R9-T09-1: the registered tool dispatcher is the model-facing sink.
+// Its catch paths forwarded `err.message` verbatim and echoed the whole tool
+// output (`rawOutput`/`parsedOutput`) into the envelope, so internal failure
+// text and unredacted output — a class that carries absolute filesystem paths,
+// session keys and digests — reached model context, while the repo's own SQL
+// sibling already returns a fixed message plus a symbolic code.
+describe("F-470 — dispatcher failure envelopes are symbolic, never raw", () => {
+  const BANNED_CLASSES = [
+    ["session key", /\bsess-[a-zA-Z0-9_-]{8,}\b/u],
+    ["64-hex digest", /\b[a-f0-9]{64}\b/u],
+    [
+      "filesystem path",
+      /(?:[a-zA-Z]:\\[^\s"'<>|]+|\/(?:Users|home|tmp|etc|var|app)\/[^\s"'<>|]+)/u,
+    ],
+    ["bearer token", /Bearer\s+[A-Za-z0-9._~+/-]+=*/iu],
+  ];
+
+  it("the parameter-schema refusal returns fixed text plus a symbolic code", async () => {
+    const { api, tools } = captureApi();
+    registerTools(api);
+    const wrapper = tools.find((t) => t.name === "zink_excel");
+    const env = statusOf(await wrapper.execute({ agent: "excel" }, {}));
+    assert.equal(env.status, "INVALID_PARAMETERS");
+    assert.equal(env.code, "INVALID_PARAMETERS");
+    assert.deepEqual(
+      env.errors,
+      ["INVALID_PARAMETERS: governed tool parameter validation failed closed"],
+      "errors must be the fixed canonical text, never the thrown error message",
+    );
+  });
+
+  it("an output-schema refusal echoes neither the output nor its banned classes", () => {
+    const contracts = loadToolContractSchemas();
+    const sentinel = {
+      status: "success",
+      workbook: "C:\\Users\\hoang_vinh\\Documents\\secret-target.xlsx",
+      session_key: "sess-a1b2c3d4e5f6g7h8",
+      digest: "a".repeat(64),
+      authorization: "Bearer super.secret.value",
+    };
+    const check = validateToolOutputEnvelope(
+      "zink_excel",
+      { content: [{ type: "text", text: JSON.stringify(sentinel) }] },
+      contracts.zink_excel,
+    );
+    assert.equal(check.ok, false);
+    const text = check.response.content[0].text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "INVALID_OUTPUT_SCHEMA");
+    assert.equal(env.code, "INVALID_OUTPUT_SCHEMA");
+    assert.ok(
+      !("rawOutput" in env),
+      "the model-facing envelope must not carry the tool output",
+    );
+    assert.ok(
+      !("parsedOutput" in env),
+      "the model-facing envelope must not carry the parsed tool output",
+    );
+    assert.deepEqual(
+      env.errors,
+      [
+        "INVALID_OUTPUT_SCHEMA: governed tool output did not satisfy its contract",
+      ],
+      "errors must be the fixed canonical text, never the thrown error message",
+    );
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
+  });
+
+  it("a non-JSON tool output is refused with a symbolic code and no echoed bytes", () => {
+    const contracts = loadToolContractSchemas();
+    const raw =
+      "fatal: cannot open /home/hoang_vinh/.openclaw-zink/ledger.json";
+    const check = validateToolOutputEnvelope(
+      "zink_excel",
+      { content: [{ type: "text", text: raw }] },
+      contracts.zink_excel,
+    );
+    assert.equal(check.ok, false);
+    const text = check.response.content[0].text;
+    const env = JSON.parse(text);
+    assert.deepEqual(env.errors, ["NON_JSON_OUTPUT"]);
+    assert.ok(
+      !text.includes("/home/hoang_vinh"),
+      "raw output bytes must not echo",
+    );
+  });
+
+  it("an execute throw returns the fixed sentence plus the symbolic code", async () => {
+    const { api, tools } = captureApi();
+    const rawMessage =
+      "EIO: cannot write C:\\Users\\hoang_vinh\\state\\ledger.json for sess-a1b2c3d4e5f6g7h8";
+    registerTools(api, {
+      toolRegistry: {
+        zink_sql: {
+          description: "throwing implementation",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            throw Object.assign(new Error(rawMessage), {
+              code: "DUCKDB_TIMEOUT",
+            });
+          },
+        },
+      },
+    });
+    const wrapper = tools.find((tool) => tool.name === "zink_sql");
+    assert.ok(wrapper, "the stub tool must still be registered");
+    const text = (await wrapper.execute({ agent: "sql" }, {})).content[0].text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "ERROR");
+    assert.equal(env.message, "Governed tool execution failed closed.");
+    assert.equal(env.code, "DUCKDB_TIMEOUT");
+    assert.equal(env.error, "DUCKDB_TIMEOUT");
+    assert.ok(!text.includes("EIO"), "the raw message must not echo");
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
+  });
+
+  it("an uncoded execute throw carries the symbolic fallback, not the message", async () => {
+    const { api, tools } = captureApi();
+    registerTools(api, {
+      toolRegistry: {
+        zink_python: {
+          description: "throwing implementation",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            throw new Error(
+              "sandbox root /home/hoang_vinh/.openclaw-zink/sandbox is unavailable",
+            );
+          },
+        },
+      },
+    });
+    const wrapper = tools.find((tool) => tool.name === "zink_python");
+    const text = (await wrapper.execute({ agent: "python" }, {})).content[0]
+      .text;
+    const env = JSON.parse(text);
+    assert.equal(env.status, "ERROR");
+    assert.equal(env.message, "Governed tool execution failed closed.");
+    assert.equal(env.code, "TOOL_EXECUTION_FAILED");
+    assert.equal(env.error, "TOOL_EXECUTION_FAILED");
+    assert.ok(!text.includes("sandbox root"), "the raw message must not echo");
+    for (const [label, pattern] of BANNED_CLASSES) {
+      assert.ok(
+        !pattern.test(text),
+        `the envelope leaks the ${label} class: ${text.slice(0, 400)}`,
+      );
+    }
   });
 });

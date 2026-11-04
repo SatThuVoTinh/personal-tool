@@ -14,8 +14,30 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unconfigured}
       POSTGRES_USER: postgres
+      # F-INFRA-002 (owner option C, 2026-11-01): the image init phase runs
+      # bootstrap-postgres-init.sh from /docker-entrypoint-initdb.d on the
+      # first boot of an empty volume, so it needs the same fail-closed module
+      # passwords the one-shot postgres-bootstrap helper already carries. The
+      # superuser can already reset these roles, so the effective module
+      # boundary is unchanged. start.ps1 validates them before its first `up`.
+      KNOWLEDGE_DB_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
+      N8N_POSTGRES_PASSWORD: ${N8N_POSTGRES_PASSWORD:-unconfigured}
+      SKILL_DB_PASSWORD: ${SKILL_DB_PASSWORD:-unconfigured}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # F-INFRA-002 (owner option C, 2026-11-01): provision the module roles
+      # while the image initializes an empty data volume. The wrapper is what
+      # initdb.d runs; the bootstrap stays the single role authority and the
+      # postgres-bootstrap service still re-runs it on every start, so
+      # existing volumes converge without a re-init.
+      - type: bind
+        source: ../scripts/bootstrap-postgres-init.sh
+        target: /docker-entrypoint-initdb.d/10-bootstrap-postgres.sh
+        read_only: true
+      - type: bind
+        source: ../scripts/bootstrap-postgres.sh
+        target: /usr/local/bin/bootstrap-postgres.sh
+        read_only: true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --username=postgres --dbname=postgres"]
       interval: 5s
@@ -37,7 +59,9 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/bootstrap-postgres.sh"]
     command: []
     environment:
+      KNOWLEDGE_DB_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
       N8N_POSTGRES_PASSWORD: ${N8N_POSTGRES_PASSWORD:-unconfigured}
+      SKILL_DB_PASSWORD: ${SKILL_DB_PASSWORD:-unconfigured}
       PGCONNECT_TIMEOUT: "5"
       PGDATABASE: postgres
       PGHOST: postgres
@@ -110,6 +134,11 @@ services:
     profiles: ["knowledge", "all"]
     ports:
       - "127.0.0.1:8080:8080"
+    # F-288 (R7-C4-01): the deployed gateway proxies the model service on
+    # the host, so it needs the same host-gateway mapping the acceptance
+    # overlay gives it.
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - type: bind
         source: ../../nginx/conf.d/default.conf
@@ -143,13 +172,16 @@ services:
     environment:
       KNOWLEDGE_DATABASE_HOST: postgres
       KNOWLEDGE_DATABASE_NAME: postgres
-      KNOWLEDGE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-unconfigured}
+      KNOWLEDGE_DATABASE_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-unconfigured}
       KNOWLEDGE_DATABASE_PORT: "5432"
-      KNOWLEDGE_DATABASE_USER: postgres
+      KNOWLEDGE_DATABASE_USER: knowledge_app
       KNOWLEDGE_EMBEDDING_DIMENSIONS: "1024"
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-bge-m3:latest}
       KNOWLEDGE_INDEX_ADVISORY_LOCK_KEY: "741212391041002"
-      KNOWLEDGE_OLLAMA_URL: http://host.docker.internal:11434
+      # F-288 (R7-C4-01): the model calls go through the allowlisted
+      # gateway, so the deployed stack carries the same egress boundary the
+      # acceptance overlay proves.
+      KNOWLEDGE_OLLAMA_URL: http://nginx:8080/ollama
       KNOWLEDGE_RERANKER_MANIFEST_PATH: /app/artifacts/reranker-manifest.json
       KNOWLEDGE_RERANKER_MODEL_PATH: /app/artifacts/model.int8.onnx
       KNOWLEDGE_VAULT_ROOT: /vault
@@ -206,8 +238,16 @@ services:
       - platform
 
 networks:
+  # The shared platform network, declared in
+  # infrastructure/networking/networks.yml and consumed here by that shared
+  # name. The Docker network is project scoped (<project>_platform), so the
+  # acceptance stacks stay isolated from the live stack.
+  # F-INFRA-001 (R9-I05-01): the platform network is internal to enforce egress
+  # through the Nginx model gateway; containers cannot bypass the allowlist by
+  # reaching host.docker.internal or other external hosts.
   platform:
     driver: bridge
+    internal: true
 
 volumes:
   n8n-data:

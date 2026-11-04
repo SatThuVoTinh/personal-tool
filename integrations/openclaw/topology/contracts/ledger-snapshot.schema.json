@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "zink://contracts/ledger-snapshot-v1",
   "title": "LedgerSnapshotV1",
+  "x-zink-contract-version": "1.1.0",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -48,7 +49,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[a-f0-9]{64}$": {
+        "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$": {
           "oneOf": [
             {
               "type": "object",
@@ -73,7 +74,12 @@
               "properties": {
                 "task_id": {
                   "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
+                  "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
+                },
+                "task_code": {
+                  "description": "M10/T2-R12: owner-facing 12-character code (8 date + 4 code characters). Optional so tasks admitted before it replay byte-identically. Display alias only — never an authority token.",
+                  "type": "string",
+                  "pattern": "^[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4}$"
                 },
                 "origin": {
                   "const": "discord"
@@ -101,6 +107,10 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 256
+                },
+                "primary_coordinator": {
+                  "description": "F-057: the coordinator that owns this task's execution, taken from the ledger and never defaulted. OPTIONAL so every task recorded before the field existed still validates under additionalProperties:false; its ABSENCE is what makes a task non-dispatchable, so a pre-existing task can never acquire a coordinator by replay.",
+                  "enum": ["o1", "o2"]
                 },
                 "root_run_id": {
                   "type": "string",
@@ -157,7 +167,7 @@
                   "type": "object",
                   "additionalProperties": false,
                   "patternProperties": {
-                    "^[a-f0-9]{64}$": {
+                    "^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$": {
                       "type": "object",
                       "additionalProperties": false,
                       "required": [
@@ -180,7 +190,7 @@
                       "properties": {
                         "task_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                         },
                         "brief_revision": {
                           "type": "integer",
@@ -203,15 +213,7 @@
                           ]
                         },
                         "parent_agent_id": {
-                          "enum": [
-                            "main",
-                            "o1",
-                            "o2",
-                            "excel",
-                            "power-bi",
-                            "sql",
-                            "python"
-                          ]
+                          "$ref": "ledger-event.schema.json#/$defs/parent_agent_id"
                         },
                         "parent_session_key": {
                           "type": "string",
@@ -239,7 +241,7 @@
                         },
                         "delegation_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
                         },
                         "expected_governance_hash": {
                           "type": "string",
@@ -349,6 +351,54 @@
                   },
                   "maxProperties": 72
                 },
+                "coordinator_runs": {
+                  "description": "M10/T2: gateway-started coordinator run bindings, keyed by queue attempt. OPTIONAL and never required, so every pre-binding snapshot still validates under additionalProperties:false. Each entry binds exactly one attempt to the runtime identity the gateway issued for it; attempt isolation is enforced by the reducer, not by this vocabulary.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[1-9][0-9]*$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "task_id",
+                        "coordinator",
+                        "attempt",
+                        "lease_id",
+                        "session_key",
+                        "run_id"
+                      ],
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
+                        },
+                        "coordinator": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "lease_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "session_key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "run_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        }
+                      }
+                    }
+                  }
+                },
                 "continuations": {
                   "type": "object",
                   "additionalProperties": false,
@@ -369,7 +419,7 @@
                       "properties": {
                         "task_id": {
                           "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
+                          "pattern": "^([0-9a-f]{64}|[0-9]{8}[CDEFHJKMNPQRTUVWXY379]{4})$"
                         },
                         "brief_revision": {
                           "type": "integer",
@@ -445,14 +495,7 @@
                 "semantic_contract_status": {
                   "$ref": "ledger-event.schema.json#/$defs/semantic_contract_status"
                 },
-                "accepted_reference_digests": {
-                  "type": "object",
-                  "maxProperties": 72,
-                  "additionalProperties": {
-                    "type": "string",
-                    "pattern": "^[a-f0-9]{64}$"
-                  }
-                },
+
                 "approvals": {
                   "type": "object",
                   "maxProperties": 16
@@ -527,6 +570,11 @@
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 },
+                "results_thread_id": {
+                  "description": "M12/T2-R1: the #results forum thread this task's governed result was surfaced in, projected from WORKFLOW_RESULT_SURFACED. Paired with the long-declared approval_thread_id slot so 'the owner has been shown this' is a durable fact rather than a log line, and a retry cannot open a second thread for the same work.",
+                  "type": "string",
+                  "maxLength": 256
+                },
                 "result_pending_at": {
                   "type": "string",
                   "format": "date-time"
@@ -573,6 +621,10 @@
                 "execution_payload_digest": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
+                },
+                "execution_outcome_status": {
+                  "description": "M12/T9 F-394 (R9-L02-2): the outcome derived from the gate statuses a task-level WORKFLOW_RESULT_RECORDED carried: FAILED when either technical_status or business_status is FAIL, COMPLETE when both are PASS. OPTIONAL and never required, so every task recorded before the field existed still validates under additionalProperties:false; its ABSENCE keeps the legacy COMPLETE fallback for pre-existing journals. resolveAcceptedOutcome reads it so an ACCEPT of a FAIL/FAIL result yields FAILED instead of COMPLETE.",
+                  "enum": ["COMPLETE", "FAILED"]
                 },
                 "artifact_set_digest": {
                   "type": "string",

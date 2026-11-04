@@ -11,7 +11,10 @@ import os from "node:os";
 import path from "node:path";
 import { QueueManager } from "../integrations/openclaw/lib/queue-manager.mjs";
 import { handleExecutionFinished } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
-import { evaluateResultGate } from "../integrations/openclaw/lib/artifact-validator.mjs";
+import {
+  evaluateResultGate,
+  FORMAT_MAX_SIZE_LIMITS,
+} from "../integrations/openclaw/lib/artifact-validator.mjs";
 import {
   ensureLedger,
   ledgerPaths,
@@ -505,6 +508,115 @@ describe("M8-054 — result digest is bound to the record", () => {
           }),
         { message: /RESULT_MISMATCH/u },
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// F-472 / R9-T12-1: the plugin minted the artifact-set sha256 and the
+// payloadDigest from unbounded full reads guarded only by path containment, so
+// an oversized in-sandbox artifact was fully read and hashed before ANY size
+// ceiling was consulted — including the validator's own, which runs later.
+// The ceiling must be a stat over FORMAT_MAX_SIZE_LIMITS taken before the read,
+// and the digest only minted once that bound passes.
+describe("F-472 — the size ceiling precedes the digest", () => {
+  const overLimitPy = (dir, name) => {
+    const file = path.join(dir, name);
+    writeFileSync(file, Buffer.alloc(FORMAT_MAX_SIZE_LIMITS.python + 1, 0x20));
+    return file;
+  };
+
+  it("refuses an over-limit set member before reading or hashing it", () => {
+    const dir = fixtureDir();
+    try {
+      const qm = makeQueue(dir);
+      qm.enqueueTask({ taskId: "f472-set", primaryCoordinator: "o1" });
+      const claim = qm.claimTaskById({ taskId: "f472-set", agentId: "o1" });
+      const big = overLimitPy(dir, "huge.py");
+      const res = handleExecutionFinished({
+        taskId: "f472-set",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: [big],
+        technicalConfig: TECH,
+        businessData: BIZ,
+        businessConfig: BIZCFG,
+        queueManager: qm,
+      });
+      assert.equal(res.status, "FAILED");
+      assert.match(
+        res.error,
+        /ARTIFACT_TOO_LARGE/u,
+        `expected the artifact layer to name the ceiling, got ${JSON.stringify(res.error)}`,
+      );
+      assert.match(res.error, /ARTIFACT_SIZE_EXCEEDED/u);
+      // The refusal belongs to the artifact layer: neither the validation gate
+      // nor any digest ran over the over-limit bytes.
+      assert.equal(res.gateResult, undefined);
+      assert.equal(res.artifactSetDigest, undefined);
+      assert.equal(res.sha256, undefined);
+      assert.notEqual(qm.getTask("f472-set").status, "RESULT_PENDING_REVIEW");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an over-limit singular artifactPath before minting payloadDigest", () => {
+    const dir = fixtureDir();
+    try {
+      const qm = makeQueue(dir);
+      qm.enqueueTask({ taskId: "f472-solo", primaryCoordinator: "o1" });
+      const claim = qm.claimTaskById({ taskId: "f472-solo", agentId: "o1" });
+      const big = overLimitPy(dir, "solo.py");
+      const res = handleExecutionFinished({
+        taskId: "f472-solo",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: [],
+        artifactPath: big,
+        technicalConfig: TECH,
+        businessData: BIZ,
+        businessConfig: BIZCFG,
+        queueManager: qm,
+      });
+      assert.equal(res.status, "FAILED");
+      assert.match(
+        res.error,
+        /ARTIFACT_TOO_LARGE/u,
+        `expected the payloadDigest read site to be bounded, got ${JSON.stringify(res.error)}`,
+      );
+      assert.equal(res.gateResult, undefined);
+      assert.equal(res.resultDigest, undefined);
+      assert.notEqual(qm.getTask("f472-solo").status, "RESULT_PENDING_REVIEW");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still digests an in-sandbox artifact that is within its ceiling", () => {
+    const dir = fixtureDir();
+    try {
+      const qm = makeQueue(dir);
+      qm.enqueueTask({ taskId: "f472-ok", primaryCoordinator: "o1" });
+      const claim = qm.claimTaskById({ taskId: "f472-ok", agentId: "o1" });
+      const ok = makeCsv(dir, "small.csv", CSV);
+      const res = handleExecutionFinished({
+        taskId: "f472-ok",
+        agentId: "o1",
+        leaseId: claim.leaseId,
+        attempt: claim.task.attempt,
+        artifacts: [ok],
+        technicalConfig: TECH,
+        businessData: BIZ,
+        businessConfig: BIZCFG,
+        queueManager: qm,
+      });
+      assert.equal(res.status, "READY_FOR_REVIEW");
+      assert.match(res.artifactSetDigest, /^[a-f0-9]{64}$/u);
+      assert.equal(res.artifactSet[0].sha256.length, 64);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

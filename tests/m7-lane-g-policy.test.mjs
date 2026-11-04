@@ -102,13 +102,18 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         assert.equal(next.tasks[p.task_id].nodes.length, 1);
       }
     }
+    // A pairing the canonical table does not admit is refused. M12/T9 F-060
+    // (the owner's restatement of 2026-10-21) moved the `semantic` stack to
+    // @O1 - the meaning layer is DATA work - so the pairing this case used
+    // ("o1 on semantic") is admitted now, and the claim is carried by a
+    // pairing the table refuses under both the old and the new one.
     assert.throws(
       () =>
         applyWorkflowEvent(snap, "WORKFLOW_BRIEF_ACTIVATED", {
           task_id: payload.task_id,
           brief_revision: 1,
           semantic_contract_status: "VALID",
-          nodes: [nodeFixture("o1", "semantic")],
+          nodes: [nodeFixture("o2", "data_plant")],
         }),
       { code: "UNAUTHORIZED_TARGET" },
     );
@@ -214,11 +219,14 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
     const content = "# skill";
     const contentDigest = canonicalHash("zink-skill-content-v1", content);
     // Shape 1: the skill publication packet the live propose path builds.
+    // A skill approval is a governance transaction with its own proposal
+    // identity; it carries no workflow task id at all.
     const skillPacket = {
       schema_version: "1.0.0",
       governance_version: "m8-t2.2-r4",
+      subject_type: "SKILL_CANDIDATE_APPROVAL",
       approval_id: "prop-1",
-      task_id: canonicalHash("zink-skill-approval-v1", "prop-1"),
+      proposal_id: "prop-1",
       brief_revision: 1,
       exact_target: "skills/excel/filter@1.0.0",
       exact_operation: "SKILL_CANDIDATE_APPROVAL",
@@ -227,6 +235,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         capability: "filter",
         version: "1.0.0",
         content_sha256: contentDigest,
+        source_type: "execution",
       },
       impact: "i",
       recovery_proposal: "r",
@@ -234,7 +243,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       expires_at: new Date().toISOString(),
       approval_scope_digest: canonicalHash(
         "zink-approval-scope-v1",
-        `${"skills/excel/filter@1.0.0"}|SKILL_CANDIDATE_APPROVAL|${contentDigest}`,
+        `${"skills/excel/filter@1.0.0"}|SKILL_CANDIDATE_APPROVAL|${contentDigest}|execution`,
       ),
       publication_status: "pending_owner_post",
       proposal: { proposal_id: "prop-1" },
@@ -271,7 +280,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         { ...invocationApproval, approval_scope_digest: undefined },
       ],
       [
-        "a skill packet whose task id is not a digest",
+        "a skill packet carrying a workflow task id",
         { ...skillPacket, task_id: "task-skill-prop-1" },
       ],
     ]) {
@@ -345,17 +354,26 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         assert.match(file, /^[A-Za-z0-9._-]+\.js$/u, `${version}: ${file}`);
         assert.match(entry.sha256, /^[a-f0-9]{64}$/u, `${version}: ${file}`);
         assert.ok(
-          entry.role === "selection" || entry.role === "announce",
+          entry.role === "selection" ||
+            entry.role === "announce" ||
+            entry.role === "discord-preflight",
           `${version}: ${file} must declare a known role`,
         );
-        // Both roles must be present in every release, or a release silently
-        // loses run admission or announce governance.
+        // Every release pins selection + announce, or it silently loses run
+        // admission or announce governance. M10/T2-R5 additionally pins the
+        // Discord preflight bundle on the deployed lineage (2026.6.34) so
+        // structured inbound metadata reaches admission; the separate
+        // Windows lineage keeps its two-file pin.
         roles.add(entry.role);
       }
+      const required =
+        version === "2026.6.34"
+          ? ["announce", "discord-preflight", "selection"]
+          : ["announce", "selection"];
       assert.deepEqual(
         [...roles].sort(),
-        ["announce", "selection"],
-        `${version} must pin a selection and an announce bundle`,
+        required,
+        `${version} must pin its required bundles`,
       );
     }
     const root = mkdtempSync(path.join(os.tmpdir(), "lane-pin-"));
@@ -425,23 +443,50 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
       NATIVE_RUNTIME_PINS,
       NATIVE_SUPPORTED_RUNTIME_VERSIONS,
     } = await import("../integrations/openclaw/topology/lib/native-patch.mjs");
+    const { GOVERNANCE_VERSION } =
+      await import("../integrations/openclaw/topology/lib/canonical.mjs");
     // The manifest must be declared in exactly ONE place. The defect was two
     // declarations with divergent fields, so a second literal is the regression.
     const moduleSource = readFileSync(
       path.join(REPO, "integrations/openclaw/topology/lib/native-patch.mjs"),
       "utf8",
     );
-    const manifestLiterals = moduleSource.match(/version: "m7-t2-r12"/gu);
+    // M12/T9 F-185: the manifest's version is no longer a frozen literal - it
+    // is stamped from the one authoritative governance-revision source
+    // (`GOVERNANCE_VERSION` in `topology/lib/canonical.mjs`), so the literal
+    // this test used to pin is gone. The claim the test exists to make is
+    // UNCHANGED: the manifest must be declared exactly once, in the shared
+    // builder. It is now pinned against the authoritative constant, so a
+    // SECOND declaration of the version is still the regression it catches.
+    const manifestLiterals = moduleSource.match(
+      /version: GOVERNANCE_VERSION/gu,
+    );
     assert.equal(
       manifestLiterals.length,
       1,
       "the backup manifest must be declared exactly once, in the shared builder",
     );
+    // The manifest is now built once by `ensureNativeBackup`, which the fresh,
+    // re-take and partly-patched converge paths all share. Three call sites, one
+    // declaration: a second literal is the regression this test exists to catch.
     assert.equal(
-      moduleSource.match(/const manifest = nativeBackupManifest\(root\);/gu)
+      moduleSource.match(
+        /ensureNativeBackup\(backupRoot, roots, inspection, version\)/gu,
+      ).length,
+      // M12/T9: four now - the declaration plus THREE paths (predecessor
+      // upgrade, re-take and converge). The predecessor branch rewrote the
+      // live runtime without taking the backup the caller handed it (F-146),
+      // so it now shares the one builder like every other path. The
+      // regression this test guards against is a SECOND DECLARATION, which
+      // the two assertions above still pin.
+      4,
+      "predecessor upgrade, fresh patch, re-take and converge must all share the one backup builder",
+    );
+    assert.equal(
+      moduleSource.match(/const next = nativeBackupManifest\(roots\);/gu)
         .length,
-      2,
-      "both apply paths (fresh patch and re-take) must use the shared builder",
+      1,
+      "the shared builder must be the only place a manifest is constructed",
     );
     const root = mkdtempSync(path.join(os.tmpdir(), "zink-native-manifest-"));
     try {
@@ -454,7 +499,7 @@ describe("Lane G — policy & lifecycle contract reconciliation", () => {
         const manifest = nativeBackupManifest(root);
         assert.equal(
           manifest.version,
-          "m7-t2-r12",
+          GOVERNANCE_VERSION,
           `${version}: manifest version`,
         );
         assert.equal(

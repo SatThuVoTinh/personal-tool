@@ -26,6 +26,10 @@ services:
   knowledge:
     environment:
       KNOWLEDGE_OLLAMA_URL: http://nginx:8080/ollama
+      # F-323 (R7-E5-04): the acceptance stack pins the model its vector
+      # dimensions were designed for, so the acceptance run cannot resolve a
+      # different model than the one the dimension assertions are written for.
+      KNOWLEDGE_EMBEDDING_MODEL: bge-m3:latest
     extra_hosts: !reset []
     read_only: true
     cap_drop:

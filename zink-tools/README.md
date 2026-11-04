@@ -1,5 +1,17 @@
 # Zink Tools (Công cụ Zink)
 
+> ## Trạng thái thật của các backend được nhắc đến trong tài liệu này
+>
+> | Năng lực / adapter                                                                     | Trạng thái                                                                                                                                                                              |
+> | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `zink_n8n` (n8n)                                                                       | **Thật.** `zink-tools/n8n/trigger.mjs` gọi webhook loopback, kiểm tra registry, timeout, chặn redirect, giới hạn kích thước, chuẩn hóa lỗi.                                             |
+> | `zink_excel`                                                                           | **Thật, một engine duy nhất.** `integrations/openclaw/lib/excel-writer.mjs` sinh workbook thật trong sandbox chuyên môn.                                                                |
+> | `zink_sql`                                                                             | **Engine thật, dữ liệu giả lập.** DuckDB thật được chạy, nhưng trên contract fixture 2 dòng trong database tạm; kết quả trả `FIXTURE_CONTRACT_EXECUTED`. KHÔNG phải dữ liệu kinh doanh. |
+> | `zink_knowledge_search`, `zink_skill_*`                                                | **Thật.** Knowledgebase HTTP client và skill store Git-native.                                                                                                                          |
+> | `zink_power_bi`                                                                        | **CHƯA TRIỂN KHAI.** Không có executor Power BI nào trong repo. Trả `ENGINE_NOT_IMPLEMENTED` kèm `BLOCKED`.                                                                             |
+> | `zink_python`                                                                          | **CHƯA TRIỂN KHAI.** Không có sandbox Python có kiểm soát. Cố tình KHÔNG dùng host python, child_process, PowerShell, WSL hay Docker.                                                   |
+> | BigQuery, MotherDuck, Databricks, Kaggle, MLflow, DagsHub, Hugging Face, Streamlit, R2 | **Giả lập / contract test double.** Xem `adapters/README.md`.                                                                                                                           |
+
 **Zink Tools** cung cấp các giao diện công cụ có thể gọi (callable interfaces), bộ điều hợp (adapters) và hợp đồng cho Excel, Power BI, SQL, Python, n8n cũng như các bài toán khoa học quyết định.
 
 Đây là một ranh giới quản trị mỏng (thin governed boundary), không phải là hệ thống điều phối, không lưu trữ trạng thái workflow, không phải cơ sở tri thức hay nền tảng tổng quát.

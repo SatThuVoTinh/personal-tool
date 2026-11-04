@@ -24,8 +24,16 @@ Hệ thống bao gồm đúng 3 module logic ngang hàng (peer modules):
 personal-tool/
 ├── apps/knowledge/        # Zink Knowledgebase: ingestion, index, retrieval và trích dẫn Knowledge Vault
 ├── zink-skill-store/      # Zink Skill Store: lưu trữ skill được quản trị và template Excel/Power BI
-└── zink-tools/            # Zink Tools: ranh giới mỏng cho 5 công cụ callable và các adapter hạ tầng
+├── zink-tools/            # Zink Tools: ranh giới mỏng cho 5 công cụ callable và các adapter hạ tầng
+├── integrations/openclaw/ # Host runtime của OpenClaw: orchestration, workflow state, ledger (KHÔNG phải module thứ 4)
+└── platforms/             # Đặc tả kiến trúc mục tiêu (KHÔNG phải runtime, KHÔNG phải module)
 ```
+
+Ba module logic ở trên là **toàn bộ** module của hệ thống. `integrations/openclaw/` là **hosting boundary**
+của OpenClaw — nơi chứa orchestration, workflow state và ledger của runtime, được OpenClaw sở hữu theo
+`AGENTS.md` §9; nó không phải module logic thứ tư. `platforms/` là đặc tả kiến trúc mục tiêu: không phải
+runtime, không sở hữu state, và runtime hiện hành vẫn là `apps/knowledge/`. Bản đồ sở hữu đầy đủ cho
+mọi cây top-level nằm ở `docs/architecture/repository-topology.md`.
 
 - **Zink Knowledgebase:** Chịu trách nhiệm quản lý tài liệu tham khảo, ingestion PDF/Markdown từ Obsidian Vault của con người (mount ở chế độ chỉ đọc `read-only`), lập chỉ mục HNSW/FTS và cung cấp API truy xuất.
 - **Zink Skill Store:** Lưu trữ các kỹ năng và template phân tích đã được chuẩn hóa, hoàn toàn tách biệt với chỉ mục nghiên cứu của Knowledgebase.
@@ -41,15 +49,25 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 ### Bảng Tổng hợp Danh mục 7 Bot
 
-| Agent ID   | Tên hiển thị Discord | Snowflake ID          | Handle / Tag        | Nhiệm vụ chính                                                                                                            | Công cụ Zink được gọi                                                                                                  | Cấp bậc & Thẩm quyền             |
-| :--------- | :------------------- | :-------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------- | :------------------------------- |
-| `main`     | **Quản Lý**          | `1545436878835163156` | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết                   | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)   |
-| `o1`       | **Điều Phối 1 (O1)** | `1545437953197744248` | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results` | `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`            | Giám sát Thực thi (Execution O1) |
-| `o2`       | **Điều Phối 2 (O2)** | `1545438251966402661` | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`    | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2) |
-| `excel`    | **Excel**            | `1545438637750227104` | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                     | Chuyên viên (Năng lực thuần túy) |
-| `power-bi` | **PowerBI**          | `1545439082019164271` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                  | Chuyên viên (Năng lực thuần túy) |
-| `sql`      | **SQL**              | `1545438861356966010` | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                 | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                       | Chuyên viên (Năng lực thuần túy) |
-| `python`   | **Python**           | `1545439279843508235` | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)    | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`        | Chuyên viên (Năng lực thuần túy) |
+| Agent ID   | Tên hiển thị Discord | Snowflake ID               | Handle / Tag        | Nhiệm vụ chính                                                                                                            | Công cụ Zink được gọi                                                                                                  | Cấp bậc & Thẩm quyền             |
+| :--------- | :------------------- | :------------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------- | :------------------------------- |
+| `main`     | **Quản Lý**          | `DISCORD_BOT_IDS.main`     | `@Quản Lý`          | Tiếp nhận yêu cầu, phân tích DAG, chỉ định Primary (`o1`/`o2`), điều phối phê duyệt, thông báo tổng kết                   | `sessions_spawn` (chỉ gọi `o1`/`o2`), `sessions_yield`, `session_status`, `zink_knowledge_search`, `zink_skill_search` | Giám sát Quản trị (Governance)   |
+| `o1`       | **Điều Phối 1 (O1)** | `DISCORD_BOT_IDS.o1`       | `@Điều Phối 1 (O1)` | Giám sát thực thi ETL & Bảng tính (điều phối `excel`, `sql`, `python`), đăng `#approvals`, hỏi `#office`, đăng `#results` | `sessions_spawn` (`excel`, `sql`, `python`), `session_status`, `zink_knowledge_search`, `zink_skill_search`            | Giám sát Thực thi (Execution O1) |
+| `o2`       | **Điều Phối 2 (O2)** | `DISCORD_BOT_IDS.o2`       | `@Điều Phối 2 (O2)` | Giám sát thực thi BI & Khoa học Dữ liệu (điều phối `power-bi`, `python`), đăng `#approvals`, hỏi `#office`, `#results`    | `sessions_spawn` (`power-bi`, `python`), `session_status`, `zink_n8n`, `zink_knowledge_search`, `zink_skill_search`    | Giám sát Thực thi (Execution O2) |
+| `excel`    | **Excel**            | `DISCORD_BOT_IDS.excel`    | `@Excel`            | Chuyên viên Bảng tính (Spreadsheet Specialist) — chạy ngầm dưới quyền O1, xuất bản workbook `.xlsx` và ảnh preview `.svg` | `session_status`, `zink_excel`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                     | Chuyên viên (Năng lực thuần túy) |
+| `power-bi` | **PowerBI**          | `DISCORD_BOT_IDS.power-bi` | `@PowerBI`          | Chuyên viên Báo cáo BI (BI Specialist) — chạy ngầm dưới quyền O2, thiết kế dashboard và công thức DAX                     | `session_status`, `zink_power_bi`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                  | Chuyên viên (Năng lực thuần túy) |
+| `sql`      | **SQL**              | `DISCORD_BOT_IDS.sql`      | `@SQL`              | Chuyên viên Truy vấn Dữ liệu (SQL Specialist) — chạy ngầm dưới quyền O1, thực thi kịch bản trích xuất ETL                 | `session_status`, `zink_sql`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`                       | Chuyên viên (Năng lực thuần túy) |
+| `python`   | **Python**           | `DISCORD_BOT_IDS.python`   | `@Python`           | Chuyên viên Khoa học Dữ liệu (Data Science Specialist) — chạy ngầm dưới quyền O1 (ETL) hoặc O2 (Analytics/ML/Forecast)    | `session_status`, `zink_python`, `zink_n8n`, `zink_skill_search`, `zink_skill_propose`, `zink_knowledge_search`        | Chuyên viên (Năng lực thuần túy) |
+
+> **Nguồn duy nhất của định danh Discord.** Bảng trên và các hồ sơ agent bên dưới không
+> mang snowflake thô. Toàn bộ bản đồ định danh (bot id, role id, id kênh/diễn đàn) chỉ
+> tồn tại ở `integrations/openclaw/lib/authority.mjs` (`DISCORD_BOT_IDS`,
+> `DISCORD_ROLE_IDS`, `DISCORD_CHANNEL_IDS`); các id kênh/diễn đàn ở runtime do cấu hình
+> triển khai cung cấp (`discordOfficeChannelId`, `discordResultsForumId`,
+> `discordApprovalsForumId`, `discordIncidentsForumId`). Kho lưu trữ này nằm trong một
+> thư mục đồng bộ của bên thứ ba và có thể đẩy lên remote, nên **không tài liệu nào được
+> theo dõi** được chứa một snowflake Discord thô — bản sao thứ hai là một bản sao có thể
+> lệch âm thầm và một bề mặt giả mạo mention.
 
 ---
 
@@ -57,7 +75,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 1. Agent `main` — Quản Lý (Governance Supervisor)
 
-- **Discord Handle:** `@Quản Lý` (ID: `1545436878835163156`)
+- **Discord Handle:** `@Quản Lý` (ID: `DISCORD_BOT_IDS.main`)
 - **Chức năng chính:** Điểm tiếp nhận yêu cầu đầu tiên từ người vận hành trên kênh `#office` hoặc DM. Phân tích yêu cầu, phân loại bài toán (Work/Research), phân rã DAG và chỉ định duy nhất một Primary Coordinator (`o1` hoặc `o2`).
 - **Quyền hạn & Công cụ:**
   - Được phép sử dụng `sessions_spawn` để giao nhiệm vụ con **chỉ cho hai điều phối viên (`o1`, `o2`)** ở chế độ cô lập hoàn toàn (`context=isolated`, `mode=run`, `sandbox=require`).
@@ -71,8 +89,16 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 2. Agent `o1` — Điều Phối 1 (Execution Supervisor — ETL & Spreadsheets)
 
-- **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `1545437953197744248`)
+- **Discord Handle:** `@Điều Phối 1 (O1)` (ID: `DISCORD_BOT_IDS.o1`)
 - **Chức năng chính:** Giám sát thực thi toàn bộ các tác vụ trích xuất, chuyển đổi dữ liệu (ETL), truy vấn SQL và tạo lập bảng tính Excel.
+- **Cách trình bày thẻ phê duyệt (M12/T1-R1, chưa triển khai live):** thẻ chỉ gồm
+  `Task ID` (mã 12 ký tự `ddmmyyyy` + 4 ký tự ngẫu nhiên — cũng chính là khóa trong ledger
+  và trong `custom_id` của nút bấm), `Lý do` liệt kê từng bước của kế hoạch đã được ghi
+  (thao tác cụ thể, ràng buộc, tiêu chí nghiệm thu, phần mềm sẽ dùng: Microsoft Excel /
+  SQL Server / Python / Power BI) và `Kết quả` dự kiến kèm ảnh preview; các dòng mã run,
+  người yêu cầu, hành động, `child:` và `Node:` đã bỏ. Nút Approve / Reject / Request
+  Revision now được đăng ký với component registry của host nên hết trạng thái
+  "This component has expired", có hiệu lực 24 giờ mỗi thẻ.
 - **Quyền hạn & Công cụ:**
   - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt kế hoạch (`### 🔖 [PHÊ DUYỆT THỰC THI]`) trên `#approvals`.
   - Quản lý và điều phối các chuyên viên cấp dưới: `excel`, `sql`, `python` (cho mục đích ETL) thông qua `sessions_spawn`.
@@ -84,7 +110,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 3. Agent `o2` — Điều Phối 2 (Execution Supervisor — BI & Advanced Analytics)
 
-- **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `1545438251966402661`)
+- **Discord Handle:** `@Điều Phối 2 (O2)` (ID: `DISCORD_BOT_IDS.o2`)
 - **Chức năng chính:** Giám sát thực thi các tác vụ trực quan hóa dữ liệu (Power BI Dashboard, DAX modeling), kịch bản khoa học dữ liệu, dự báo chuỗi thời gian (Forecasting), tối ưu hóa quy hoạch (Optimization) và tự động hóa n8n.
 - **Quyền hạn & Công cụ:**
   - Lập kế hoạch thực thi chi tiết và phát hành thẻ phê duyệt trên `#approvals`.
@@ -96,7 +122,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 4. Agent `excel` — Chuyên viên Bảng tính (Spreadsheet Specialist)
 
-- **Discord Handle:** `@Excel` (ID: `1545438637750227104`)
+- **Discord Handle:** `@Excel` (ID: `DISCORD_BOT_IDS.excel`)
 - **Chức năng chính:** Chuyên trách xử lý, chuyển đổi dữ liệu và tạo lập bảng tính Excel (`.xlsx`), đồng thời sinh ảnh trực quan SVG preview cho các sheet đầu ra.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
@@ -107,7 +133,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 5. Agent `power-bi` — Chuyên viên Báo cáo BI (BI Specialist)
 
-- **Discord Handle:** `@PowerBI` (ID: `1545439082019164271`)
+- **Discord Handle:** `@PowerBI` (ID: `DISCORD_BOT_IDS.power-bi`)
 - **Chức năng chính:** Thiết kế mô hình dữ liệu quan hệ, viết công thức DAX và xuất bản báo cáo Power BI (`.pbix` / `.pbit`).
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o2`.
@@ -118,7 +144,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 6. Agent `sql` — Chuyên viên Truy vấn Dữ liệu (SQL Specialist)
 
-- **Discord Handle:** `@SQL` (ID: `1545438861356966010`)
+- **Discord Handle:** `@SQL` (ID: `DISCORD_BOT_IDS.sql`)
 - **Chức năng chính:** Khảo sát, trích xuất và biến đổi dữ liệu phân tích thông qua các câu truy vấn SQL hiệu năng cao trên DuckDB, MotherDuck và BigQuery.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối trực tiếp của `o1`.
@@ -129,7 +155,7 @@ Hệ thống OpenClaw quản trị cụm 7 agent vai trò cố định. Các age
 
 #### 7. Agent `python` — Chuyên viên Khoa học Dữ liệu (Decision & Data Science)
 
-- **Discord Handle:** `@Python` (ID: `1545439279843508235`)
+- **Discord Handle:** `@Python` (ID: `DISCORD_BOT_IDS.python`)
 - **Chức năng chính:** Thực thi các bài toán khoa học quyết định phức tạp: phân tích thống kê, tối ưu hóa tuyến tính/phi tuyến, dự báo chuỗi thời gian, mô phỏng Monte Carlo và xử lý dữ liệu định lượng.
 - **Quyền hạn & Công cụ:**
   - Chạy ngầm dưới quyền điều phối của `o1` (khi phục vụ ETL/data processing) hoặc `o2` (khi phục vụ Data Science/ML/Analytics).
@@ -198,19 +224,112 @@ journalctl --user -u openclaw-gateway-zink.service -f
 ss -tnp | grep 443
 ```
 
+### 4. Triển Khai Bản Build Governance (Preflight → Apply → Restart)
+
+Hai lệnh dưới đây **tự đọc** `~/.openclaw-zink/operator/m7-t2/discord-identifiers.json` (quyền 0600) rồi tự truyền tham số cho `configure.mjs`, nên không cần `jq`, không cần mảng shell và không
+dùng `$(...)`. Máy WSL của hệ thống **không cài `jq`**; một khối lệnh gõ tay trước đây đã thất bại
+chỉ vì lý do đó. Không lệnh nào in token hay snowflake.
+
+```bash
+cd "/mnt/c/Users/HOANG VINH/OneDrive/Documents/personal-tool"
+
+# BƯỚC 0 — nạp biến môi trường router. `configure.mjs` đọc `ZINK_ROUTER_HOST` và
+# `ZINK_ROUTER_PORT` từ môi trường để dựng config; thiếu một trong hai thì builder
+# chết ngay với `ROUTER_HOST_UNAVAILABLE`/`ROUTER_PORT_UNAVAILABLE` và preflight báo
+# FAIL mà không sửa gì. KHOÁA ROUTER KHÔNG CÒN Ở ĐÂY NỮA (F-036, quyết định H6
+# của chủ): config chỉ mang một THAM CHIẾU, khoá nằm trong kho `pass` và được
+# resolver giải lúc chạy. Nhập khoá MỘT LẦN (giá trị chỉ gõ ở prompt của `pass`,
+# không gõ vào lệnh, không để vào history):
+#   export PASSWORD_STORE_DIR="$HOME/.openclaw-zink/secrets/password-store"
+#   export GNUPGHOME="$HOME/.openclaw-zink/secrets/gnupg"
+#   pass insert zink/openclaw/ZINK_ROUTER_API_KEY
+set -a; . "$HOME/.openclaw-zink/router.env"; set +a
+
+# BƯỚC 0b — CHỈ ĐỊNH THƯ MỤC TRẠNG THÁI (F-219). Các driver vận hành từ chối
+# chạy nếu không được nói thư mục trạng thái: `ZINK_OPERATOR_STATE_DIR` hoặc đối
+# số đầu tiên. Không có thì chúng dừng lại với `STATE_DIR_NOT_NAMED` — đó là TỪ
+# CHỐI có chủ đích, KHÔNG phải lỗi. Đặt đúng đường dẫn rồi mới chạy tiếp.
+export ZINK_OPERATOR_STATE_DIR="$HOME/.openclaw-zink"
+
+# BƯỚC 1 — chỉ đọc, không sửa gì. Dòng kỳ vọng:
+# {"identifiers":"VALID","builder_preflight":"PASS","installed_mutation":false}
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-preflight.mjs "$ZINK_OPERATOR_STATE_DIR"
+
+# BƯỚC 1b — CHỈ khi apply báo `Ledger writer unavailable [EXECUTION_STATE_UNKNOWN]`.
+# Khoá ghi Ledger có thể bị bỏ lại ("mồ côi") khi gateway chết giữa lúc đang ghi; hệ thống
+# CỐ Ý không tự thu hồi, vì tự thu hồi có thể cho hai process cùng vào vùng trọng yếu.
+# Bước này là hành động của người vận hành, và nó là thao tác XOÁ.
+# 1) Đọc, chưa xoá gì — dòng kỳ vọng có "action":"REPORT" và "holder_alive":false:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs
+# 2) Chỉ khi lệnh trên in ra holder_alive=false, gõ tiếp xác nhận tường minh:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs --recover --confirm=ORPHAN_LOCK_RECOVERY
+# 3) Xác nhận Khoá không còn tồn tại:
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-lock-recovery.mjs
+#   kỳ vọng {"lock_present":false,"action":"NONE","mutated":false}
+# Script từ chối xoá nếu process ghi trong owner.json vẫn còn sống, nếu thư mục khoá chứa
+# tệp lạ, hoặc nếu owner.json không đọc được; mặc định nó chỉ báo cáo, không sửa.
+
+# BƯỚC 2 — CHỈ chạy khi bước 1 in ra PASS. Đây là lần apply duy nhất: script tự snapshot
+# trạng thái live trước khi sửa, apply, vá runtime, khởi động lại unit rồi đối chiếu từng byte;
+# nếu không khớp nó tự rollback và in báo cáo FAIL kèm lý do.
+node integrations/openclaw/topology/fixtures/runtime-regression/operator-apply.mjs "$ZINK_OPERATOR_STATE_DIR"
+
+# BƯỚC 3 — kiểm tra sau triển khai
+systemctl --user show openclaw-gateway-zink.service -p ActiveState -p MainPID -p NRestarts
+sha256sum ~/.openclaw-zink/extensions/zink-governance/index.mjs
+sha256sum ~/.openclaw-zink/extensions/zink-governance/lib/discord-forum-tags.mjs
+```
+
+Giá trị kỳ vọng sau bản remediation STACK (M12/T2-R3): `index.mjs` vẫn là
+`513beb15c3d7624c0a928c4c1556dc44d4c4cff4f1e00980f24b298a25751c0d` (bản này không đổi entrypoint),
+còn `lib/discord-forum-tags.mjs` phải là `18fbb0774c18d013f599f562810932cfb80c4071c0614376d16f46c30fc256b3` —
+đây chính là build đã được cài trên gateway WSL bởi Deployment B ngày 2026-10-14. Bản
+`e0a755bb9c6add431c9306fd8bc2895318a868c3c6b8e84326d94fb95526fff5` trước đó là sản phẩm đang chạy và là nguồn
+gây kẹt thẻ; sau Deployment B nó chỉ còn là bản tiền-sửa. Nếu digest của
+`lib/discord-forum-tags.mjs` vẫn là
+`e0a755bb…` thì bản sửa chưa vào, đừng báo thẻ đã hoạt động.
+
+Báo cáo in ra là JSON đã rút gọn (chỉ trạng thái, lý do, kích thước), không chứa danh tính kênh,
+token hay nội dung cấu hình. Nếu bước 1 báo `Governance plugin asset` hoặc
+`Governance plugin entrypoint`, nghĩa là digest đang cài thật chưa được admit trong
+`configure.mjs`: dừng ở đó và báo cáo, **không** tự nới cổng tiêu thụ để cho qua.
+
+### 5. Chặn Merge Trong Repo (Merge Blocker — H2)
+
+GitHub không bật được branch protection cho repo private này (`403 Upgrade to
+GitHub Pro`), nên chặn merge nằm TRONG repo: một script chặn TRƯỚC khi merge
+và một job CI phát hiện SAU khi merge.
+
+```bash
+# BƯỚC A — chạy TRƯỚC khi merge vào `main`.
+# Script từ chối (fail-closed) nếu không tìm thấy một run `quality-gate` PASS
+# ở đúng SHA sắp merge; thiếu bằng chứng, mạng lỗi hay không đọc được trạng
+# thái đều = KHÔNG merge. Mặc định nó kiểm tra HEAD hiện tại.
+node scripts/merge-gate.mjs
+
+# Script chỉ ĐỌC: không sửa branch, không push, không merge, không mở issue.
+# Nó in ra URL của run để anh tự xem bằng chứng thay vì tin lời gate.
+```
+
+Job `merge-gate-detector` trong `.github/workflows/ci.yml` là nửa SAU khi merge:
+nó chạy CHÍNH script này trên SHA của commit vừa merge, nên một lần merge
+không qua gate sẽ đỏ rõ ràng trên `main` thay vì im lặng.
+
 ---
 
 ## 5. Quy chuẩn Kênh Giao tiếp và Hướng dẫn Tương tác Discord
 
 ### Danh mục Kênh Discord của Hệ thống
 
-| Kênh Discord            | Loại kênh                    | Snowflake ID          | Chức năng & Quy chuẩn                                                                                                                                                                        |
-| :---------------------- | :--------------------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`#office`**           | Văn phòng chung (Text)       | `1545425766161063937` | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                             |
-| **`#results`**          | Kết quả phân tích (Forum)    | `1545696269010477056` | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed).                                       |
-| **`#approvals`**        | Phê duyệt quyết định (Forum) | `1545696207316455527` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) chờ chủ sở hữu phê duyệt.                                                                               |
-| **`#incidents`**        | Báo cáo sự cố (Forum)        | `1545696360018481182` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn.                                                                                                          |
-| **Tin nhắn riêng (DM)** | Direct Message               | N/A                   | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger. |
+| Kênh Discord            | Loại kênh                    | Snowflake ID              | Chức năng & Quy chuẩn                                                                                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------- | :--------------------------- | :------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`#office`**           | Văn phòng chung (Text)       | `discordOfficeChannelId`  | Nơi tiếp nhận yêu cầu, giao việc và điều phối hoạt động chung. Hỗ trợ tag trực tiếp bot hoặc trao đổi với `@Quản Lý`. Bảo toàn mã `task_id` người dùng cung cấp.                                                                                                                                                                                                                                                        |
+| **`#results`**          | Kết quả phân tích (Forum)    | `discordResultsForumId`   | Diễn đàn đăng tải báo cáo, artifact và kết quả nghiệm thu của các task. Mọi bài viết là một Thread riêng biệt (`inheritParent: false` để fail-closed). Mỗi thread do hệ thống đăng bắt buộc mang đủ ba tag `STATUS` (`SUCCESS`/`FAILED`/`PARTIAL`), `TYPE`, `STACK`, phân giải theo tag thật của kênh này tại thời điểm đăng.                                                                                           |
+| **`#approvals`**        | Phê duyệt quyết định (Forum) | `discordApprovalsForumId` | Nơi các agent gửi đề xuất giải quyết mâu thuẫn ngữ nghĩa (`BLOCKED_SEMANTIC_REVIEW`) và thẻ phê duyệt kế hoạch chờ chủ sở hữu quyết định. Mỗi thread mang đủ ba tag `STATUS` (`WAITING`), `RISK` (`LOW`/`MEDIUM`/`RED`), `STACK`; trạng thái không còn in trong nội dung thẻ. Khi anh quyết định thật sự, tag `STATUS` của thread chuyển theo: APPROVE → `APPROVED`, REJECT → `REJECTED`, REQUEST REVISION → `CHANGES`. |
+| **`#incidents`**        | Báo cáo sự cố (Forum)        | `discordIncidentsForumId` | Kênh thông báo cảnh báo lỗi, vi phạm hợp đồng dữ liệu hoặc sự cố ranh giới an toàn. Mỗi thread mang đủ ba tag `STATUS` (`OPEN`), `SEVERITY` (`LOW`…`CRITICAL`), `STACK`. Lưu ý: tag `STATUS: ANALYTICS` hiện đặt sai nhóm (đúng ra là `STACK: ANALYTICS`) — chủ sở hữu cần đổi tên trong Discord, hệ thống không tự alias tên tag.                                                                                      |
+| **Tin nhắn riêng (DM)** | Direct Message               | N/A                       | Vô hiệu hóa (`channels.discord.directMessages.enabled: false`). Toàn bộ tương tác bắt buộc diễn ra trên các kênh máy chủ để đảm bảo tính minh bạch và lưu vết kiểm toán bền vững vào Ledger.                                                                                                                                                                                                                            |
+
+**Quy tắc chọn tag `STACK`** (áp dụng cho cả `#approvals`, `#results`, `#incidents`): tag này lấy từ Ledger (`target_stack` / `stack_id` của node), không bao giờ suy ra từ tên bot. Kế hoạch chạm nhiều tầng thì tag chỉ tên **nơi kết quả của kế hoạch nằm**, theo thứ tự `decision` > `intelligence` > `data_plant` > `semantic` > `infrastructure` — kế hoạch ETL thuần là `DATA`, kế hoạch vừa ETL vừa dựng biểu đồ là `ANALYTICS`, kế hoạch trả lời câu hỏi quyết định là `DECISION`. Nếu Ledger đã bind `current_stack` (chỉ xảy ra sau khi phê duyệt, lúc bắt đầu chạy) thì giá trị đó thắng vì nó là tầng đang thực sự chạy. Không có bằng chứng stack nào, hoặc chỉ có tên phần mềm (`excel`, `power_bi` — đó là agent, không phải stack), thì **không bịa tag**: hệ thống ghi `DISCORD_TAG_UNRESOLVED` và không đăng thread nào cả.
 
 ---
 
@@ -243,12 +362,13 @@ Hệ thống tuân thủ nguyên tắc **CHỈ BOT ĐƯỢC TAG MỚI ĐƯỢC P
 
 - Nhằm phục vụ lưu vết kiểm toán bất biến và toàn vẹn của Ledger, hệ thống cấu hình `channels.discord.directMessages.enabled: false`. Mọi yêu cầu và phản hồi đều phải được định tuyến qua 4 bề mặt kênh máy chủ chính thức (`#office`, `#approvals`, `#results`, `#incidents`).
 
-#### 4. Quy trình Phê duyệt Kỹ năng Mới trên Diễn đàn `#approvals`
+#### 4. Quy trình Phê duyệt Kỹ năng Mới trên Kênh `#office`
 
-- Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE`. (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`).
-- Đề xuất được định danh bằng mã băm nội dung bất biến (immutable SHA-256 hash) và gửi thông báo vào diễn đàn `#approvals`.
-- **Phê duyệt:** Chủ sở hữu (`123456789012345678`) đọc nội dung đề xuất và trả lời trực tiếp trong thread bằng tin nhắn chứa từ khóa `APPROVED` (ví dụ: `APPROVED` hoặc `Đồng ý APPROVED`).
-- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu và tính toàn vẹn của mã băm nội dung, sau đó tiến hành kích hoạt kỹ năng lên trạng thái `ACTIVE` và đồng bộ sang PostgreSQL vector index (pgvector). Mọi nỗ lực giả mạo danh tính hoặc sai lệch mã băm đều bị từ chối fail-closed.
+- Khi một agent chuyên môn (`excel`, `power-bi`, `sql`, `python`) hoàn thiện giải pháp phân tích tái sử dụng, agent gọi `zink_skill_propose` để khởi tạo bản ghi `CANDIDATE` được lưu bền vững (durable proposal). (Các agent điều phối `main`, `o1`, `o2` không có quyền đề xuất kỹ năng theo ma trận `SKILL_STORE_ACCESS_MATRIX`). Đề xuất đơn thuần không tạo skill chuẩn tắc.
+- Đề xuất được định danh bằng mã băm nội dung bất biến (raw SHA-256 của đúng các byte sẽ trở thành `SKILL.md`) và thông báo xác nhận học tập được gửi tới kênh `#office` (không dùng diễn đàn `#approvals` của phê duyệt thực thi).
+- **Phê duyệt:** Chủ sở hữu đọc nội dung đề xuất và bấm nút phê duyệt skill chuyên biệt (`zink:skill:approve`) gắn chặt proposal và mã băm nội dung. Phê duyệt skill và phê duyệt kế hoạch thực thi (`APPROVE`) là hai đường quản trị phân biệt, không bao giờ đi chung.
+- **Từ chối là chốt:** đề xuất lại đúng cùng byte nội dung sau khi chủ sở hữu đã `REJECTED` không tạo lại bản ghi `CANDIDATE`; hệ thống trả về chính hồ sơ đã từ chối, nên quyết định của chủ sở hữu không thể bị ghi đè im lặng.
+- **Xác thực tự động:** Hệ thống `handleOwnerSkillApproval` sẽ xác thực danh tính chủ sở hữu, tính toàn vẹn của mã băm nội dung và ràng buộc identity, sau đó tiến hành materialize skill chuẩn tắc (`SKILL.md` + `manifest.json`, trạng thái `ACTIVE`) bằng mã nội bộ tin cậy rồi mới đồng bộ dẫn xuất sang PostgreSQL vector index (pgvector). Đề xuất lạ/không tồn tại, hết hạn, bị từ chối hoặc xung đột đều bị từ chối fail-closed; lỗi đồng bộ vector không bao giờ rollback bản chuẩn tắc.
 
 #### 5. Thứ tự Ưu tiên Phân giải Ngữ nghĩa (Deterministic Semantic Resolver Precedence)
 
@@ -337,8 +457,18 @@ Lệnh trên sẽ tự động chạy:
 
 1. `npm run format:check`: Kiểm tra định dạng mã nguồn.
 2. `npm run lint`: Phân tích tĩnh cú pháp JavaScript và Markdown.
-3. `npm test`: Chạy toàn bộ 349 bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge.
+3. `npm test`: Chạy toàn bộ bài kiểm thử bao phủ hợp đồng M1–M8, OpenClaw governance và DuckDB bridge (số lượng bài kiểm thử lấy từ kết quả chạy thực tế, không ghi cứng).
 4. `npm run repo:check`: Kiểm tra toàn vẹn chính sách repository.
+
+Tier Python của Zink Knowledgebase là một gate blocking riêng và **không** nằm trong `verify`: một CI job chỉ cài Node (như `CI / quality-gate`) không có `uv`, nên gộp cả hai tier vào một lệnh sẽ làm job đó chết ở `uv: not found`. Trên máy cục bộ, chạy tường minh:
+
+```powershell
+npm run test:knowledge
+```
+
+(hoặc `make test-knowledge`). Lệnh này chạy bài kiểm thử Python của Zink Knowledgebase qua `uv run --directory apps/knowledge --locked` (pytest từ `uv.lock`) và yêu cầu `KNOWLEDGE_TOKENIZER_PATH` trỏ tới `tokenizer.json` của bge-reranker-v2-m3. Trong CI, `npm run test:knowledge` chỉ được phép thực thi bởi đúng một job là `CI / python-quality`; `npm run repo:check` sẽ fail nếu job đó bị xóa, bị trùng ở job khác, hoặc bị chuyển sang job khác.
+
+Bộ kiểm thử `pdf-runtime` là Linux/x86_64-specific và kéo theo torch/docling, nên CI cố ý **không** chạy bước này. Trạng thái của nó là `NOT RUN`, không phải PASS.
 
 ---
 
@@ -500,19 +630,19 @@ Người vận hành và các agent tuyệt đối tuân thủ các điều cấ
 
 Bảng phân định trạng thái thực tế của 11 nhà cung cấp trong phiên bản V1:
 
-| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                                             |
-| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------ |
-| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng                     |
-| **Cloudflare R2** | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Quản lý Landing & Silver hoạt động                           |
-| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge; native CLI Windows đã được xác minh |
-| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token                              |
-| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC                           |
-| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát                                  |
-| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng                               |
-| **MLflow Local**  | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Ghi log thí nghiệm cục bộ hoạt động                          |
-| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng                                 |
-| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                                     |
-| **Streamlit**     | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Giao diện phân phối Gold localhost:8501                      |
+| Nhà cung cấp      | Trạng thái (State)  | Hợp đồng (Contract) | Kiểm thử mô phỏng (Mock) | Kiểm thử trực tiếp (Live) | Ghi chú vận hành                                                                                       |
+| ----------------- | ------------------- | ------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **n8n**           | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Docker container localhost:5678 sẵn sàng                                                               |
+| **Cloudflare R2** | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `NOT A PROVIDER INTEGRATION`; không có network call                                |
+| **DuckDB**        | `PROVISIONED`       | PASS                | PASS                     | PASS                      | Governed Windows Bridge; engine thật, dữ liệu là contract fixture 2 dòng (`FIXTURE_CONTRACT_EXECUTED`) |
+| **MotherDuck**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kết nối khi cấp token                                                                        |
+| **BigQuery**      | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Sẵn sàng, kích hoạt khi có GCP ADC                                                                     |
+| **Kaggle**        | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Bounded runner có kiểm soát                                                                            |
+| **Databricks**    | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Batch compute adapter sẵn sàng                                                                         |
+| **MLflow Local**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `SIMULATION_CONTRACT`                                                              |
+| **DagsHub**       | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đồng bộ có chọn lọc sẵn sàng                                                                           |
+| **Hugging Face**  | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Đánh giá mô hình an toàn                                                                               |
+| **Streamlit**     | `CONTRACT_VERIFIED` | PASS                | PASS                     | NOT_RUN                   | Adapter tự khai báo `SIMULATION_CONTRACT`                                                              |
 
 ---
 
@@ -674,7 +804,7 @@ Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm t
    - **Xác thực và sinh Preview Đa định dạng (`artifact-validator.mjs`):**
      - **Excel (`.xlsx`):** Phân tích workbook, kiểm tra số dòng/cột, sinh ảnh SVG preview trực quan các sheet đầu ra.
      - **SQL (`.sql`):** Đọc UTF-8, đếm câu lệnh, phân loại DML/Read-only, preview 30 dòng đầu kèm chú thích phân tích an toàn (`sql/validator.mjs`).
-     - **Python (`.py`):** Phân tích AST, đếm hàm/class, phân loại import thư viện (Data Science: pandas, numpy, scipy, scikit-learn; Database: duckdb, psycopg2, sqlalchemy; File I/O: csv, json, openpyxl), preview 30 dòng đầu (`python/python-validator.mjs`).
+     - **Python (`.py`):** Kiểm tra cú pháp bằng `py_compile` (AST của CPython), đếm dòng/hàm/class/import, preview 30 dòng đầu (`artifact-validator.mjs`). Tầng này **không có deny-rule nội dung** — không chặn `subprocess`/`exec`/`open` — và `zink_python` chưa thực thi script (`ENGINE_NOT_IMPLEMENTED`, `zink-tools/python/contract.md`); `python/python-validator.mjs` chỉ là tiện ích phân tích tĩnh, không có caller production.
      - **Power BI (`.pbix`, `.pbit`):** Kiểm tra magic byte zip `PK\x03\x04`, xác thực tính toàn vẹn của container và dung lượng tệp.
      - **Apache Parquet (`.parquet`):** Kiểm tra magic byte `PAR1` ở header và footer, xác nhận biên byte hợp lệ.
      - **PDF (`.pdf`):** Kiểm tra magic byte `%PDF-`, trích xuất chuỗi phiên bản từ header.
@@ -697,7 +827,7 @@ Quy trình nghiệm thu kết quả tuân thủ nghiêm ngặt 2 tầng kiểm t
 
 Nhằm tránh việc agent liên tục hỏi lại người dùng các câu hỏi đã được trả lời trong quá khứ:
 
-- **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng.
+- **Sổ cái Quyết định (Decision Ledger):** Lưu trữ bền vững các câu trả lời và quyết định đã được con người xác nhận (`isHumanConfirmed: true`). Trước khi gửi câu hỏi làm rõ trên `#office`, agent phải tra cứu Decision Ledger. Nếu đã có tiền lệ được xác nhận, agent áp dụng ngay mà không làm phiền người dùng. Nếu sổ cái chỉ còn một trong hai tệp trạng thái (`events` hoặc `snapshot`), hệ thống **từ chối khởi động** với `EXECUTION_STATE_UNKNOWN` thay vì âm thầm dựng lại một sổ cái trống; operator phải khôi phục tệp đang thiếu từ bản sao lưu gần nhất.
 - **Lọc Trùng Ngữ cảnh (Context Deduplication):** Thuật toán `deduplicateRetrievalContext` tự động loại bỏ các đoạn thông tin trùng lặp nội dung được lấy từ nhiều nguồn khác nhau, tối ưu dung lượng ngữ cảnh gửi tới mô hình.
 
 #### Ma trận Mã Tham chiếu Có Cấu trúc (Structured Reference ID Matrix)
@@ -783,6 +913,8 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 - Sau khi nhiệm vụ được nghiệm thu hoàn tất (`COMPLETE`), các tri thức hoặc tiền lệ mới được phát hiện phải tuân thủ quy trình:
   $$\mathbf{FEEDBACK \longrightarrow CANDIDATE\ PROPOSAL \longrightarrow \#office \longrightarrow USER\ CONFIRMS \longrightarrow PERSIST}$$
 - Không tự động ghi trực tiếp vào bộ nhớ dài hạn nếu người dùng chưa xác nhận. Không đưa đề xuất học tập vào diễn đàn `#approvals`.
+- Ứng viên được phân loại rõ ràng trước khi persist: quy tắc/quyết định vận hành đã xác nhận thuộc về Decision Ledger (tra cứu chính xác theo scope); quy trình tái sử dụng thuộc về Skill Store (đề xuất `CANDIDATE`, chỉ `ACTIVE` sau phê duyệt chủ sở hữu với ràng buộc đúng-bytes); trạng thái task hiện hành không phải bộ nhớ dài hạn. Phân loại mơ hồ thì không persist (fail-closed).
+- Trạng thái hỗ trợ (M8/T3): Decision và Skill learning đã triển khai đầy đủ (persist + truy xuất fresh-session). Tri thức thực tế (factual/reference) được phân loại và định tuyến nhưng **chủ ý chưa triển khai** persist do người dùng ghi trực tiếp vào Knowledgebase trong milestone này (adapter cấm ingestion theo hợp đồng, Vault nguồn chỉ đọc) — routing trung thực báo `persisted: false`, không giả vờ đã lưu. Chưa kiểm chứng live (môi trường dev không có Discord/runtime live).
 
 #### 5. Mô hình Embedding & Truy xuất Ngữ nghĩa (Embedding & Retrieval)
 
@@ -804,23 +936,23 @@ _Nguyên tắc tham chiếu:_ Ưu tiên tham chiếu (reference) qua mã định
 
 Nhằm đảm bảo hệ thống vận hành bền vững không xảy ra lỗi hồi quy, M8/T2.2 khóa cứng 15 họ nguyên nhân gốc tại tầng kiến trúc:
 
-| Họ Root Cause | Tên lĩnh vực Quản trị                    | Nguyên tắc & Ranh giới Khóa cứng tại Runtime                                                                                                                                      |
-| :------------ | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **RC-01**     | Discord Ingress / Routing Authority      | Cổng tiếp nhận kiểm tra trước khi gọi model; `@Quản Lý` là root owner duy nhất; từ chối mention trực tiếp chuyên viên (`SPECIALIST_NO_DIRECT_INGRESS`); chống duplicate event.    |
-| **RC-02**     | Agent Topology / Spawn Authorization     | Khóa cứng cây phân cấp: `Main -> [O1, O2]`, `O1 -> [Excel, SQL, Python]`, `O2 -> [Power BI, Python]`, leaf -> `[]`; chặn Main gọi trực tiếp chuyên viên, cấm O1/O2 gọi chéo nhau. |
-| **RC-03**     | Task Identity / Lineage / Idempotency    | Mã tương quan bền vững (`task_id`), tra cứu chính xác; từ chối duplicate action hoặc xử lý lũy thừa không tạo execution mới.                                                      |
-| **RC-04**     | Approval / Revision / Result Transaction | Bản ghi phê duyệt bất biến gắn liền mã băm kế hoạch; sửa đổi kế hoạch lập tức hủy hiệu lực phê duyệt cũ; độc quyền User duyệt.                                                    |
-| **RC-05**     | Queue / Ledger / Lease / Recovery        | Hàng đợi bền vững trên đĩa với atomic cross-process file lock, heartbeat fencing, tự động thu hồi task treo khi laptop tắt/ngủ.                                                   |
-| **RC-06**     | Discord Outbound / Channel Authority     | Tách bạch 4 kênh: `#office` (Main trao đổi người dùng), `#approvals` (duyệt kế hoạch), `#results` (nghiệm thu kết quả), `#incidents` (báo cáo lỗi).                               |
-| **RC-07**     | Artifact / Result Delivery Truth         | Loại bỏ đường dẫn tuyệt đối nội bộ và `file://` khỏi tin nhắn người dùng; tách riêng artifact lưu trữ ngoài Git.                                                                  |
-| **RC-08**     | Excel Execution Truth                    | Loại bỏ ghi đè vào Git `artifacts/`; xuất bản `.xlsx` kèm ảnh SVG preview trực quan từng sheet.                                                                                   |
-| **RC-09**     | SQL Execution Truth                      | Chạy DuckDB engine thật qua Windows bridge; trả trạng thái thực thi rõ ràng (`REAL_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`, `TIMEOUT`); cấm trả mock rows khi lỗi.           |
-| **RC-10**     | Python Execution Truth                   | Tách biệt stack ETL của O1 và stack Analytics/Forecast của O2; phân tích cú pháp AST và kiểm soát import thư viện.                                                                |
-| **RC-11**     | Power BI Execution Truth                 | Kiểm tra magic byte zip `PK\x03\x04`, tính toàn vẹn của container `.pbix`/`.pbit` và tương quan preview dashboard.                                                                |
-| **RC-12**     | External Adapter / Simulation Truth      | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production.                                                     |
-| **RC-13**     | Security / Path / Endpoint Isolation     | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox.                                                                 |
-| **RC-14**     | Semantic / Capability Boundary           | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree.                                                                           |
-| **RC-15**     | Verification / CI / Schema Truth         | 349/349 kiểm thử trực tiếp PASS trên 28 suite; DuckDB native bridge PASS; format, lint, diff và repo check PASS.                                                                  |
+| Họ Root Cause | Tên lĩnh vực Quản trị                    | Nguyên tắc & Ranh giới Khóa cứng tại Runtime                                                                                                                                                                                                                                                                                                                      |
+| :------------ | :--------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RC-01**     | Discord Ingress / Routing Authority      | Cổng tiếp nhận kiểm tra trước khi gọi model; `@Quản Lý` là root owner duy nhất; từ chối mention trực tiếp chuyên viên (`SPECIALIST_NO_DIRECT_INGRESS`); chống duplicate event.                                                                                                                                                                                    |
+| **RC-02**     | Agent Topology / Spawn Authorization     | Khóa cứng cây phân cấp: `Main -> [O1, O2]`, `O1 -> [Excel, SQL, Python]`, `O2 -> [Power BI, Python]`, leaf -> `[]`; chặn Main gọi trực tiếp chuyên viên, cấm O1/O2 gọi chéo nhau.                                                                                                                                                                                 |
+| **RC-03**     | Task Identity / Lineage / Idempotency    | Mã tương quan bền vững (`task_id`), tra cứu chính xác; từ chối duplicate action hoặc xử lý lũy thừa không tạo execution mới.                                                                                                                                                                                                                                      |
+| **RC-04**     | Approval / Revision / Result Transaction | Bản ghi phê duyệt bất biến gắn liền mã băm kế hoạch; sửa đổi kế hoạch lập tức hủy hiệu lực phê duyệt cũ; độc quyền User duyệt.                                                                                                                                                                                                                                    |
+| **RC-05**     | Queue / Ledger / Lease / Recovery        | Hàng đợi bền vững trên đĩa với atomic cross-process file lock, heartbeat fencing, tự động thu hồi task treo khi laptop tắt/ngủ.                                                                                                                                                                                                                                   |
+| **RC-06**     | Discord Outbound / Channel Authority     | Tách bạch 4 kênh: `#office` (Main trao đổi người dùng), `#approvals` (duyệt kế hoạch), `#results` (nghiệm thu kết quả), `#incidents` (báo cáo lỗi).                                                                                                                                                                                                               |
+| **RC-07**     | Artifact / Result Delivery Truth         | Loại bỏ đường dẫn tuyệt đối nội bộ và `file://` khỏi tin nhắn người dùng; tách riêng artifact lưu trữ ngoài Git.                                                                                                                                                                                                                                                  |
+| **RC-08**     | Excel Execution Truth                    | Loại bỏ ghi đè vào Git `artifacts/`; xuất bản `.xlsx` kèm ảnh SVG preview trực quan từng sheet.                                                                                                                                                                                                                                                                   |
+| **RC-09**     | SQL Execution Truth                      | Chạy DuckDB engine thật trên contract fixture qua Windows bridge; trả trạng thái đúng thực tế (`FIXTURE_CONTRACT_EXECUTED`, `EMPTY_RESULT`, `TEST_SIMULATION`); timeout là mã từ chối `DUCKDB_TIMEOUT`, không phải một trạng thái; bridge cố ý không phát `REAL_EXECUTED` vì nó chỉ xác nhận subprocess mà vẫn trình hai dòng fixture; cấm trả mock rows khi lỗi. |
+| **RC-10**     | Python Execution Truth                   | Tách biệt stack ETL của O1 và stack Analytics/Forecast của O2; phân tích cú pháp AST và kiểm soát import thư viện.                                                                                                                                                                                                                                                |
+| **RC-11**     | Power BI Execution Truth                 | Kiểm tra magic byte zip `PK\x03\x04`, tính toàn vẹn của container `.pbix`/`.pbit` và tương quan preview dashboard.                                                                                                                                                                                                                                                |
+| **RC-12**     | External Adapter / Simulation Truth      | Tách biệt rõ ràng chế độ mô phỏng (`TEST_SIMULATION`) và cấm dùng dữ liệu mô phỏng trong đường dẫn thành công của production.                                                                                                                                                                                                                                     |
+| **RC-13**     | Security / Path / Endpoint Isolation     | Zero secret leaks; chặn mọi hành vi path traversal (`..`) hoặc truy cập file ngoài workspace; cấm bypass sandbox.                                                                                                                                                                                                                                                 |
+| **RC-14**     | Semantic / Capability Boundary           | Ánh xạ namespace được kiểm duyệt; lưu đề xuất skill vào thư mục chuyên dụng, không làm bẩn source tree.                                                                                                                                                                                                                                                           |
+| **RC-15**     | Verification / CI / Schema Truth         | Toàn bộ kiểm thử trực tiếp PASS (`npm test` xanh, xem kết quả chạy thực tế); DuckDB native bridge PASS; format, lint, diff và repo check PASS.                                                                                                                                                                                                                    |
 
 ---
 

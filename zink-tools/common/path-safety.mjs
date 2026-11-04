@@ -1,4 +1,5 @@
-const WINDOWS_RESERVED_DEVICE_NAMES = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
+const WINDOWS_RESERVED_DEVICE_NAMES =
+  /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
 const SAFE_SEGMENT_PATTERN = /^[a-zA-Z0-9_.-]+$/u;
 
 /**
@@ -19,6 +20,8 @@ export function validateArtifactLogicalPath(logicalPath) {
   }
 
   // 2. Reject NUL bytes and control characters
+  // The control range is the point of the pattern, not an accident of it.
+  // eslint-disable-next-line no-control-regex
   if (/[\0\x01-\x1F\x7F]/u.test(logicalPath)) {
     throw new Error("SCHEMA_VALIDATION_FAILED");
   }
@@ -35,17 +38,24 @@ export function validateArtifactLogicalPath(logicalPath) {
   // 4. Split on / and \
   const segments = logicalPath.split(/[/\\]/u);
 
-  // 5. Assert at least one segment and no segment is empty, ".", or ".."
-  if (segments.length === 0) {
-    throw new Error("SCHEMA_VALIDATION_FAILED");
-  }
-
+  // 5. No segment may be empty, "." or "..". A `split` call always yields at
+  //    least one element, so an empty `segments` is not a state this function
+  //    can be in; the empty-segment test below is what catches `a//b` and `a/`.
   for (const segment of segments) {
-    if (
-      segment.length === 0 ||
-      segment === "." ||
-      segment === ".."
-    ) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
+      throw new Error("SCHEMA_VALIDATION_FAILED");
+    }
+
+    // F-447 (R9-L07a-2): a dot at either edge is a normaliser-visible alias,
+    // not an ordinary character. Windows strips trailing dots from a file
+    // name, and a leading dot spells a hidden entry on POSIX, so `orders.`
+    // and `.orders` could name an object that `orders` already names while the
+    // validator reported two distinct logical ids. The storage adapter's
+    // "no second spelling can address this object" invariant was false for
+    // exactly this shape. Reject the spelling rather than normalise it: the
+    // caller must name one logical id, and the validator never hands back a
+    // different string than the object identity it approved.
+    if (segment.startsWith(".") || segment.endsWith(".")) {
       throw new Error("SCHEMA_VALIDATION_FAILED");
     }
 
@@ -60,7 +70,10 @@ export function validateArtifactLogicalPath(logicalPath) {
     }
   }
 
-  return logicalPath;
+  // The validated form. The split above accepts both separators, so returning
+  // `logicalPath` verbatim handed the caller back the backslash spelling it had
+  // only half-checked — README's "normalized path" promise named this return.
+  return segments.join("/");
 }
 
 export function isArtifactLogicalPathValid(logicalPath) {

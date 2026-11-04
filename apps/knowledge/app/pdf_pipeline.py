@@ -42,11 +42,17 @@ BUILD_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
 class PdfBuildError(RuntimeError):
-    """A stable, outward-safe PDF build failure."""
+    """A stable, outward-safe PDF build failure.
 
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
+    F-550 (R10-T06-2): `code` stays the single value every caller switches on;
+    `cause` is the bounded diagnosis the child already computed (`exit=N;
+    stderr=…`), which used to be computed and then dropped at this seam.
+    """
+
+    def __init__(self, code: str, cause: str | None = None) -> None:
+        super().__init__(code if cause is None else f"{code}: {cause}")
         self.code = code
+        self.cause = cause
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,11 @@ class PdfContentBuilder:
                 sidecar.source_path, expected_processing_identity_digest, preflight_deadline
             )
         except PdfRuntimeError as error:
-            raise PdfBuildError(timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code) from error
+            # F-550 (R10-T06-2): the child's own bounded summary rides along.
+            raise PdfBuildError(
+                timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code,
+                error.detail,
+            ) from error
         self._assert_baseline(sidecar, baseline)
         self._require_before_commit_deadline(cumulative_deadline)
         page_count = preflight["page_count"]
@@ -132,7 +142,11 @@ class PdfContentBuilder:
                     batch_size=PAGES_PER_BATCH,
                 )
             except PdfContentIdentityExistsError as error:
-                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                # F-333 (R7-F2-02): a parent-side failure carries its OWN
+                # code. `PDF_RUNTIME_FAILED` means the child runtime died;
+                # a content-identity race is not that, and an operator could
+                # not tell a schema race from a dead child.
+                raise PdfBuildError("PDF_CONTENT_IDENTITY_EXISTS") from error
             batch_states = tuple((batch, "PENDING") for batch in batches)
             segment_count = 0
         else:
@@ -153,7 +167,9 @@ class PdfContentBuilder:
                     state, page_count
                 )
             except StateTransitionError as error:
-                raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                # F-333 (R7-F2-02): the recovery path's own state fault is a
+                # parent-side failure with its own code.
+                raise PdfBuildError("PDF_BUILD_STATE_INVALID") from error
             build = state.build
             batch_states = tuple((entry.batch, entry.status) for entry in state.batches)
             segment_count = state.segment_count
@@ -169,7 +185,9 @@ class PdfContentBuilder:
                 if batch_status == "SUCCEEDED":
                     continue
                 if batch_status != "PENDING":
-                    raise PdfBuildError("PDF_RUNTIME_FAILED")
+                    # F-333 (R7-F2-02): an illegal batch status is a
+                    # parent-side failure with its own code.
+                    raise PdfBuildError("PDF_BATCH_STATUS_INVALID")
                 await self._require_after_commit_deadline(cumulative_deadline, build)
                 await self._assert_baseline_or_fail(sidecar, baseline, build)
                 await self._database.start_pdf_content_batch(batch)
@@ -195,23 +213,38 @@ class PdfContentBuilder:
                     segment_count += len(segments)
                 except PdfRuntimeError as error:
                     code = timeout_code if error.code == "PDF_RUNTIME_TIMEOUT" else error.code
-                    await self._database.fail_pdf_content_batch_and_build(batch, code)
-                    raise PdfBuildError(code) from error
+                    # F-550 (R10-T06-2): the build row is marked FAILED in this
+                    # same breath, so the child's summary has to ride with it —
+                    # a code-only write left the store's own record as blind as
+                    # the run row was.
+                    await self._database.fail_pdf_content_batch_and_build(
+                        batch, code, error.detail
+                    )
+                    raise PdfBuildError(code, error.detail) from error
                 except PdfBuildError as error:
-                    await self._database.fail_pdf_content_batch_and_build(batch, error.code)
+                    await self._database.fail_pdf_content_batch_and_build(
+                        batch, error.code, error.cause
+                    )
                     raise
                 except Exception as error:
                     await self._database.fail_pdf_content_batch_and_build(
-                        batch, "PDF_RUNTIME_FAILED"
+                        batch, "PDF_RUNTIME_FAILED", f"type={type(error).__name__}"
                     )
-                    raise PdfBuildError("PDF_RUNTIME_FAILED") from error
+                    # F-550 (R10-T06-2): the cause channel carries the CHILD's
+                    # bounded summary only. A parent-side fault is named by its
+                    # type here, never by its message: `str(error)` of a database
+                    # or asyncio fault is exactly the detail the run row has
+                    # always refused to carry.
+                    raise PdfBuildError(
+                        "PDF_RUNTIME_FAILED", f"type={type(error).__name__}"
+                    ) from error
 
             await self._require_after_commit_deadline(cumulative_deadline, build)
             try:
                 await asyncio.to_thread(self._final_snapshot, sidecar, baseline)
                 self._raise_if_cumulative_expired(cumulative_deadline)
             except PdfBuildError as error:
-                await self._database.fail_pdf_content_build(build, error.code)
+                await self._database.fail_pdf_content_build(build, error.code, error.cause)
                 raise
             if segment_count == 0:
                 await self._database.fail_pdf_content_build(build, "PDF_NO_EXTRACTABLE_CONTENT")
@@ -277,7 +310,7 @@ class PdfContentBuilder:
             self._assert_baseline(sidecar, baseline)
         except PdfBuildError as error:
             # This checkpoint is between batches, so every later range remains PENDING.
-            await self._database.fail_pdf_content_build(build, error.code)
+            await self._database.fail_pdf_content_build(build, error.code, error.cause)
             raise
 
     def _assert_baseline(self, sidecar: PdfSidecar, baseline: _SourceSnapshot) -> None:
@@ -335,7 +368,13 @@ class PdfContentBuilder:
                 raise PdfBuildError("PDF_RUNTIME_OUTPUT_INVALID")
             content = _normalize_content(item["content"])
             if not content:
-                continue
+                # F-287 (R7-C3-06): the item was accepted because its raw
+                # content was non-empty, and it then normalised away. The
+                # skip that used to swallow it left no count and no code, so
+                # a page could contribute nothing and the build still
+                # finished READY. The sibling case (a wholly empty result)
+                # fails closed; this one now does too.
+                raise PdfBuildError("PDF_RUNTIME_OUTPUT_INVALID")
             if item["kind"] == "table":
                 pieces = self._split_table(title, content)
                 segment_type = "PDF_TABLE"

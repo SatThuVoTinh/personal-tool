@@ -9,46 +9,23 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot "credential-sentinels.ps1")
+
 $dockerDirectory = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $dockerDirectory "compose\compose.core.yml"
 $knowledgeComposeFile = Join-Path $dockerDirectory "compose\compose.knowledge.yml"
 $usesKnowledge = $Profile -in @("knowledge", "all")
-$usesAutomation = $Profile -in @("automation", "all")
-$requiredVariables = @("POSTGRES_PASSWORD")
-if ($usesAutomation) {
-  $requiredVariables += @("N8N_POSTGRES_PASSWORD", "N8N_ENCRYPTION_KEY")
-}
+# F-522 (R10-L09-6): the credential names and the sentinel grammar come from the
+# shared carrier that start.ps1 also dot-sources, so the mutating path cannot
+# drift away from the answer this script gives.
+$requiredVariables = @(Get-CredentialVariableNames $Profile)
 if ($usesKnowledge) {
-  $requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL")
-}
-
-function Read-EnvironmentFile {
-  param([string]$Path)
-
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    throw "Runtime environment file is missing: $Path"
-  }
-
-  $values = @{}
-  foreach ($line in Get-Content -LiteralPath $Path -Encoding utf8) {
-    $trimmed = $line.Trim()
-    if ($trimmed.Length -eq 0 -or $trimmed.StartsWith("#")) { continue }
-    $separator = $trimmed.IndexOf("=")
-    if ($separator -lt 1) { throw "Runtime environment file contains an invalid assignment." }
-    $name = $trimmed.Substring(0, $separator).Trim()
-    $value = $trimmed.Substring($separator + 1).Trim().Trim('"').Trim("'")
-    $values[$name] = $value
-  }
-  return $values
-}
-
-function Test-SentinelValue {
-  param([string]$Value)
-  $normalized = $Value.Trim().ToLowerInvariant()
-  return (
-    $normalized.Length -eq 0 -or
-    $normalized -match "(?:change|replace|example|placeholder|your)[-_ ]?(?:me|with|value|secret|password|key|path)?"
-  )
+  # F-266 (R7-D13-03): the service reads KNOWLEDGE_EMBEDDING_MODEL
+  # (apps/knowledge/app/config.py), so that is the variable this preflight has
+  # to prove. OLLAMA_SMOKE_MODEL names a different model and nothing compared
+  # the two, so an operator who changed one got a green preflight and a
+  # knowledge readiness failure at index/embed time.
+  $requiredVariables += @("KNOWLEDGE_VAULT_ROOT", "OLLAMA_SMOKE_MODEL", "KNOWLEDGE_EMBEDDING_MODEL")
 }
 
 function Get-OllamaExecutable {
@@ -63,11 +40,7 @@ function Get-OllamaExecutable {
 }
 
 $values = Read-EnvironmentFile $EnvironmentFile
-foreach ($name in $requiredVariables) {
-  if (-not $values.ContainsKey($name) -or (Test-SentinelValue $values[$name])) {
-    throw "Runtime variable $name is missing, empty, or uses a rejected example value."
-  }
-}
+Assert-CredentialValues -Values $values -Names $requiredVariables
 
 if ($usesKnowledge) {
   if (-not (Test-Path -LiteralPath $values.KNOWLEDGE_VAULT_ROOT -PathType Container)) {
@@ -78,9 +51,13 @@ if ($usesKnowledge) {
   }
   $ollama = Get-OllamaExecutable
   if (-not $ollama) { throw "Ollama executable was not found." }
+  $embeddingModel = $values.KNOWLEDGE_EMBEDDING_MODEL
+  if ($values.ContainsKey("OLLAMA_SMOKE_MODEL") -and $values.OLLAMA_SMOKE_MODEL -ne $embeddingModel) {
+    throw "OLLAMA_SMOKE_MODEL and KNOWLEDGE_EMBEDDING_MODEL name different models: '$($values.OLLAMA_SMOKE_MODEL)' and '$embeddingModel'. The service embeds with KNOWLEDGE_EMBEDDING_MODEL, so the two variables must agree."
+  }
   $models = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get
-  if (-not @($models.models | Where-Object { $_.name -eq $values.OLLAMA_SMOKE_MODEL })) {
-    throw "Configured Ollama smoke model is not installed."
+  if (-not @($models.models | Where-Object { $_.name -eq $values.KNOWLEDGE_EMBEDDING_MODEL })) {
+    throw "Configured embedding model '$embeddingModel' is not installed."
   }
 }
 
@@ -95,4 +72,9 @@ $composeArguments += @("--profile", $Profile, "config", "--quiet")
 & docker compose @composeArguments
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-Write-Output "Static preflight passed for Docker profile '$Profile'."
+if ($usesKnowledge) {
+  Write-Output "Static preflight passed for Docker profile '$Profile' with embedding model '$embeddingModel'."
+}
+else {
+  Write-Output "Static preflight passed for Docker profile '$Profile'."
+}

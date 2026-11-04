@@ -68,6 +68,12 @@
     "BLOCKED",
     "DUPLICATE_RESULT_CONFLICT"
   ],
+  "outcome_statuses": [
+    "COMPLETE",
+    "PARTIAL",
+    "BLOCKED",
+    "FAILED"
+  ],
   "outcome_compatibility": {
     "COMPLETE": [
       "NONE"

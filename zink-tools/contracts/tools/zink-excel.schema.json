@@ -57,8 +57,17 @@
       "type": "object",
       "properties": {
         "operation": { "type": "string", "enum": ["load", "populate", "validate", "generate"] },
+        "status": { "type": "string", "enum": ["success", "ERROR"] },
         "success": { "type": "boolean" },
+        "tool": { "const": "zink_excel" },
         "file_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "container_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "preview_image_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "preview_image_file": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "preview_svg_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "preview_png_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "preview_png_file": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "error": { "type": "string", "maxLength": 2048 },
         "summary": { "type": "object", "additionalProperties": true }
       },
       "required": ["operation", "success"],

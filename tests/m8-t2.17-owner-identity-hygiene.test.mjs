@@ -26,7 +26,17 @@ import { fileURLToPath } from "node:url";
 
 import { handleOwnerSkillApproval } from "../integrations/openclaw/plugins/zink-governance/index.mjs";
 import { buildConfig } from "../integrations/openclaw/lib/policy.mjs";
-import { normalizeActor } from "../integrations/openclaw/lib/authority.mjs";
+import {
+  isOwnerDiscordId,
+  normalizeActor,
+  resolveOwnerDiscordId,
+} from "../integrations/openclaw/lib/authority.mjs";
+import { applyRouterTestEnv } from "./helpers/router-env.mjs";
+
+// M10/T2-R9: the governed model provider resolves its endpoint and
+// credential from the environment at build time; supply non-routable
+// placeholders so this suite can assert config SHAPE only.
+applyRouterTestEnv();
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_SOURCE = path.join(
@@ -119,21 +129,50 @@ test("owner hygiene: a wrong expectedOwnerId still denies", async () => {
 });
 
 test("owner hygiene: a correctly bound pair still authorizes", async () => {
-  const result = await handleOwnerSkillApproval({
-    ownerDiscordId: OWNER,
-    proposalId: "prop-1",
-    contentSha256: "a".repeat(64),
-    skillsRoot: ".",
-    expectedOwnerId: OWNER,
-    options: {
-      embedFn: async () => [new Array(1024).fill(0.01)],
-      dbExecutor: async () => "",
-    },
-  });
-  assert.ok(
-    result,
-    "the exact-identity binding must still work when satisfied",
-  );
+  // A correctly bound approval authorizes only against the exact durable
+  // proposal: owner identity plus proposal identity plus content digest.
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const { SkillAdapter } =
+    await import("../zink-tools/adapters/skill-store/skill-adapter.mjs");
+  const root = await mkdtemp(path.join(os.default.tmpdir(), "zink-hyg-"));
+  try {
+    const proposalStorageDir = path.join(root, "proposals");
+    const proposing = new SkillAdapter(undefined, { proposalStorageDir });
+    const content = "# Hygiene Skill\n\nGoverned content.";
+    const proposed = await proposing.querySkillStore({
+      action: "propose",
+      source_type: "execution",
+      namespace: ["office"],
+      capability: "hygiene-skill",
+      version: "1.0.0",
+      content,
+      reason: "owner hygiene binding",
+      requesting_agent: "excel",
+    });
+    const result = await handleOwnerSkillApproval({
+      ownerDiscordId: OWNER,
+      proposalId: proposed.proposal.proposal_id,
+      contentSha256: proposed.proposal.content_sha256,
+      decisionRef: "PLAN:M8/T2-R17",
+      namespace: ["office"],
+      capability: "hygiene-skill",
+      version: "1.0.0",
+      skillsRoot: path.join(root, "skills"),
+      proposalStorageDir,
+      expectedOwnerId: OWNER,
+      options: {
+        embedFn: async () => [new Array(1024).fill(0.01)],
+        dbExecutor: async () => "",
+      },
+    });
+    assert.ok(
+      result && result.approval_status === "APPROVED",
+      "the exact-identity binding must still work when satisfied",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("owner hygiene: the resolver returns undefined for unusable config", () => {
@@ -151,8 +190,10 @@ test("owner hygiene: the resolver returns undefined for unusable config", () => 
   );
   assert.equal(
     (source.match(/resolveOwnerDiscordId\(config\)/gu) || []).length,
-    3,
-    "one definition and both owner gates must use it",
+    5,
+    "one definition and all four owner gates must use it (execution approval " +
+      "button gate, execution approve/reject action gate, skill learning " +
+      "confirmation gate, decision confirmation gate)",
   );
 });
 
@@ -298,4 +339,42 @@ test("owner hygiene: channel access control uses the same validated ids", () => 
     assert.ok(access.channels[id], `surface ${id} must be access-controlled`);
     assert.deepEqual(access.channels[id].users, [SURFACES.discordOwnerId]);
   }
+});
+
+// M12/T9 F-139: the owner id was validated by three different regexes, so a
+// 20-digit configured owner was admitted by the configuration and then denied
+// by every owner gate. One validator, one source.
+test("F-139: one canonical owner-snowflake validator", () => {
+  // 17 to 20 digits, no leading zero.
+  assert.equal(isOwnerDiscordId("12345678901234567"), true);
+  assert.equal(isOwnerDiscordId("123456789012345678"), true);
+  assert.equal(isOwnerDiscordId("1234567890123456789"), true);
+  assert.equal(isOwnerDiscordId("12345678901234567890"), true);
+  assert.equal(isOwnerDiscordId("0123456789012345678"), false);
+  assert.equal(isOwnerDiscordId("1234567890123456"), false);
+  assert.equal(isOwnerDiscordId("123456789012345678901"), false);
+  assert.equal(isOwnerDiscordId(""), false);
+  assert.equal(isOwnerDiscordId(undefined), false);
+
+  // The configuration admission and the owner gates must agree on the shape:
+  // a 20-digit owner id is admitted by the configuration and must then resolve.
+  assert.equal(
+    isOwnerDiscordId("12345678901234567890"),
+    true,
+    "an id the configuration admits must resolve at the owner gates",
+  );
+  assert.equal(
+    resolveOwnerDiscordId({ ownerDiscordId: "12345678901234567890" }),
+    "12345678901234567890",
+  );
+  assert.equal(
+    resolveOwnerDiscordId({ ownerDiscordId: "0123456789012345678" }),
+    undefined,
+    "a leading-zero id is not a snowflake and must not resolve",
+  );
+  assert.equal(resolveOwnerDiscordId({}), undefined);
+  assert.equal(
+    resolveOwnerDiscordId({ ownerDiscordId: "not-an-id" }),
+    undefined,
+  );
 });

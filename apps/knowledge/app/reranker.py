@@ -21,6 +21,16 @@ class RerankerUnavailableError(RuntimeError):
     pass
 
 
+# F-309 (R7-E1-04): the fidelity evidence the export step produced is shipped
+# with the artifacts and pinned by the manifest, so the runtime re-verifies it
+# at load instead of dropping it.
+FIDELITY_EVIDENCE_FILE = "reranker-fidelity.json"
+# The runtime's own batch ceiling. The manifest's `max_batch_size` is a
+# MEASUREMENT the export step took; this constant is the runtime's policy, so
+# the two are compared rather than one program agreeing with its own literal.
+RERANKER_MAX_BATCH = 20
+
+
 class PairTokenBudgetError(ValueError):
     pass
 
@@ -36,6 +46,11 @@ class ArtifactManifest:
     inputs: tuple[dict[str, Any], ...]
     outputs: tuple[dict[str, Any], ...]
     graph_contract: dict[str, Any]
+    # F-309 (R7-E1-04): the digest of the shipped fidelity evidence. It used
+    # to be written into the manifest and then discarded at load, because the
+    # dataclass had no member for it and the evidence file itself was not in
+    # the shipped file set.
+    fidelity_evidence_sha256: str
 
 
 class OnnxReranker:
@@ -87,6 +102,7 @@ class OnnxReranker:
                 inputs=tuple(raw["inputs"]),
                 outputs=tuple(raw["outputs"]),
                 graph_contract=dict(raw["graph_contract"]),
+                fidelity_evidence_sha256=raw["fidelity_evidence_sha256"],
             )
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise RerankerUnavailableError("RERANKER_MANIFEST_INVALID") from error
@@ -111,6 +127,18 @@ class OnnxReranker:
                 or self._manifest.files.get(relative) != expected
             ):
                 raise RerankerUnavailableError("RERANKER_MANIFEST_INVALID")
+        # F-309 (R7-E1-04): the fidelity evidence is shipped and pinned. The
+        # manifest must carry the evidence file in its runtime set AND the
+        # digest of that file, so the measurement the export step took is
+        # re-verified at load instead of being dropped on the floor.
+        fidelity_digest = self._manifest.fidelity_evidence_sha256
+        if (
+            not isinstance(fidelity_digest, str)
+            or len(fidelity_digest) != 64
+            or any(character not in "0123456789abcdef" for character in fidelity_digest)
+            or self._manifest.runtime_files.get(FIDELITY_EVIDENCE_FILE) != fidelity_digest
+        ):
+            raise RerankerUnavailableError("RERANKER_MANIFEST_INVALID")
 
     def _verify_files(self, artifact_directory: Path) -> None:
         if self._model_path.parent.resolve() != artifact_directory.resolve() or self._model_path.name not in self._manifest.runtime_files:
@@ -128,12 +156,17 @@ class OnnxReranker:
         actual_inputs = self._session.get_inputs()
         actual_outputs = self._session.get_outputs()
         contract = self._manifest.graph_contract
+        # F-309 (R7-E1-04): the axes and the one-logit-per-pair flag are read
+        # from the session that was actually loaded. The manifest used to be
+        # compared against the same literals the export script stamped into
+        # it, so the guard could only ever agree with the file it trusted.
+        measured = _measured_graph_contract(actual_inputs, actual_outputs)
         if (
-            contract.get("batch_axis") != 0
-            or contract.get("sequence_axis") != 1
-            or contract.get("max_batch_size") != 20
+            contract.get("batch_axis") != measured["batch_axis"]
+            or contract.get("sequence_axis") != measured["sequence_axis"]
+            or contract.get("max_batch_size") != RERANKER_MAX_BATCH
             or contract.get("max_sequence_length") != PAIR_MAX_TOKENS
-            or contract.get("one_logit_per_pair") is not True
+            or contract.get("one_logit_per_pair") is not measured["one_logit_per_pair"]
             or len(actual_outputs) != 1
             or len(self._manifest.outputs) != 1
             or self._session.get_providers() != ["CPUExecutionProvider"]
@@ -219,6 +252,27 @@ class OnnxReranker:
         if len(logits) != len(pairs) or not self._np.isfinite(logits).all():
             raise RerankerUnavailableError("RERANKER_INVALID_OUTPUT")
         return [float(value) for value in logits]
+
+
+def _measured_graph_contract(
+    inputs: list[Any], outputs: list[Any]
+) -> dict[str, object]:
+    """The graph contract, measured from the loaded session.
+
+    F-309 (R7-E1-04): the values are derived from the graph that was loaded,
+    not typed here and not copied from the manifest.
+    """
+
+    ranks = {len(item.shape) for item in inputs}
+    if len(ranks) != 1 or not inputs:
+        raise RerankerUnavailableError("RERANKER_GRAPH_INVALID")
+    rank = ranks.pop()
+    sequence_axis = rank - 1
+    return {
+        "batch_axis": sequence_axis - 1,
+        "sequence_axis": sequence_axis,
+        "one_logit_per_pair": len(outputs) == 1 and len(outputs[0].shape) == 1,
+    }
 
 
 def stable_sigmoid(raw_logit: float) -> float:

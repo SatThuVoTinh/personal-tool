@@ -19,7 +19,8 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt /opt/pdf-runtime/
 WORKDIR /opt/pdf-runtime
 RUN uv export --frozen --no-dev --no-emit-project --no-header \
-      --format requirements.txt --output-file /tmp/pdf-requirements.lock.txt && \
+      --format requirements.txt --emit-index-url \
+      --output-file /tmp/pdf-requirements.lock.txt && \
     cmp /tmp/pdf-requirements.lock.txt requirements.txt && \
     uv sync --locked --no-dev --no-install-project && \
     chmod -R g+rX,o-rwx,a-w /opt/pdf-runtime
@@ -69,12 +70,24 @@ RUN /opt/reranker-venv/bin/python /app/export_reranker.py
 FROM reranker-export AS test
 
 COPY app ./app
+# F-547 (R10-T05-4): the runner resolves the published migration digests from
+# this carrier, because the build context is apps/knowledge/ and cannot reach
+# docs/. tests/m12-t2.2-a4-migration-digest.test.mjs pins it byte-identical to
+# the contract at docs/contracts/knowledgebase-migration-digests.json.
+COPY contracts ./contracts
 COPY migrations ./migrations
 COPY pdf-runtime/pyproject.toml pdf-runtime/uv.lock pdf-runtime/requirements.txt ./pdf-runtime/
 COPY pdf-runtime/src ./pdf-runtime/src
 COPY tests ./tests
 ENV KNOWLEDGE_TOKENIZER_PATH=/app/artifacts/tokenizer.json
-RUN uv run --locked --no-sync python -m unittest discover -s tests -v
+# F-313 (R7-E2-04): the directory has ONE authoritative runner. The image
+# stage used `unittest discover`, which cannot import the seven modules that
+# import the test framework at module level, so the image lane reported an
+# import error instead of the suite and the two runners disagreed about what
+# the directory contains. The image lane now runs the SAME pytest invocation
+# the CI lane runs, against the same pinned tokenizer, and the collected-set
+# floor in `tests/conftest.py` applies here too.
+RUN uv sync --locked && uv run --no-sync python -m pytest tests -q
 
 FROM python:3.13.14-slim-bookworm@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452 AS runtime
 
@@ -107,6 +120,11 @@ COPY --chown=root:knowledge --chmod=0440 uv.lock /app/uv.lock
 COPY --from=builder --chown=knowledge:knowledge --chmod=0444 /app/artifacts/tokenizer.json /app/artifacts/tokenizer.json
 COPY --from=reranker-export --chown=knowledge:knowledge --chmod=0444 /app/runtime-artifacts/ /app/artifacts/
 COPY app ./app
+# F-547 (R10-T05-4): the runner resolves the published migration digests from
+# this carrier, because the build context is apps/knowledge/ and cannot reach
+# docs/. tests/m12-t2.2-a4-migration-digest.test.mjs pins it byte-identical to
+# the contract at docs/contracts/knowledgebase-migration-digests.json.
+COPY contracts ./contracts
 COPY migrations ./migrations
 
 RUN /opt/pdf-runtime/.venv/bin/python -m zink_pdf_runtime.manifest \
